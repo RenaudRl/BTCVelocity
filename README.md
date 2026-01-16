@@ -13,8 +13,8 @@
 
 BTC Velocity is built upon the foundation of several cutting-edge projects:
 
-*   **[Velocity Fork](https://github.com/TISUnion/Velocity)**: The core high-performance proxy.
-*   **[Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD)**: Custom commands, Queue system, and Redis integration.
+*   **[Velocity](https://github.com/PaperMC/Velocity)**: The core high-performance proxy.
+*   **[BTC-Velocity](https://github.com/GemstoneGG/Velocity-CTD)**: Custom commands, Queue system, and Redis integration.
 *   **[MultiVelocity](https://github.com/KalpeGames/MultiVelocity)**: Enhanced security with per-server secret tokens.
 *   **[SparklyVelocity](https://github.com/SparklyPower/SparklyVelocity)**: Advanced networking, manual listener binding, and Geyser detection.
 

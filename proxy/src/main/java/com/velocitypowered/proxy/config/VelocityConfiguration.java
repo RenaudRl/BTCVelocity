@@ -641,11 +641,11 @@ public final class VelocityConfiguration implements ProxyConfig {
   public byte[] getForwardingSecret(String serverName) {
     String secret = forwardingSecret.getSecrets().get(serverName);
     if (secret == null) {
-        // Fallback to "lobby" or "default" or just the first one if specific one not found
-        secret = forwardingSecret.getSecrets().get("lobby");
-        if (secret == null && !forwardingSecret.getSecrets().isEmpty()) {
-            secret = forwardingSecret.getSecrets().values().iterator().next();
-        }
+      // Fallback to "lobby" or "default" or just the first one if specific one not found
+      secret = forwardingSecret.getSecrets().get("lobby");
+      if (secret == null && !forwardingSecret.getSecrets().isEmpty()) {
+        secret = forwardingSecret.getSecrets().values().iterator().next();
+      }
     }
     return secret != null ? secret.getBytes(StandardCharsets.UTF_8) : new byte[0];
   }
@@ -1641,6 +1641,9 @@ public final class VelocityConfiguration implements ProxyConfig {
     @Expose
     private List<String> serverAliases;
 
+    /**
+     * Creates a new instance.
+     */
     private Servers() {
     }
 
@@ -3031,6 +3034,9 @@ public final class VelocityConfiguration implements ProxyConfig {
     }
   }
 
+  /**
+   * Configuration for secrets.
+   */
   public static class Secrets {
 
     private Map<String, String> secrets = ImmutableMap.of(
@@ -3043,12 +3049,17 @@ public final class VelocityConfiguration implements ProxyConfig {
     }
 
     // Legacy constructor
+    /**
+     * Creates a new instance from a legacy secret string.
+     *
+     * @param legacySecret the legacy secret
+     */
     public Secrets(String legacySecret) {
-        if (legacySecret != null && !legacySecret.isEmpty()) {
-            this.secrets = ImmutableMap.of("lobby", legacySecret);
-        } else {
-            this.secrets = ImmutableMap.of();
-        }
+      if (legacySecret != null && !legacySecret.isEmpty()) {
+        this.secrets = ImmutableMap.of("lobby", legacySecret);
+      } else {
+        this.secrets = ImmutableMap.of();
+      }
     }
 
     private Secrets(CommentedConfig config) {

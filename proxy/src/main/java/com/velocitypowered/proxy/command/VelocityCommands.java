@@ -90,31 +90,32 @@ public final class VelocityCommands {
     }
 
     if (delegate instanceof LiteralCommandNode<CommandSource> lcn) {
-        var literalBuilder = shallowCopyAsBuilder(lcn, delegate.getName(), true);
-        literalBuilder.executes(maybeCommand);
-        // we also need to wrap any children
-        for (final CommandNode<CommandSource> child : delegate.getChildren()) {
-          literalBuilder.then(wrap(child, registrant));
-        }
-        if (delegate.getRedirect() != null) {
-          literalBuilder.redirect(wrap(delegate.getRedirect(), registrant));
-        }
-        return literalBuilder.build();
+      var literalBuilder = shallowCopyAsBuilder(lcn, delegate.getName(), true);
+      literalBuilder.executes(maybeCommand);
+      // we also need to wrap any children
+      for (final CommandNode<CommandSource> child : delegate.getChildren()) {
+        literalBuilder.then(wrap(child, registrant));
+      }
+      if (delegate.getRedirect() != null) {
+        literalBuilder.redirect(wrap(delegate.getRedirect(), registrant));
+      }
+      return literalBuilder.build();
     } else if (delegate instanceof VelocityArgumentCommandNode<CommandSource, ?> vacn) {
-        return vacn.withCommand(maybeCommand)
-              .withRedirect(delegate.getRedirect() != null ? wrap(delegate.getRedirect(), registrant) : null);
+      return vacn.withCommand(maybeCommand)
+          .withRedirect(delegate.getRedirect() != null ? wrap(delegate.getRedirect(), registrant) : null);
     } else if (delegate instanceof ArgumentCommandNode<CommandSource, ?> node) {
-        var argBuilder = node.createBuilder().executes(maybeCommand);
-        // we also need to wrap any children
-        for (final CommandNode<CommandSource> child : delegate.getChildren()) {
-          argBuilder.then(wrap(child, registrant));
-        }
-        if (delegate.getRedirect() != null) {
-          argBuilder.redirect(wrap(delegate.getRedirect(), registrant));
-        }
-        return argBuilder.build();
+      var argBuilder = node.createBuilder().executes(maybeCommand);
+      // we also need to wrap any children
+      for (final CommandNode<CommandSource> child : delegate.getChildren()) {
+        argBuilder.then(wrap(child, registrant));
+      }
+
+      if (delegate.getRedirect() != null) {
+        argBuilder.redirect(wrap(delegate.getRedirect(), registrant));
+      }
+      return argBuilder.build();
     } else {
-        throw new IllegalArgumentException("Unsupported node type: " + delegate.getClass());
+      throw new IllegalArgumentException("Unsupported node type: " + delegate.getClass());
     }
   }
 
