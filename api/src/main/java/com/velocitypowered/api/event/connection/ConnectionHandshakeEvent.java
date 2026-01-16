@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * The Velocity API is licensed under the terms of the MIT License. For more details,
  * reference the LICENSE file in the api top-level directory.
@@ -18,10 +18,23 @@ import com.velocitypowered.api.proxy.InboundConnection;
  */
 public final class ConnectionHandshakeEvent {
 
+  /**
+   * The inbound connection that initiated the handshake.
+   */
   private final InboundConnection connection;
+
+  /**
+   * The intent of the handshake, such as login or status.
+   */
   private final HandshakeIntent intent;
 
-  public ConnectionHandshakeEvent(InboundConnection connection, HandshakeIntent intent) {
+  /**
+   * Constructs a new {@link ConnectionHandshakeEvent}.
+   *
+   * @param connection the inbound connection from the client
+   * @param intent the intent of the handshake (e.g., login or status)
+   */
+  public ConnectionHandshakeEvent(final InboundConnection connection, final HandshakeIntent intent) {
     this.connection = Preconditions.checkNotNull(connection, "connection");
     this.intent = Preconditions.checkNotNull(intent, "intent");
   }
@@ -34,15 +47,25 @@ public final class ConnectionHandshakeEvent {
    * @deprecated use {@link #ConnectionHandshakeEvent(InboundConnection, HandshakeIntent)}
    */
   @Deprecated(forRemoval = true)
-  public ConnectionHandshakeEvent(InboundConnection connection) {
+  public ConnectionHandshakeEvent(final InboundConnection connection) {
     this.connection = Preconditions.checkNotNull(connection, "connection");
     this.intent = HandshakeIntent.LOGIN;
   }
 
+  /**
+   * Returns the inbound connection associated with this handshake.
+   *
+   * @return the connection
+   */
   public InboundConnection getConnection() {
     return connection;
   }
 
+  /**
+   * Returns the {@link HandshakeIntent} associated with this connection handshake.
+   *
+   * @return the intent of the handshake
+   */
   public HandshakeIntent getIntent() {
     return this.intent;
   }

@@ -23,23 +23,33 @@ import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils.Direction;
 import io.netty.buffer.ByteBuf;
 
-public class DialogClearPacket implements MinecraftPacket {
+/**
+ * Represents the packet sent by the server to the client to clear any
+ * currently displayed configuration dialog.
+ *
+ * <p>This packet is used during the configuration phase (1.21.6+) to
+ * instruct the client to dismiss an active dialog window.</p>
+ */
+public final class DialogClearPacket implements MinecraftPacket {
 
+  /**
+   * Singleton instance of {@link DialogClearPacket}, as the packet has no payload.
+   */
   public static final DialogClearPacket INSTANCE = new DialogClearPacket();
 
   private DialogClearPacket() {
   }
 
   @Override
-  public void decode(ByteBuf buf, Direction direction, ProtocolVersion protocolVersion) {
+  public void decode(final ByteBuf buf, final Direction direction, final ProtocolVersion protocolVersion) {
   }
 
   @Override
-  public void encode(ByteBuf buf, Direction direction, ProtocolVersion protocolVersion) {
+  public void encode(final ByteBuf buf, final Direction direction, final ProtocolVersion protocolVersion) {
   }
 
   @Override
-  public boolean handle(MinecraftSessionHandler handler) {
+  public boolean handle(final MinecraftSessionHandler handler) {
     return handler.handle(this);
   }
 }

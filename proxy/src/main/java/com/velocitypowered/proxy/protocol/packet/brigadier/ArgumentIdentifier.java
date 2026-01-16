@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2023 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,12 +24,27 @@ import java.util.HashMap;
 import java.util.Map;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
-public class ArgumentIdentifier {
+/**
+ * Represents an identifier for a Brigadier command argument, mapping the argument to
+ * different protocol versions.
+ *
+ * <p>The {@code ArgumentIdentifier} is responsible for holding an identifier string for
+ * an argument and a map that associates protocol versions with their respective IDs.
+ * It ensures that the protocol version is compatible with the Minecraft 1.19 protocol or later.</p>
+ */
+public final class ArgumentIdentifier {
 
+  /**
+   * The string-based Brigadier identifier for this argument type.
+   */
   private final String identifier;
+
+  /**
+   * A mapping of protocol versions to their respective integer IDs for this identifier.
+   */
   private final Map<ProtocolVersion, Integer> versionById;
 
-  private ArgumentIdentifier(String identifier, VersionSet... versions) {
+  private ArgumentIdentifier(final String identifier, final VersionSet... versions) {
     this.identifier = Preconditions.checkNotNull(identifier);
 
     Preconditions.checkNotNull(versions);
@@ -37,8 +52,8 @@ public class ArgumentIdentifier {
     Map<ProtocolVersion, Integer> temp = new HashMap<>();
 
     ProtocolVersion previous = null;
-    for (int i = 0; i < versions.length; i++) {
-      VersionSet current = Preconditions.checkNotNull(versions[i]);
+    for (VersionSet version : versions) {
+      VersionSet current = Preconditions.checkNotNull(version);
 
       Preconditions.checkArgument(
           current.getVersion().noLessThan(ProtocolVersion.MINECRAFT_1_19),
@@ -51,8 +66,8 @@ public class ArgumentIdentifier {
           temp.putIfAbsent(v, current.getId());
         }
       }
-      previous = current.getVersion();
 
+      previous = current.getVersion();
     }
 
     this.versionById = ImmutableMap.copyOf(temp);
@@ -60,48 +75,93 @@ public class ArgumentIdentifier {
 
   @Override
   public String toString() {
-    return "ArgumentIdentifier{" +
-        "identifier='" + identifier + '\'' +
-        '}';
+    return "ArgumentIdentifier{"
+        + "identifier='" + identifier + '\''
+        + '}';
   }
 
+  /**
+   * Returns the string identifier for this argument type.
+   *
+   * @return the identifier string
+   */
   public String getIdentifier() {
     return identifier;
   }
 
-  public @Nullable Integer getIdByProtocolVersion(ProtocolVersion version) {
+  /**
+   * Gets the corresponding integer ID for the given protocol version.
+   *
+   * @param version the protocol version
+   * @return the associated ID, or {@code null} if unavailable
+   */
+  public @Nullable Integer getIdByProtocolVersion(final ProtocolVersion version) {
     return versionById.get(Preconditions.checkNotNull(version));
   }
 
-  public static VersionSet mapSet(ProtocolVersion version, int id) {
+  /**
+   * Creates a {@link VersionSet} mapping a protocol version to a specific ID.
+   *
+   * @param version the starting protocol version
+   * @param id the ID to apply for this version and newer
+   * @return a new {@link VersionSet}
+   */
+  public static VersionSet mapSet(final ProtocolVersion version, final int id) {
     return new VersionSet(version, id);
   }
 
-  public static ArgumentIdentifier id(String identifier, VersionSet... versions) {
+  /**
+   * Creates an {@link ArgumentIdentifier} instance from an identifier string and
+   * version mappings.
+   *
+   * @param identifier the Brigadier identifier string
+   * @param versions the version mappings (must be ordered from newest to oldest)
+   * @return a new {@link ArgumentIdentifier}
+   */
+  public static ArgumentIdentifier id(final String identifier, final VersionSet... versions) {
     return new ArgumentIdentifier(identifier, versions);
   }
 
   /**
    * This class is purely for convenience.
    */
-  public static class VersionSet {
+  public static final class VersionSet {
 
+    /**
+     * The protocol version from which this ID mapping becomes valid.
+     *
+     * <p>All protocol versions greater than or equal to this version will use
+     * the associated {@code id} value for the argument identifier.</p>
+     */
     private final ProtocolVersion version;
+
+    /**
+     * The integer ID that represents the argument identifier starting at the
+     * specified {@link #version}.
+     */
     private final int id;
 
-    private VersionSet(ProtocolVersion version, int id) {
+    private VersionSet(final ProtocolVersion version, final int id) {
       this.version = Preconditions.checkNotNull(version);
       this.id = id;
     }
 
+    /**
+     * Returns the ID associated with this version.
+     *
+     * @return the integer ID
+     */
     public int getId() {
       return id;
     }
 
+    /**
+     * Returns the protocol version at which this ID mapping starts.
+     *
+     * @return the protocol version
+     */
     public ProtocolVersion getVersion() {
       return version;
     }
-
   }
-
 }

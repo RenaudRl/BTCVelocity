@@ -131,7 +131,7 @@ fill {
 dependencies {
     implementation(project(":velocity-api"))
     implementation(project(":velocity-native"))
-    implementation(project(":velocity-proxy-log4j2-plugin"))
+    // implementation(project(":velocity-proxy-log4j2-plugin"))
 
     implementation(libs.bundles.log4j)
     implementation(libs.kyori.ansi)
@@ -149,6 +149,7 @@ dependencies {
     implementation(variantOf(libs.netty.transport.native.kqueue) { classifier("osx-x86_64") })
     implementation(variantOf(libs.netty.transport.native.kqueue) { classifier("osx-aarch_64") })
 
+    implementation(libs.lettuce.core)
     implementation(libs.jopt)
     implementation(libs.terminalconsoleappender)
     runtimeOnly(libs.jline)

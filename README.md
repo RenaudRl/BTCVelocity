@@ -1,36 +1,73 @@
-# Velocity
+# BTC Velocity
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/PaperMC/Velocity/gradle.yml)](https://papermc.io/downloads/velocity)
-[![Join our Discord](https://img.shields.io/discord/289587909051416579.svg?logo=discord&label=)](https://discord.gg/papermc)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/PaperMC/Velocity/gradle.yml?label=Build&style=for-the-badge)](https://papermc.io/downloads/velocity)
+[![Discord](https://img.shields.io/discord/289587909051416579.svg?logo=discord&label=Discord&style=for-the-badge)](https://discord.gg/papermc)
+[![License](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](LICENSE)
 
-A Minecraft server proxy with unparalleled server support, scalability,
-and flexibility.
+> [!IMPORTANT]
+> **BTC Velocity** is a highly optimized fork of Velocity, engineered for **Minecraft 1.21.11**. It integrates advanced features from multiple high-performance forks to provide a robust, secure, and feature-rich proxy solution.
 
-Velocity is licensed under the GPLv3 license.
+---
 
-## Goals
+## 🧬 Fork Heritage
 
-* A codebase that is easy to dive into and consistently follows best practices
-  for Java projects as much as reasonably possible.
-* High performance: handle thousands of players on one proxy.
-* A new, refreshing API built from the ground up to be flexible and powerful
-  whilst avoiding design mistakes and suboptimal designs from other proxies.
-* First-class support for Paper, Sponge, Fabric and Forge. (Other implementations
-  may work, but we make every endeavor to support these server implementations
-  specifically.)
-  
-## Building
+BTC Velocity is built upon the foundation of several cutting-edge projects:
 
-Velocity is built with [Gradle](https://gradle.org). We recommend using the
-wrapper script (`./gradlew`) as our CI builds using it.
+*   **[Velocity Fork](https://github.com/TISUnion/Velocity)**: The core high-performance proxy.
+*   **[Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD)**: Custom commands, Queue system, and Redis integration.
+*   **[MultiVelocity](https://github.com/KalpeGames/MultiVelocity)**: Enhanced security with per-server secret tokens.
+*   **[SparklyVelocity](https://github.com/SparklyPower/SparklyVelocity)**: Advanced networking, manual listener binding, and Geyser detection.
 
-It is sufficient to run `./gradlew build` to run the full build cycle.
+## 🚀 Key Features
 
-## Running
+### ⚡ Performance & Optimization
+*   **Java 21 Native**: Fully optimized for the modern Java 21 ecosystem.
+*   **1.21.11 Ready**: Specific tuning for the latest Minecraft protocol versions.
+*   **Advanced Networking**: Disabled default port bindings for plugin-managed listeners.
 
-Once you've built Velocity, you can copy and run the `-all` JAR from
-`proxy/build/libs`. Velocity will generate a default configuration file
-and you can configure it from there.
+### 🛡️ Security
+*   **Per-Server Secrets**: Configurable forwarding secrets for individual backend servers (`[secrets]` section).
+*   **Secure Authentication**: Enhanced online mode checks and key handling.
 
-Alternatively, you can get the proxy JAR from the [downloads](https://papermc.io/downloads/velocity)
-page.
+### ⚙️ Extended Functionality
+*   **Queue System**: Built-in priority queue handling for high-traffic servers.
+*   **Custom Commands**: New administrative and utility commands (`/alert`, `/find`, `/hub`, `/send`, etc.).
+*   **Geyser Support**: Native detection and handling for Bedrock players via Geyser.
+
+## 🛠️ Building
+
+BTC Velocity uses Gradle for build automation.
+
+### Prerequisites
+*   Java 21 JDK
+
+### Build Command
+To generate the distribution jar:
+
+```bash
+./gradlew build
+```
+
+The optimized artifact will be located in:
+`proxy/build/libs/velocity-proxy-3.4.0-SNAPSHOT-all.jar`
+
+## 🖥️ Configuration
+
+BTC Velocity introduces new configuration sections in `velocity.toml`:
+
+### Secrets
+Define unique forwarding secrets for legacy or secure backend servers:
+```toml
+[secrets]
+lobby = "my-secret-token"
+factions = "another-secret"
+```
+
+### Queue
+Configure queue behavior and priority settings in the `[queue]` section.
+
+---
+
+## 📜 License & disclaimer
+- **Custom BTC-CORE Patches**: Proprietary to **BTC Studio**.
+- **Upstream Source**: Original licenses (GPLv3 / MIT) apply to their respective components from Velocity, Velocity-CTD, MultiVelocity, SparklyVelocity, etc.

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,39 +23,97 @@ import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import io.netty.buffer.ByteBuf;
 
+/**
+ * Represents a packet sent to acknowledge the receipt of a chat message.
+ * This packet is used to confirm that a player or client has received and processed
+ * a chat message from the server.
+ */
 public class ChatAcknowledgementPacket implements MinecraftPacket {
-    int offset;
 
-    public ChatAcknowledgementPacket(int offset) {
-        this.offset = offset;
-    }
+  /**
+   * The offset of the last message acknowledged by the client.
+   */
+  int offset;
 
-    public ChatAcknowledgementPacket() {
-    }
+  /**
+   * Constructs a {@code ChatAcknowledgementPacket} with a specific offset value.
+   *
+   * @param offset the acknowledgment offset
+   */
+  public ChatAcknowledgementPacket(final int offset) {
+    this.offset = offset;
+  }
 
-    @Override
-    public void decode(ByteBuf buf, ProtocolUtils.Direction direction, ProtocolVersion protocolVersion) {
-        offset = ProtocolUtils.readVarInt(buf);
-    }
+  /**
+   * Constructs an empty {@code ChatAcknowledgementPacket} for decoding.
+   */
+  public ChatAcknowledgementPacket() {
+  }
 
-    @Override
-    public void encode(ByteBuf buf, ProtocolUtils.Direction direction, ProtocolVersion protocolVersion) {
-        ProtocolUtils.writeVarInt(buf, offset);
-    }
+  /**
+   * Decodes this chat acknowledgement packet from the given {@link ByteBuf}.
+   *
+   * <p>This reads the offset of the last message acknowledged by the client.</p>
+   *
+   * @param buf the buffer to read from
+   * @param direction the direction of the packet
+   * @param protocolVersion the Minecraft protocol version
+   */
+  @Override
+  public void decode(final ByteBuf buf, final ProtocolUtils.Direction direction,
+                     final ProtocolVersion protocolVersion) {
+    offset = ProtocolUtils.readVarInt(buf);
+  }
 
-    @Override
-    public boolean handle(MinecraftSessionHandler handler) {
-        return handler.handle(this);
-    }
+  /**
+   * Encodes this chat acknowledgement packet into the given {@link ByteBuf}.
+   *
+   * <p>This writes the offset indicating the last chat message acknowledged by the client.</p>
+   *
+   * @param buf the buffer to write to
+   * @param direction the direction of the packet
+   * @param protocolVersion the Minecraft protocol version
+   */
+  @Override
+  public void encode(final ByteBuf buf, final ProtocolUtils.Direction direction,
+                     final ProtocolVersion protocolVersion) {
+    ProtocolUtils.writeVarInt(buf, offset);
+  }
 
-    @Override
-    public String toString() {
-        return "ChatAcknowledgement{" +
-                "offset=" + offset +
-                '}';
-    }
+  /**
+   * Handles this chat acknowledgement packet using the specified {@link MinecraftSessionHandler}.
+   *
+   * <p>This delegates processing to {@code handler.handle(this)} to track client-side
+   * message acknowledgment state.</p>
+   *
+   * @param handler the session handler responsible for processing this packet
+   * @return {@code true} if the packet was handled successfully
+   */
+  @Override
+  public boolean handle(final MinecraftSessionHandler handler) {
+    return handler.handle(this);
+  }
 
-    public int offset() {
-        return offset;
-    }
+  /**
+   * Returns a string representation of this chat acknowledgement packet.
+   *
+   * <p>This includes the acknowledged message offset value.</p>
+   *
+   * @return a string describing the packet
+   */
+  @Override
+  public String toString() {
+    return "ChatAcknowledgement{"
+        + "offset=" + offset
+        + '}';
+  }
+
+  /**
+   * Returns the offset value carried in this packet.
+   *
+   * @return the message acknowledgment offset
+   */
+  public int offset() {
+    return offset;
+  }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019-2021 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,8 +17,30 @@
 
 package com.velocitypowered.proxy.protocol.packet.legacyping;
 
+/**
+ * The {@code LegacyMinecraftPingVersion} enum represents the various protocol versions
+ * used by older Minecraft clients during the server ping process.
+ *
+ * <p>This enum is used to distinguish between the different legacy versions of Minecraft
+ * that have unique ping formats, ensuring compatibility with those older clients.</p>
+ *
+ * <p>Each constant in this enum corresponds to a specific version of Minecraft that
+ * requires a legacy server ping format.</p>
+ */
 public enum LegacyMinecraftPingVersion {
+
+  /**
+   * Minecraft 1.3.
+   */
   MINECRAFT_1_3,
+
+  /**
+   * Minecraft 1.4.
+   */
   MINECRAFT_1_4,
+
+  /**
+   * Minecraft 1.6.
+   */
   MINECRAFT_1_6
 }

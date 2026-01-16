@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * The Velocity API is licensed under the terms of the MIT License. For more details,
  * reference the LICENSE file in the api top-level directory.
@@ -22,7 +22,7 @@ class ServerPingTest {
   @Test
   void asBuilderConsistency() {
     ServerPing ping = new ServerPing(new Version(404, "1.13.2"),
-        new Players(1, 1, ImmutableList.of(new SamplePlayer("tuxed", UUID.randomUUID()))),
+        new Players(1, 1, ImmutableList.of(new SamplePlayer(Component.text("tuxed"), UUID.randomUUID()))),
         Component.text("test"), null);
     assertEquals(ping, ping.asBuilder().build());
   }

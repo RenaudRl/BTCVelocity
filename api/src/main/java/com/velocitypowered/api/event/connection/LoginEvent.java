@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * The Velocity API is licensed under the terms of the MIT License. For more details,
  * reference the LICENSE file in the api top-level directory.
@@ -21,14 +21,31 @@ import com.velocitypowered.api.proxy.Player;
 @AwaitingEvent
 public final class LoginEvent implements ResultedEvent<ResultedEvent.ComponentResult> {
 
+  /**
+   * The player who has successfully authenticated.
+   */
   private final Player player;
+
+  /**
+   * The result of the login event, determining whether the player is allowed to proceed.
+   */
   private ComponentResult result;
 
-  public LoginEvent(Player player) {
+  /**
+   * Constructs a new {@link LoginEvent}.
+   *
+   * @param player the player who has completed authentication
+   */
+  public LoginEvent(final Player player) {
     this.player = Preconditions.checkNotNull(player, "player");
     this.result = ComponentResult.allowed();
   }
 
+  /**
+   * Returns the player who has completed authentication.
+   *
+   * @return the authenticated player
+   */
   public Player getPlayer() {
     return player;
   }
@@ -39,7 +56,7 @@ public final class LoginEvent implements ResultedEvent<ResultedEvent.ComponentRe
   }
 
   @Override
-  public void setResult(ComponentResult result) {
+  public void setResult(final ComponentResult result) {
     this.result = Preconditions.checkNotNull(result, "result");
   }
 

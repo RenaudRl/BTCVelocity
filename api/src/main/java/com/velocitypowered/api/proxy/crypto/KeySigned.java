@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022-2023 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * The Velocity API is licensed under the terms of the MIT License. For more details,
  * reference the LICENSE file in the api top-level directory.
@@ -34,7 +34,6 @@ public interface KeySigned {
    */
   Instant getExpiryTemporal();
 
-
   /**
    * Check if the signature has expired.
    *
@@ -49,13 +48,13 @@ public interface KeySigned {
    *
    * @return an RSA signature
    */
-  @Nullable
-  byte[] getSignature();
+  byte @Nullable [] getSignature();
 
   /**
    * Validates the signature, expiry temporal and key against the
    * signer public key. Note: This will **not** check for
    * expiry. You can check for expiry with {@link KeySigned#hasExpired()}.
+   *
    * <p>DOES NOT WORK YET FOR MESSAGES AND COMMANDS!</p>
    * Addendum: Does not work for 1.19.1 until the user has authenticated.
    *
@@ -74,5 +73,4 @@ public interface KeySigned {
   default byte[] getSalt() {
     return null;
   }
-
 }

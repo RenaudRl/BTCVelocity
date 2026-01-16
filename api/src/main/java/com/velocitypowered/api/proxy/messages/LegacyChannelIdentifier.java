@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2022 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * The Velocity API is licensed under the terms of the MIT License. For more details,
  * reference the LICENSE file in the api top-level directory.
@@ -15,10 +15,13 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 /**
  * Represents a legacy channel identifier (for Minecraft 1.12 and below). For modern 1.13 plugin
  * messages, please see {@link MinecraftChannelIdentifier}. This class is immutable and safe for
- * multi-threaded use.
+ * multithreaded use.
  */
 public final class LegacyChannelIdentifier implements ChannelIdentifier {
 
+  /**
+   * The name of the legacy plugin message channel.
+   */
   private final String name;
 
   /**
@@ -26,11 +29,16 @@ public final class LegacyChannelIdentifier implements ChannelIdentifier {
    *
    * @param name the name for the channel
    */
-  public LegacyChannelIdentifier(String name) {
+  public LegacyChannelIdentifier(final String name) {
     Preconditions.checkArgument(!Strings.isNullOrEmpty(name), "provided name is empty");
     this.name = name;
   }
 
+  /**
+   * Returns the name of this legacy plugin message channel.
+   *
+   * @return the channel name
+   */
   public String getName() {
     return name;
   }
@@ -41,13 +49,15 @@ public final class LegacyChannelIdentifier implements ChannelIdentifier {
   }
 
   @Override
-  public boolean equals(@Nullable Object o) {
+  public boolean equals(final @Nullable Object o) {
     if (this == o) {
       return true;
     }
+
     if (o == null || getClass() != o.getClass()) {
       return false;
     }
+
     LegacyChannelIdentifier that = (LegacyChannelIdentifier) o;
     return Objects.equals(name, that.name);
   }

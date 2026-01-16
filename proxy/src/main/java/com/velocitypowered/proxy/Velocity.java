@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2023 Velocity Contributors
+ * Copyright (C) 2018-2025 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,6 +31,9 @@ import org.apache.logging.log4j.Logger;
  */
 public class Velocity {
 
+  /**
+   * The main logger used throughout the Velocity bootstrap lifecycle.
+   */
   private static final Logger logger;
 
   static {
@@ -59,7 +62,7 @@ public class Velocity {
    *
    * @param args the arguments to the proxy
    */
-  public static void main(String... args) {
+  public static void main(final String... args) {
     final ProxyOptions options = new ProxyOptions(args);
     if (options.isHelp()) {
       return;
@@ -77,7 +80,7 @@ public class Velocity {
     server.getConsoleCommandSource().start();
 
     // If we don't have a console available (because SimpleTerminalConsole returned), then we still
-    // need to wait, otherwise the JVM will reap us as no non-daemon threads will be active once the
+    // need to wait; otherwise the JVM will reap us as no non-daemon threads will be active once the
     // main thread exits.
     server.awaitProxyShutdown();
   }
