@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,23 +25,10 @@ import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
-/**
- * Represents a legacy disconnect packet that contains a reason for disconnection.
- * This class is used to convert modern server ping responses into the legacy format,
- * which is compatible with older Minecraft versions.
- *
- * @param reason the string reason for disconnection
- */
 public record LegacyDisconnect(String reason) {
 
-  /**
-   * Fake player list used when player data is not present in the ping response.
-   */
   private static final ServerPing.Players FAKE_PLAYERS = new ServerPing.Players(0, 0, ImmutableList.of());
 
-  /**
-   * The legacy color code prefix (§) used for formatting text in older versions.
-   */
   private static final String LEGACY_COLOR_CODE = Character.toString(LegacyComponentSerializer.SECTION_CHAR);
 
   /**

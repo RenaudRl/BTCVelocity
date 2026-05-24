@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,20 +31,12 @@ public class BackendChannelInitializerHolder implements Supplier<ChannelInitiali
     LogManager.getLogger(ConnectionManager.class);
   }
 
-  /**
-   * The current backend {@link ChannelInitializer} used to initialize backend server channels.
-   */
   private ChannelInitializer<Channel> initializer;
 
   BackendChannelInitializerHolder(final ChannelInitializer<Channel> initializer) {
     this.initializer = initializer;
   }
 
-  /**
-   * Returns the currently assigned {@link ChannelInitializer} for backend connections.
-   *
-   * @return the channel initializer
-   */
   @Override
   public ChannelInitializer<Channel> get() {
     return this.initializer;

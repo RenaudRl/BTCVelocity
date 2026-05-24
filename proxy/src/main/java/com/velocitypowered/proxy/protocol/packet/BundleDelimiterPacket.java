@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,19 +23,8 @@ import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import io.netty.buffer.ByteBuf;
 
-/**
- * Represents a packet used as a delimiter for bundling multiple packets together.
- * The {@code BundleDelimiterPacket} marks the beginning or end of a packet bundle,
- * allowing the server and client to process groups of packets as a single logical unit.
- *
- * <p>This packet is typically used to signal the start or end of a packet sequence that
- * are sent together, enabling efficient transmission and processing of related data.</p>
- */
 public final class BundleDelimiterPacket implements MinecraftPacket {
 
-  /**
-   * Singleton instance of the {@code BundleDelimiterPacket}.
-   */
   public static final BundleDelimiterPacket INSTANCE = new BundleDelimiterPacket();
 
   private BundleDelimiterPacket() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,18 +23,8 @@ import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import io.netty.buffer.ByteBuf;
 
-/**
- * The {@code FinishedUpdatePacket} class represents a packet that signals the completion
- * of an update process between the client and server in the Minecraft protocol.
- *
- * <p>This packet is used to indicate that the client has finished receiving and processing
- * an update, ensuring that further operations can proceed.</p>
- */
 public final class FinishedUpdatePacket implements MinecraftPacket {
 
-  /**
-   * A shared singleton instance of {@code FinishedUpdatePacket}, since the packet carries no data.
-   */
   public static final FinishedUpdatePacket INSTANCE = new FinishedUpdatePacket();
 
   private FinishedUpdatePacket() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,24 +33,12 @@ import org.jetbrains.annotations.NotNull;
  */
 public final class ClickCallbackManager {
 
-  /**
-   * Global singleton instance of the click callback manager.
-   */
   public static final ClickCallbackManager INSTANCE = new ClickCallbackManager();
 
-  /**
-   * The base command string used to route click callbacks.
-   *
-   * <p>This prefix is prepended to callback IDs when embedding them in client-bound
-   * clickable components.</p>
-   */
-  static final String COMMAND = "/velocity:callback ";
+  public static final String COMMAND_LABEL = "velocity:callback";
 
-  /**
-   * Cache of registered callbacks, keyed by their unique UUIDs.
-   *
-   * <p>Callbacks expire based on configured duration or remaining usage count.</p>
-   */
+  static final String COMMAND = "/" + COMMAND_LABEL + " ";
+
   private final Cache<UUID, RegisteredCallback> registrations = Caffeine.newBuilder()
       .expireAfter(new Expiry<UUID, RegisteredCallback>() {
         @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020-2023 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,16 +19,37 @@ package com.velocitypowered.proxy.command;
 
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.permission.Tristate;
+import java.util.Collections;
+import java.util.Map;
 
 /**
  * A fake {@link CommandSource}.
  */
 public class MockCommandSource implements CommandSource {
 
+  /**
+   * Singleton instance of the mock command source.
+   */
   public static final CommandSource INSTANCE = new MockCommandSource();
 
+  /**
+   * Always returns {@link Tristate#UNDEFINED} for any permission query.
+   *
+   * @param permission the permission string to check
+   * @return {@link Tristate#UNDEFINED}
+   */
   @Override
   public Tristate getPermissionValue(final String permission) {
     return Tristate.UNDEFINED;
+  }
+
+  /**
+   * Always returns an empty map.
+   *
+   * @return {@link Collections#emptyMap()}
+   */
+  @Override
+  public Map<String, Boolean> getPermissionMap() {
+    return Collections.emptyMap();
   }
 }

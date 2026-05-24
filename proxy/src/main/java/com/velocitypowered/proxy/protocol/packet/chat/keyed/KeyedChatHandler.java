@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,63 +31,24 @@ import net.kyori.adventure.text.Component;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-/**
- * A handler for processing chat components based on specific keys.
- *
- * <p>The {@code KeyedChatHandler} class is responsible for managing chat interactions or
- * messages that keys identify. It implements the required interface or class
- * to handle key-based chat processing.</p>
- */
 public class KeyedChatHandler implements ChatHandler<KeyedPlayerChatPacket> {
 
-  /**
-   * Logger instance for reporting chat handling errors, warnings, and plugin violations.
-   */
-  private static final Logger logger = LogManager.getLogger(KeyedChatHandler.class);
+  private static final Logger LOGGER = LogManager.getLogger(KeyedChatHandler.class);
 
-  /**
-   * The Velocity server instance used to access configuration and event systems.
-   */
   private final VelocityServer server;
 
-  /**
-   * The player associated with this chat handler instance.
-   */
   private final ConnectedPlayer player;
 
-  /**
-   * Constructs a new {@code KeyedChatHandler} for the given server and player.
-   *
-   * @param server the Velocity server instance
-   * @param player the player this handler is associated with
-   */
   public KeyedChatHandler(final VelocityServer server, final ConnectedPlayer player) {
     this.server = server;
     this.player = player;
   }
 
-  /**
-   * Returns the class of packets this handler is responsible for.
-   *
-   * <p>This identifies the handler as responsible for {@link KeyedPlayerChatPacket}
-   * packets in the chat pipeline.</p>
-   *
-   * @return the class of {@code KeyedPlayerChatPacket}
-   */
   @Override
   public Class<KeyedPlayerChatPacket> packetClass() {
     return KeyedPlayerChatPacket.class;
   }
 
-  /**
-   * Logs an error and disconnects the player when a plugin attempts to cancel a signed chat message.
-   *
-   * <p>This method handles the invalid behavior of canceling signed chat messages, which is no longer allowed
-   * starting from Minecraft version 1.19.1.</p>
-   *
-   * @param logger the logger used to log the error
-   * @param player the player to disconnect due to the illegal action
-   */
   public static void invalidCancel(final Logger logger, final ConnectedPlayer player) {
     logger.fatal("A plugin tried to cancel a signed chat message."
         + " This is no longer possible in 1.19.1 and newer. "
@@ -96,15 +57,6 @@ public class KeyedChatHandler implements ChatHandler<KeyedPlayerChatPacket> {
         + "Contact your network administrator."));
   }
 
-  /**
-   * Logs an error and disconnects the player when a plugin attempts to modify a signed chat message.
-   *
-   * <p>This method handles the invalid behavior of modifying signed chat messages, which is no longer allowed
-   * starting from Minecraft version 1.19.1.</p>
-   *
-   * @param logger the logger used to log the error
-   * @param player the player to disconnect due to the illegal action
-   */
   public static void invalidChange(final Logger logger, final ConnectedPlayer player) {
     logger.fatal("A plugin tried to change a signed chat message. "
         + "This is no longer possible in 1.19.1 and newer. "
@@ -113,20 +65,6 @@ public class KeyedChatHandler implements ChatHandler<KeyedPlayerChatPacket> {
         + "Contact your network administrator."));
   }
 
-  /**
-   * Handles inbound player chat messages represented by {@link KeyedPlayerChatPacket}.
-   *
-   * <p>This method performs the following logic:</p>
-   * <ul>
-   *   <li>Fires a {@link PlayerChatEvent} for plugins to observe or modify the message.</li>
-   *   <li>If the message is signed and signing is enforced, cancellation or modification
-   *       by plugins results in the player being disconnected.</li>
-   *   <li>Otherwise, the chat is converted to a {@link MinecraftPacket} and queued
-   *       to be sent to the server.</li>
-   * </ul>
-   *
-   * @param packet the inbound {@code KeyedPlayerChatPacket} sent by the client
-   */
   @Override
   public void handlePlayerChatInternal(final KeyedPlayerChatPacket packet) {
     ChatQueue chatQueue = this.player.getChatQueue();
@@ -155,7 +93,7 @@ public class KeyedChatHandler implements ChatHandler<KeyedPlayerChatPacket> {
     }
     chatQueue.queuePacket(
         newLastSeen -> chatFuture.exceptionally((ex) -> {
-          logger.error("Exception while handling player chat for {}", player, ex);
+          LOGGER.error("Exception while handling player chat for {}", player, ex);
           return null;
         }),
         packet.getExpiry(), null
@@ -170,7 +108,7 @@ public class KeyedChatHandler implements ChatHandler<KeyedPlayerChatPacket> {
       if (!chatResult.isAllowed()) {
         if (this.server.getConfiguration().enforceChatSigning() && playerKey.getKeyRevision().noLessThan(IdentifiedKey.Revision.LINKED_V2)) {
           // Bad, very bad.
-          invalidCancel(logger, player);
+          invalidCancel(LOGGER, player);
         }
 
         return null;
@@ -179,9 +117,9 @@ public class KeyedChatHandler implements ChatHandler<KeyedPlayerChatPacket> {
       if (chatResult.getMessage().map(str -> !str.equals(packet.getMessage())).orElse(false)) {
         if (this.server.getConfiguration().enforceChatSigning() && playerKey.getKeyRevision().noLessThan(IdentifiedKey.Revision.LINKED_V2)) {
           // Bad, very bad.
-          invalidChange(logger, player);
+          invalidChange(LOGGER, player);
         } else {
-          logger.warn("A plugin changed a signed chat message. The server may not accept it.");
+          LOGGER.warn("A plugin changed a signed chat message. The server may not accept it.");
           return player.getChatBuilderFactory().builder()
               .message(chatResult.getMessage().get()) // Always present at this point
               .setTimestamp(packet.getExpiry())

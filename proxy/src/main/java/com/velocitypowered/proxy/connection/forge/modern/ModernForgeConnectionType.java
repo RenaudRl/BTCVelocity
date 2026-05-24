@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,9 +28,6 @@ import com.velocitypowered.proxy.connection.util.ConnectionTypeImpl;
  */
 public class ModernForgeConnectionType extends ConnectionTypeImpl {
 
-  /**
-   * The full hostname string received from the client, including Forge tokens and forwarding data.
-   */
   private final String hostName;
 
   /**

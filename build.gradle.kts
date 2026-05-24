@@ -10,9 +10,15 @@ subprojects {
     apply(plugin = "velocity-checkstyle")
     apply(plugin = "velocity-spotless")
 
+    plugins.withId("checkstyle") {
+        extensions.configure<CheckstyleExtension> {
+            configFile = rootProject.file("config/checkstyle/checkstyle.xml")
+        }
+    }
+
     java {
         toolchain {
-            languageVersion.set(JavaLanguageVersion.of(21))
+            languageVersion.set(JavaLanguageVersion.of(25))
         }
     }
 
@@ -26,6 +32,14 @@ subprojects {
             testTask.configure {
                 reports.junitXml.required = true
             }
+        }
+    }
+}
+
+project(":velocity-proxy") {
+    plugins.withId("checkstyle") {
+        extensions.configure<CheckstyleExtension> {
+            configFile = rootProject.file("config/checkstyle/checkstyle.xml")
         }
     }
 }

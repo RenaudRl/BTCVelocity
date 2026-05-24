@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,14 +31,8 @@ import org.jetbrains.annotations.NotNull;
  */
 public final class CappedSet<T> extends ForwardingSet<T> {
 
-  /**
-   * The backing set that holds the actual elements.
-   */
   private final Set<T> delegate;
 
-  /**
-   * The maximum number of elements allowed in this set.
-   */
   private final int upperSize;
 
   private CappedSet(final Set<T> delegate, final int upperSize) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,13 +17,19 @@
 
 package com.velocitypowered.proxy.connection.client;
 
+import static com.velocityctd.proxy.permission.PermissionResolverAdapterFactory.createPermissionResolverAdapter;
 import static com.velocitypowered.api.proxy.ConnectionRequestBuilder.Status.ALREADY_CONNECTED;
 import static com.velocitypowered.proxy.connection.util.ConnectionRequestResults.plainResult;
+import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
 import com.google.common.base.Preconditions;
 import com.google.gson.JsonObject;
+import com.velocityctd.api.permission.PermissionResolver;
+import com.velocityctd.api.queue.QueueState;
+import com.velocityctd.proxy.permission.PermissionUtils;
+import com.velocityctd.proxy.queue.VelocityQueue;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.DisconnectEvent.LoginStatus;
 import com.velocitypowered.api.event.connection.PreTransferEvent;
@@ -46,20 +52,21 @@ import com.velocitypowered.api.permission.PermissionProvider;
 import com.velocitypowered.api.permission.Tristate;
 import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.Player;
-import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.crypto.IdentifiedKey;
 import com.velocitypowered.api.proxy.crypto.KeyIdentifiable;
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.PluginMessageEncoder;
 import com.velocitypowered.api.proxy.player.PlayerSettings;
 import com.velocitypowered.api.proxy.player.ResourcePackInfo;
+import com.velocitypowered.api.proxy.server.PlayerInfoForwarding;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.api.util.GameProfile;
 import com.velocitypowered.api.util.ModInfo;
 import com.velocitypowered.api.util.ServerLink;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.adventure.VelocityBossBarImplementation;
-import com.velocitypowered.proxy.config.PlayerInfoForwarding;
+import com.velocitypowered.proxy.config.DynamicFallbackFilter;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.MinecraftConnectionAssociation;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
@@ -69,7 +76,9 @@ import com.velocitypowered.proxy.connection.player.resourcepack.VelocityResource
 import com.velocitypowered.proxy.connection.player.resourcepack.handler.ResourcePackHandler;
 import com.velocitypowered.proxy.connection.util.ConnectionMessages;
 import com.velocitypowered.proxy.connection.util.ConnectionRequestResults.Impl;
+import com.velocitypowered.proxy.connection.util.FallbackServerResolver;
 import com.velocitypowered.proxy.connection.util.VelocityInboundConnection;
+import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import com.velocitypowered.proxy.protocol.StateRegistry;
 import com.velocitypowered.proxy.protocol.netty.MinecraftEncoder;
 import com.velocitypowered.proxy.protocol.packet.BundleDelimiterPacket;
@@ -95,20 +104,26 @@ import com.velocitypowered.proxy.protocol.packet.config.ClientboundServerLinksPa
 import com.velocitypowered.proxy.protocol.packet.config.StartUpdatePacket;
 import com.velocitypowered.proxy.protocol.packet.title.GenericTitlePacket;
 import com.velocitypowered.proxy.protocol.util.ByteBufDataOutput;
-import com.velocitypowered.proxy.queue.ServerQueueStatus;
 import com.velocitypowered.proxy.server.VelocityRegisteredServer;
 import com.velocitypowered.proxy.tablist.InternalTabList;
 import com.velocitypowered.proxy.tablist.KeyedVelocityTabList;
 import com.velocitypowered.proxy.tablist.VelocityTabList;
 import com.velocitypowered.proxy.tablist.VelocityTabListLegacy;
 import com.velocitypowered.proxy.util.ClosestLocaleMatcher;
+import com.velocitypowered.proxy.util.ComponentUtils;
 import com.velocitypowered.proxy.util.DurationUtils;
 import com.velocitypowered.proxy.util.TranslatableMapper;
 import com.velocitypowered.proxy.util.collect.CappedSet;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -135,7 +150,6 @@ import net.kyori.adventure.resource.ResourcePackRequestLike;
 import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.sound.SoundStop;
 import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.TextReplacementConfig;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.logger.slf4j.ComponentLogger;
@@ -146,49 +160,23 @@ import net.kyori.adventure.title.Title;
 import net.kyori.adventure.title.Title.Times;
 import net.kyori.adventure.title.TitlePart;
 import net.kyori.adventure.translation.GlobalTranslator;
-import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Unmodifiable;
 
-/**
- * Represents a player connected to the proxy.
- */
 @SuppressWarnings("UnstableApiUsage")
 public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, KeyIdentifiable, VelocityInboundConnection {
 
-  /**
-   * The maximum number of plugin message channels a client may register before being rejected.
-   *
-   * <p>This value is configurable via the {@code velocity.max-clientside-plugin-channels} system property.</p>
-   * Defaults to {@code 1024}.
-   */
   public static final int MAX_CLIENTSIDE_PLUGIN_CHANNELS = Integer.getInteger("velocity.max-clientside-plugin-channels", 1024);
 
-  /**
-   * A plain text serializer that flattens translatable components.
-   *
-   * <p>Used for extracting plain disconnect reasons from structured components.</p>
-   */
   private static final PlainTextComponentSerializer PASS_THRU_TRANSLATE =
       PlainTextComponentSerializer.builder().flattener(TranslatableMapper.FLATTENER).build();
 
-  /**
-   * The default permission provider used if none is explicitly assigned to the player.
-   *
-   * <p>Always returns {@link Tristate#UNDEFINED} for any permission query.</p>
-   */
-  static final PermissionProvider DEFAULT_PERMISSIONS = s -> PermissionFunction.ALWAYS_UNDEFINED;
+  private static final ComponentLogger LOGGER = ComponentLogger.logger(ConnectedPlayer.class);
 
-  /**
-   * A structured Adventure component logger instance for logging player-related messages.
-   */
-  private static final ComponentLogger logger = ComponentLogger.logger(ConnectedPlayer.class);
+  static final PermissionProvider DEFAULT_PERMISSIONS = s -> PermissionResolver.ALWAYS_UNDEFINED;
 
-  /**
-   * Provides structured pointers for {@link ConnectedPlayer} to resolve
-   * identity, locale, and permission-related values used across Adventure APIs.
-   */
   private static final @NotNull PointersSupplier<ConnectedPlayer> POINTERS_SUPPLIER = PointersSupplier.<ConnectedPlayer>builder()
       .resolving(Identity.UUID, Player::getUniqueId)
       .resolving(Identity.NAME, Player::getUsername)
@@ -203,119 +191,49 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
    */
   private final MinecraftConnection connection;
 
-  /**
-   * The virtual host address that the player used to connect, or {@code null} if not known.
-   */
   private final @Nullable InetSocketAddress virtualHost;
 
-  /**
-   * The raw string version of the virtual host, or {@code null} if not available.
-   */
   private final @Nullable String rawVirtualHost;
 
-  /**
-   * The handshake intent sent by the client during connection.
-   */
   private final HandshakeIntent handshakeIntent;
 
-  /**
-   * The game profile for the player, containing their UUID and name.
-   */
   private GameProfile profile;
 
   /**
-   * The permission function used to evaluate permission checks for this player.
+   * The permission resolver used to evaluate permission checks for this player.
    */
-  private PermissionFunction permissionFunction;
+  private PermissionResolver permissionResolver;
 
-  /**
-   * The current index into the server fallback list.
-   */
-  private int tryIndex = 0;
-
-  /**
-   * The current round-trip ping in milliseconds.
-   */
   private long ping = -1;
 
-  /**
-   * Whether the player connected using online mode authentication.
-   */
   private final boolean onlineMode;
 
-  /**
-   * The currently connected backend server, or {@code null} if not connected.
-   */
   private @Nullable VelocityServerConnection connectedServer;
 
-  /**
-   * The server connection currently being attempted, or {@code null} if none is in flight.
-   */
   private @Nullable VelocityServerConnection connectionInFlight;
 
-  /**
-   * The parsed player settings, or {@code null} if not yet sent by the client.
-   */
   private @Nullable PlayerSettings settings;
 
-  /**
-   * The mod information sent by the client, or {@code null} if none was sent.
-   */
   private @Nullable ModInfo modInfo;
 
-  /**
-   * The set of boss bars currently displayed to the player.
-   */
   private final Set<VelocityBossBarImplementation> bossBars = new HashSet<>();
 
-  /**
-   * The current header line of the player's tab list.
-   */
   private Component playerListHeader = Component.empty();
 
-  /**
-   * The current footer line of the player's tab list.
-   */
   private Component playerListFooter = Component.empty();
 
-  /**
-   * The player's tab list implementation, varying by protocol version.
-   */
   private final InternalTabList tabList;
 
-  /**
-   * The Velocity proxy server instance.
-   */
   private final VelocityServer server;
 
-  /**
-   * The current connection phase used for mod or protocol negotiation.
-   */
   private ClientConnectionPhase connectionPhase;
 
-  /**
-   * Plugin message channels registered by the client.
-   */
   private final Collection<ChannelIdentifier> clientsideChannels;
 
-  /**
-   * A future that completes once the teardown logic is finished for this player.
-   */
   private final CompletableFuture<Void> teardownFuture = new CompletableFuture<>();
 
-  /**
-   * The list of servers to attempt connecting to, used for fallbacks.
-   */
-  private @MonotonicNonNull List<String> serversToTry = null;
-
-  /**
-   * The handler responsible for managing resource pack offers and responses.
-   */
   private final ResourcePackHandler resourcePackHandler;
 
-  /**
-   * Handles bundling of packets into delimiter frames for supported versions.
-   */
   private final BundleDelimiterHandler bundleHandler = new BundleDelimiterHandler(this);
 
   /**
@@ -324,43 +242,48 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
   private boolean dontRemoveFromRedis;
 
   /**
-   * The brand name reported by the client (e.g. "vanilla", "forge"), or {@code null} if not sent.
+   * Whether this player has fully completed the login handshake and is considered
+   * truly connected to this proxy. Only {@code true} after the login success packet
+   * has been sent. Used to suppress cleanup callbacks (queue, depot) for connections
+   * that were registered but then immediately rejected (e.g. duplicate login on a
+   * remote proxy).
    */
+  private boolean fullyConnected = false;
+
+  /**
+   * Whether the player has fully connected to the first server it's connecting to.
+   * This flag will be {@code true} after the first call to
+   * {@link #setConnectedServer(VelocityServerConnection)} with a non-null
+   * {@link VelocityServerConnection} as its argument.
+   */
+  private boolean firstServerConnected = false;
+
   private @Nullable String clientBrand;
 
-  /**
-   * The effective locale used to render messages for this player.
-   */
   private @Nullable Locale effectiveLocale;
 
-  /**
-   * The player's identified public key, used for message signing and verification.
-   */
   private final @Nullable IdentifiedKey playerKey;
 
-  /**
-   * The client settings packet most recently received from the player.
-   */
   private @Nullable ClientSettingsPacket clientSettingsPacket;
 
-  /**
-   * The chat queue used to manage chat and command messages from this player.
-   */
   private volatile ChatQueue chatQueue;
 
-  /**
-   * The factory for building version-specific chat packets.
-   */
   private final ChatBuilderFactory chatBuilderFactory;
 
-  /**
-   * The manager responsible for tracking and controlling boss bars shown to this player.
-   *
-   * <p>Handles suppression of boss bar update packets during login and server switches
-   * (to avoid client disconnects in 1.20.2+), and ensures bars are re-sent when the
-   * player transitions between servers.</p>
-   */
   private final BossBarManager bossBarManager;
+
+  /**
+   * The currently active server retry session, or `null` if there is no active session.
+   * Used for choosing fallback servers with consistent ordering.
+   */
+  private @Nullable ServerRetrySession serverRetrySession;
+
+  /**
+   * Tasks that delay the queueing operations. These are kept track of to cancel these
+   * tasks on disconnect.
+   */
+  private @Nullable ScheduledTask tryAutoQueueTask;
+  private @Nullable ScheduledTask tryQueueOnJoinTask;
 
   ConnectedPlayer(final VelocityServer server, final GameProfile profile, final MinecraftConnection connection,
                   final @Nullable InetSocketAddress virtualHost, final @Nullable String rawVirtualHost, final boolean onlineMode,
@@ -371,7 +294,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     this.virtualHost = virtualHost;
     this.rawVirtualHost = rawVirtualHost;
     this.handshakeIntent = handshakeIntent;
-    this.permissionFunction = PermissionFunction.ALWAYS_UNDEFINED;
+    this.setPermissionFunction(DEFAULT_PERMISSIONS.createFunction(this));
     this.connectionPhase = connection.getType().getInitialClientPhase();
     this.onlineMode = onlineMode;
     this.clientsideChannels = CappedSet.create(MAX_CLIENTSIDE_PLUGIN_CHANNELS);
@@ -399,33 +322,29 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
       bar.viewerDisconnected(this);
     }
 
-    if (this.server.getMultiProxyHandler().isRedisEnabled()) {
-      this.server.getMultiProxyHandler().onPlayerLeave(this);
+    if (tryAutoQueueTask != null) {
+      tryAutoQueueTask.cancel();
+      tryAutoQueueTask = null;
     }
 
-    if (this.server.getQueueManager().isQueueEnabled()) {
-      this.server.getQueueManager().onPlayerLeave(this);
+    if (tryQueueOnJoinTask != null) {
+      tryQueueOnJoinTask.cancel();
+      tryQueueOnJoinTask = null;
+    }
+
+    if (this.fullyConnected) {
+      this.server.getClusterPlayerService().onPlayerDisconnect(this);
+
+      if (this.server.isQueueEnabled()) {
+        this.server.getQueueManager().onPlayerDisconnect(this);
+      }
     }
   }
 
-  /**
-   * Gets the {@link ChatBuilderFactory} associated with this player.
-   *
-   * <p>The factory is used to construct chat packets and completions based on
-   * the player's protocol version and session context.</p>
-   *
-   * @return the chat builder factory for this player
-   */
   public ChatBuilderFactory getChatBuilderFactory() {
     return chatBuilderFactory;
   }
 
-  /**
-   * Gets the {@link ChatQueue} responsible for managing ordered chat message
-   * delivery and acknowledgement tracking for this player.
-   *
-   * @return the player's chat queue
-   */
   public ChatQueue getChatQueue() {
     return chatQueue;
   }
@@ -441,46 +360,20 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     oldChatQueue.close();
   }
 
-  /**
-   * Gets the {@link BundleDelimiterHandler} for this player.
-   *
-   * <p>This handler manages the state of bundle-delimited packet sequences
-   * used during configuration and play phases for bundling multiple packets together.</p>
-   *
-   * @return the bundle delimiter handler for this player
-   */
   public BundleDelimiterHandler getBundleHandler() {
     return this.bundleHandler;
   }
 
-  /**
-   * Returns the {@link Identity} for this player using their unique UUID.
-   *
-   * @return the identity representing this player
-   */
   @Override
   public @NonNull Identity identity() {
     return Identity.identity(this.getUniqueId());
   }
 
-  /**
-   * Gets the username of the player as provided by the {@link GameProfile}.
-   *
-   * @return the player's username
-   */
   @Override
   public String getUsername() {
     return profile.getName();
   }
 
-  /**
-   * Gets the effective {@link Locale} used for translating messages to this player.
-   *
-   * <p>If not explicitly set, this falls back to the locale provided by the player's client settings,
-   * if available.</p>
-   *
-   * @return the player's effective locale, or {@code null} if not available
-   */
   @Override
   public Locale getEffectiveLocale() {
     if (effectiveLocale == null && settings != null) {
@@ -490,35 +383,18 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     return effectiveLocale;
   }
 
-  /**
-   * Sets the effective {@link Locale} for the player.
-   *
-   * <p>This overrides any locale provided by the player's client settings.</p>
-   *
-   * @param locale the locale to use, or {@code null} to unset
-   */
   @Override
   public void setEffectiveLocale(final @Nullable Locale locale) {
     effectiveLocale = locale;
   }
 
-  /**
-   * Gets the UUID of the player.
-   *
-   * @return the player's unique identifier
-   */
   @Override
   public UUID getUniqueId() {
     return profile.getId();
   }
 
-  /**
-   * Gets the backend server the player is currently connected to.
-   *
-   * @return an {@link Optional} containing the connected server, if any
-   */
   @Override
-  public Optional<ServerConnection> getCurrentServer() {
+  public Optional<VelocityServerConnection> getCurrentServer() {
     return Optional.ofNullable(connectedServer);
   }
 
@@ -536,91 +412,39 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     return con;
   }
 
-  /**
-   * Returns the {@link GameProfile} associated with this player.
-   *
-   * <p>This includes the player's UUID, name, and any profile properties such as skin data.</p>
-   *
-   * @return the game profile of the player
-   */
   @Override
   public GameProfile getGameProfile() {
     return profile;
   }
 
-  /**
-   * Gets the Minecraft connection associated with this player.
-   *
-   * <p>This represents the underlying Netty channel and associated state
-   * for communication with the client.</p>
-   *
-   * @return the Minecraft connection for this player
-   */
   public MinecraftConnection getConnection() {
     return connection;
   }
 
-  /**
-   * Gets the current round-trip ping to the client, in milliseconds.
-   *
-   * @return the ping in ms, or {@code -1} if unknown
-   */
   @Override
   public long getPing() {
     return this.ping;
   }
 
-  /**
-   * Sets the current ping (in milliseconds) for this player.
-   *
-   * <p>Used internally when a keep-alive response is received.</p>
-   *
-   * @param ping the ping time in milliseconds
-   */
   void setPing(final long ping) {
     this.ping = ping;
   }
 
-  /**
-   * Returns whether the player connected using online mode authentication.
-   *
-   * @return {@code true} if the player is authenticated in online mode
-   */
   @Override
   public boolean isOnlineMode() {
     return onlineMode;
   }
 
-  /**
-   * Returns the {@link PlayerSettings} last sent by the client.
-   *
-   * <p>If no settings were sent yet, returns default settings.</p>
-   *
-   * @return the player's current or default settings
-   */
   @Override
   public PlayerSettings getPlayerSettings() {
     return settings == null ? ClientSettingsWrapper.DEFAULT : this.settings;
   }
 
-  /**
-   * Gets the raw {@link ClientSettingsPacket} sent by the client, if available.
-   *
-   * <p>This packet includes raw client preferences such as locale, render distance,
-   * and chat settings, before being wrapped into {@link PlayerSettings}.</p>
-   *
-   * @return the client settings packet, or {@code null} if not yet received
-   */
   @Nullable
   public ClientSettingsPacket getClientSettingsPacket() {
     return clientSettingsPacket;
   }
 
-  /**
-   * Returns whether the player has sent their initial {@link PlayerSettings}.
-   *
-   * @return {@code true} if player settings were received, otherwise false
-   */
   @Override
   public boolean hasSentPlayerSettings() {
     return settings != null;
@@ -636,100 +460,53 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     final ClientSettingsWrapper cs = new ClientSettingsWrapper(clientSettingsPacket);
     this.settings = cs;
     server.getEventManager().fireAndForget(new PlayerSettingsChangedEvent(this, cs));
+
+    this.server.getClusterPlayerService().onPlayerSettingsChange(this, cs);
   }
 
-  /**
-   * Gets the {@link ModInfo} sent by the client, if available.
-   *
-   * <p>This typically contains a list of mods and versions used by modded clients such as
-   * Forge, Fabric, or NeoForge. If the client did not send mod information,
-   * this will return an empty {@link Optional}.</p>
-   *
-   * @return an {@link Optional} containing the mod info, or empty if none was provided
-   */
   @Override
   public Optional<ModInfo> getModInfo() {
     return Optional.ofNullable(modInfo);
   }
 
-  /**
-   * Sets the {@link ModInfo} for this player and fires a {@link PlayerModInfoEvent}.
-   *
-   * <p>This is typically used during the login process to register the mods
-   * that the player has installed when using modded clients such as Fabric or Forge.</p>
-   *
-   * @param modInfo the mod info to associate with this player
-   */
   public void setModInfo(final ModInfo modInfo) {
     this.modInfo = modInfo;
     server.getEventManager().fireAndForget(new PlayerModInfoEvent(this, modInfo));
   }
 
-  /**
-   * Returns the {@link Pointers} view exposing various identity, locale, and permission
-   * related properties for this player.
-   *
-   * @return the Adventure pointer registry for this player
-   */
   @Override
   public @NotNull Pointers pointers() {
     return POINTERS_SUPPLIER.view(this);
   }
 
-  /**
-   * Gets the IP address of the player from their connection to the proxy.
-   *
-   * @return the remote IP address of the player
-   */
   @Override
   public InetSocketAddress getRemoteAddress() {
     return (InetSocketAddress) connection.getRemoteAddress();
   }
 
-  /**
-   * Returns the virtual host address that the player connected to.
-   *
-   * @return the virtual host, or empty if not available
-   */
   @Override
   public Optional<InetSocketAddress> getVirtualHost() {
     return Optional.ofNullable(virtualHost);
   }
 
-  /**
-   * Returns the string form of the virtual host that the player connected to.
-   *
-   * @return the raw virtual host, or empty if not available
-   */
   @Override
   public Optional<String> getRawVirtualHost() {
     return Optional.ofNullable(rawVirtualHost);
   }
 
-  /**
-   * Sets the permission function to evaluate permissions for this player.
-   *
-   * @param permissionFunction the new permission function
-   */
   void setPermissionFunction(final PermissionFunction permissionFunction) {
-    this.permissionFunction = permissionFunction;
+    if (permissionFunction instanceof PermissionResolver resolver) {
+      this.permissionResolver = resolver;
+    } else {
+      this.permissionResolver = createPermissionResolverAdapter(this, permissionFunction);
+    }
   }
 
-  /**
-   * Checks if the player's connection is still active.
-   *
-   * @return {@code true} if the channel is open and active
-   */
   @Override
   public boolean isActive() {
     return connection.getChannel().isActive();
   }
 
-  /**
-   * Returns the Minecraft protocol version used by the client.
-   *
-   * @return the player's protocol version
-   */
   @Override
   public ProtocolVersion getProtocolVersion() {
     return connection.getProtocolVersion();
@@ -755,14 +532,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     return GlobalTranslator.render(message, locale);
   }
 
-  /**
-   * Sends a chat message to the player from the specified {@link Identity}.
-   *
-   * <p>The message will be translated using the player's effective locale before delivery.</p>
-   *
-   * @param identity the identity of the message sender
-   * @param message the message to send
-   */
   @Override
   @SuppressWarnings("deprecation")
   public void sendMessage(final @NonNull Identity identity, final @NonNull Component message) {
@@ -771,15 +540,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     connection.write(getChatBuilderFactory().builder().component(translated).forIdentity(identity).toClient());
   }
 
-  /**
-   * Sends a chat or system message to the player from the specified {@link Identity}, with a message type.
-   *
-   * <p>The message will be translated using the player's effective locale before delivery.</p>
-   *
-   * @param identity the identity of the message sender
-   * @param message the message to send
-   * @param type the type of message to send (chat or system)
-   */
   @Override
   @SuppressWarnings("deprecation")
   public void sendMessage(final @NonNull Identity identity, final @NonNull Component message,
@@ -795,13 +555,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
         .toClient());
   }
 
-  /**
-   * Sends an action bar message to the player.
-   *
-   * <p>Uses title packets for versions 1.11 and higher, and falls back to legacy chat packets otherwise.</p>
-   *
-   * @param message the action bar message to send
-   */
   @Override
   public void sendActionBar(final @NonNull Component message) {
     Component translated = translateMessage(message);
@@ -824,48 +577,26 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Gets the current tab list header being displayed to the player.
-   *
-   * @return the tab list header component
-   */
   @Override
   public Component getPlayerListHeader() {
     return this.playerListHeader;
   }
 
-  /**
-   * Gets the current tab list footer being displayed to the player.
-   *
-   * @return the tab list footer component
-   */
   @Override
   public Component getPlayerListFooter() {
     return this.playerListFooter;
   }
 
-  /**
-   * Sends a new header for the player's tab list while keeping the current footer.
-   */
   @Override
   public void sendPlayerListHeader(final @NonNull Component header) {
     this.sendPlayerListHeaderAndFooter(header, this.playerListFooter);
   }
 
-  /**
-   * Sends a new footer for the player's tab list while keeping the current header.
-   */
   @Override
   public void sendPlayerListFooter(final @NonNull Component footer) {
     this.sendPlayerListHeaderAndFooter(this.playerListHeader, footer);
   }
 
-  /**
-   * Sends both the header and footer for the player's tab list.
-   *
-   * <p>If header/footer translation is enabled in the proxy configuration,
-   * the components will be localized before being sent.</p>
-   */
   @Override
   public void sendPlayerListHeaderAndFooter(final @NotNull Component header,
                                             final @NotNull Component footer) {
@@ -883,11 +614,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Displays a title and subtitle to the player using the appropriate packet format.
-   *
-   * @param title the full title object to send
-   */
   @Override
   public void showTitle(final @NonNull Title title) {
     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
@@ -919,13 +645,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Sends an individual part of a title to the player, such as main title, subtitle, or timing.
-   *
-   * @param part the part of the title to send
-   * @param value the value to assign to that part
-   * @param <T> the type of value (Component or Title.Times)
-   */
   @SuppressWarnings("ConstantValue")
   @Override
   public <T> void sendTitlePart(final @NotNull TitlePart<T> part, final @NotNull T value) {
@@ -966,9 +685,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Clears the currently displayed title from the player's screen.
-   */
   @Override
   public void clearTitle() {
     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
@@ -977,9 +693,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Resets the title state for the player, removing all parts and timings.
-   */
   @Override
   public void resetTitle() {
     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
@@ -988,11 +701,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Hides a boss bar from the player.
-   *
-   * @param bar the boss bar to hide
-   */
   @Override
   public void hideBossBar(final @NonNull BossBar bar) {
     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_9)) {
@@ -1003,11 +711,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Shows a boss bar to the player.
-   *
-   * @param bar the boss bar to show
-   */
   @Override
   public void showBossBar(final @NonNull BossBar bar) {
     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_9)) {
@@ -1018,45 +721,30 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Creates a new connection request for the specified backend server.
-   *
-   * @param server the target server
-   * @return a connection request builder
-   */
   @Override
   public ConnectionRequestBuilder createConnectionRequest(final RegisteredServer server) {
+    return createConnectionRequest((VelocityRegisteredServer) server);
+  }
+
+  private ConnectionRequestBuilder createConnectionRequest(final VelocityRegisteredServer server) {
     return new ConnectionRequestBuilderImpl(server, this.connectedServer);
   }
 
-  private ConnectionRequestBuilder createConnectionRequest(final RegisteredServer server,
+  private ConnectionRequestBuilder createConnectionRequest(final VelocityRegisteredServer server,
                                                            final @Nullable VelocityServerConnection previousConnection) {
     return new ConnectionRequestBuilderImpl(server, previousConnection);
   }
 
-  /**
-   * Gets the profile properties (e.g. skin textures) from the player's {@link GameProfile}.
-   *
-   * @return a list of profile properties
-   */
   @Override
   public List<GameProfile.Property> getGameProfileProperties() {
     return this.profile.getProperties();
   }
 
-  /**
-   * Replaces the profile properties in the player's {@link GameProfile}.
-   *
-   * @param properties the new list of properties
-   */
   @Override
   public void setGameProfileProperties(final List<GameProfile.Property> properties) {
     this.profile = profile.withProperties(Preconditions.checkNotNull(properties));
   }
 
-  /**
-   * Clears the tab list header and footer and sends the reset packet to the player.
-   */
   @Override
   public void clearPlayerListHeaderAndFooter() {
     clearPlayerListHeaderAndFooterSilent();
@@ -1065,24 +753,11 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Clears the player list header and footer without sending an update to the client.
-   *
-   * <p>This is used internally when transitioning servers or resetting state
-   * without modifying the visual appearance for the player immediately.</p>
-   */
   public void clearPlayerListHeaderAndFooterSilent() {
     this.playerListHeader = Component.empty();
     this.playerListFooter = Component.empty();
   }
 
-  /**
-   * Returns the internal tab list used to manage player list entries for this player.
-   *
-   * <p>This implementation varies based on the client's protocol version.</p>
-   *
-   * @return the internal tab list
-   */
   @Override
   public InternalTabList getTabList() {
     return tabList;
@@ -1107,12 +782,17 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
   }
 
   /**
-   * Disconnects the player from the proxy with the specified reason.
-   *
-   * <p>If called from outside the Netty event loop, the disconnect will be scheduled asynchronously.</p>
-   *
-   * @param reason the reason to display to the player on disconnect
+   * Executed when this player is fully connected, meaning the login success packet has been sent
+   * and the player is considered truly online on this proxy.
    */
+  public void fullyConnected() {
+    this.fullyConnected = true;
+
+    if (this.server.isQueueEnabled()) {
+      this.server.getQueueManager().onPlayerConnect(this);
+    }
+  }
+
   @Override
   public void disconnect(final Component reason) {
     if (connection.eventLoop().inEventLoop()) {
@@ -1132,48 +812,24 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     Component translated = this.translateMessage(reason);
 
     if (server.getConfiguration().isLogPlayerDisconnections()) {
-      logger.info(Component.text(this + " has disconnected: ").append(translated));
+      LOGGER.info(Component.text(this + " has disconnected: ").append(translated));
     }
 
     connection.closeWith(DisconnectPacket.create(translated, this.getProtocolVersion(), connection.getState()));
   }
 
-  /**
-   * Gets the server this player is currently connected to, if any.
-   *
-   * @return the connected {@link VelocityServerConnection}, or {@code null} if not connected
-   */
   public @Nullable VelocityServerConnection getConnectedServer() {
     return connectedServer;
   }
 
-  /**
-   * Gets the server connection currently in flight (i.e., being attempted), if any.
-   *
-   * @return the in-flight {@link VelocityServerConnection}, or {@code null} if none
-   */
   public @Nullable VelocityServerConnection getConnectionInFlight() {
     return connectionInFlight;
   }
 
-  /**
-   * Gets either the in-flight connection (if one exists), or the currently connected server.
-   *
-   * <p>This is useful for determining where packets or events should be routed
-   * during a transition between servers.</p>
-   *
-   * @return the active or transitioning {@link VelocityServerConnection}, or {@code null} if neither is present
-   */
   public VelocityServerConnection getConnectionInFlightOrConnectedServer() {
     return connectionInFlight != null ? connectionInFlight : connectedServer;
   }
 
-  /**
-   * Resets and clears the in-flight server connection, typically after it has completed or failed.
-   *
-   * <p>This should be called once a transition is finalized to avoid inconsistencies
-   * in connection state tracking.</p>
-   */
   public void resetInFlightConnection() {
     connectionInFlight = null;
   }
@@ -1185,7 +841,8 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
    * @param throwable the exception
    * @param safe      whether we can safely reconnect to a new server
    */
-  public void handleConnectionException(final RegisteredServer server, final Throwable throwable,
+  public void handleConnectionException(final VelocityRegisteredServer server,
+                                        final Throwable throwable,
                                         final boolean safe) {
     if (!isActive()) {
       // If the connection is no longer active, it makes no sense to try and recover it.
@@ -1210,9 +867,9 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
           Argument.string("server", server.getServerInfo().getName()));
     } else {
       if (Boolean.getBoolean("velocity.suppress-connection-timeout-logs")) {
-        logger.error("{}: unable to connect to server {}", this, server.getServerInfo().getName());
+        LOGGER.error("{}: unable to connect to server {}", this, server.getServerInfo().getName());
       } else {
-        logger.error("{}: unable to connect to server {}", this, server.getServerInfo().getName(), wrapped);
+        LOGGER.error("{}: unable to connect to server {}", this, server.getServerInfo().getName(), wrapped);
       }
 
       friendlyError = Component.translatable("velocity.error.connecting-server-error",
@@ -1229,7 +886,8 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
    * @param disconnect the disconnect packet
    * @param safe       whether we can safely reconnect to a new server
    */
-  public void handleConnectionException(final RegisteredServer server, final DisconnectPacket disconnect,
+  public void handleConnectionException(final VelocityRegisteredServer server,
+                                        final DisconnectPacket disconnect,
                                         final boolean safe) {
     if (!isActive()) {
       // If the connection is no longer active, it makes no sense to try and recover it.
@@ -1240,7 +898,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     String plainTextReason = PASS_THRU_TRANSLATE.serialize(disconnectReason);
     if (connectedServer != null && connectedServer.getServerInfo().equals(server.getServerInfo())) {
       if (this.server.getConfiguration().isLogPlayerConnections()) {
-        logger.info("{}: kicked from server {}: {}", this, server.getServerInfo().getName(), plainTextReason);
+        LOGGER.info("{}: kicked from server {}: {}", this, server.getServerInfo().getName(), plainTextReason);
       }
 
       handleConnectionException(server, disconnectReason,
@@ -1250,7 +908,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
                   Argument.component("reason", disconnectReason)), safe);
     } else {
       if (this.server.getConfiguration().isLogPlayerConnections()) {
-        logger.error("{}: disconnected while connecting to {}: {}", this,
+        LOGGER.error("{}: disconnected while connecting to {}: {}", this,
             server.getServerInfo().getName(), plainTextReason);
       }
 
@@ -1261,18 +919,19 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
                   Argument.component("reason", disconnectReason)), safe);
     }
 
-    if (this.server.getQueueManager().isQueueEnabled() && disconnectReason instanceof TextComponent text) {
+    if (this.server.isQueueEnabled()) {
       for (String reason : this.server.getConfiguration().getQueue().getBannedReason()) {
-        if (containsString(text, reason)) {
-          this.server.getQueueManager().removeFromAll(get());
+        if (ComponentUtils.containsString(disconnectReason, reason)) {
+          this.server.getQueueManager().removePlayerEntirely(this);
           break;
         }
       }
     }
   }
 
-  private void handleConnectionException(final RegisteredServer rs,
-                                         final @Nullable Component kickReason, final Component friendlyReason,
+  private void handleConnectionException(final VelocityRegisteredServer rs,
+                                         final @Nullable Component kickReason,
+                                         final Component friendlyReason,
                                          final boolean safe) {
     if (!isActive()) {
       // If the connection is no longer active, it makes no sense to try and recover it.
@@ -1290,8 +949,12 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     boolean kickedFromCurrent = connectedServer == null || connectedServer.getServer().equals(rs);
     ServerKickResult result;
     if (kickedFromCurrent) {
-      Optional<RegisteredServer> next = getNextServerToTry(rs);
-      result = next.map(RedirectPlayer::create).orElseGet(() -> DisconnectPlayer.create(friendlyReason));
+      var retrySession = currentServerRetrySession();
+      retrySession.exclude(rs);
+      Optional<VelocityRegisteredServer> next = retrySession.getNextServerToTry();
+
+      result = next.map(RedirectPlayer::create)
+          .orElseGet(() -> DisconnectPlayer.create(friendlyReason));
     } else {
       // If we were kicked by going to another server, the connection should not be in flight
       if (connectionInFlight != null && connectionInFlight.getServer().equals(rs)) {
@@ -1325,16 +988,19 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
 
       switch (event.getResult()) {
         case final DisconnectPlayer res -> disconnect(res.getReasonComponent());
-        case final RedirectPlayer res -> createConnectionRequest(res.getServer(), previousConnection).connect()
+        // cast required (api event class)
+        case final RedirectPlayer res -> createConnectionRequest((VelocityRegisteredServer) res.getServer(), previousConnection).connect()
             .whenCompleteAsync((status, throwable) -> {
+              // cast required (api event class)
+              VelocityRegisteredServer server = (VelocityRegisteredServer) res.getServer();
               if (throwable != null) {
-                handleConnectionException(res.getServer(), throwable, true);
+                handleConnectionException(server, throwable, true);
                 return;
               }
 
               switch (status.getStatus()) {
                 // Impossible/nonsensical cases
-                case ALREADY_CONNECTED -> logger.error("{}: already connected to {}", this,
+                case ALREADY_CONNECTED -> LOGGER.error("{}: already connected to {}", this,
                       status.getAttemptedConnection().getServerInfo().getName());
 
                 // Fatal case
@@ -1349,7 +1015,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
                 case SERVER_DISCONNECTED -> {
                   Component reason = status.getReasonComponent()
                       .orElse(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
-                  handleConnectionException(res.getServer(),
+                  handleConnectionException(server,
                       DisconnectPacket.create(reason, getProtocolVersion(), connection.getState()),
                       ((Impl) status).isSafe());
                 }
@@ -1368,21 +1034,18 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
                     String targetServerName = originalEvent.getServer().getServerInfo().getName();
 
                     if (!this.server.getConfiguration().getQueue().getNoQueueServers().contains(targetServerName)) {
-                      TextComponent kickMsg = (TextComponent) originalEvent.getServerKickReason().orElse(Component.empty());
-                      ServerQueueStatus s = this.server.getQueueManager().getQueue(targetServerName);
+                      Component kickMsg = originalEvent.getServerKickReason().orElse(Component.empty());
+                      final VelocityQueue queue = this.server.getQueueManager().getQueue(targetServerName);
 
                       // Checks if the kick reason is valid for a re-queue
                       // This is done to make sure players don't get constantly sent over and over again in a kick loop
                       boolean isValidReason = this.server.getConfiguration().getQueue().getBannedReason()
                           .stream()
-                          .noneMatch(text -> containsString(kickMsg, text));
+                          .noneMatch(text -> ComponentUtils.containsString(kickMsg, text));
 
-                      if (isValidReason && (!s.isPaused() || this.server.getConfiguration().getQueue().isAllowPausedQueueJoining())) {
-                        s.queue(getUniqueId(),
-                            getQueuePriority(targetServerName),
-                            server.getQueueManager().isQueueEnabled() && hasPermission("velocity.queue.full.bypass"),
-                            server.getQueueManager().isQueueEnabled() && hasPermission("velocity.queue.bypass")
-                        );
+                      if (isValidReason && (queue.getState() != QueueState.PAUSED
+                          || this.server.getConfiguration().getQueue().isAllowPausedQueueJoining())) {
+                        queue.enqueue(this);
                       }
                     }
                   }
@@ -1407,94 +1070,34 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
   }
 
   /**
-   * Finds another server to attempt to log into if we were unexpectedly disconnected from the
-   * server.
-   *
-   * @return the next server to try
+   * Returns the currently active retry session, or creates one if there is no active session.
+   * Used for choosing fallback servers with consistent ordering.
    */
-  public Optional<RegisteredServer> getNextServerToTry() {
-    if (this.server.getMultiProxyHandler().getTransferringServers().containsKey(getUniqueId())) {
-      return this.server.getServer(this.server.getMultiProxyHandler().getTransferringServers().get(getUniqueId()));
+  public @NonNull ServerRetrySession currentServerRetrySession() {
+    if (serverRetrySession == null) {
+      LOGGER.debug("Creating new server retry session.");
+      serverRetrySession = new ServerRetrySession();
     }
 
-    return this.getNextServerToTry(null);
+    if (serverRetrySession.exhausted()) {
+      LOGGER.debug("Fallback server retry session is exhausted.");
+    }
+
+    return serverRetrySession;
   }
 
   /**
-   * Finds another server to attempt to log into if we were unexpectedly disconnected from the
-   * server.
-   *
-   * @param current the "current" server that the player is on, useful as an override
-   * @return the next server to try
+   * Resets the server retry session. Should be called once the session is complete, meaning
+   * a server to connect to has been found and the session can be discarded.
+   * After calling this, the next call of {@code currentServerRetrySession()} will result
+   * in a new session being created.
+   * Used for choosing fallback servers with consistent ordering.
    */
-  private Optional<RegisteredServer> getNextServerToTry(final @Nullable RegisteredServer current) {
-    if (serversToTry == null || serversToTry.isEmpty()) {
-      String virtualHostStr = getVirtualHost().map(InetSocketAddress::getHostString)
-          .orElse("")
-          .toLowerCase(Locale.ROOT);
-
-      List<String> forcedHosts = server.getConfiguration().getForcedHosts().get(virtualHostStr);
-      if (forcedHosts == null || forcedHosts.isEmpty()) {
-        for (Map.Entry<String, List<String>> entry : server.getConfiguration().getForcedHosts().entrySet()) {
-          String pattern = entry.getKey().toLowerCase(Locale.ROOT);
-          if (pattern.startsWith("*.") && virtualHostStr.endsWith(pattern.substring(1))) {
-            forcedHosts = entry.getValue();
-            break;
-          }
-        }
-      }
-
-      if (forcedHosts != null && !forcedHosts.isEmpty()) {
-        serversToTry = forcedHosts;
-      } else {
-        serversToTry = server.getConfiguration().getAttemptConnectionOrder();
-      }
+  private void resetServerRetrySession() {
+    if (serverRetrySession != null) {
+      LOGGER.debug("Resetting server retry session.");
+      serverRetrySession = null;
     }
-
-    String strategy = server.getConfiguration().getDynamicFallbackFilter().toUpperCase(Locale.ROOT);
-    Optional<RegisteredServer> selectedServer = Optional.empty();
-
-    for (int i = tryIndex; i < serversToTry.size(); i++) {
-      String toTryName = serversToTry.get(i);
-      if ((connectedServer != null && hasSameName(connectedServer.getServer(), toTryName))
-          || (connectionInFlight != null && hasSameName(connectionInFlight.getServer(), toTryName))
-          || (current != null && hasSameName(current, toTryName))) {
-        continue;
-      }
-
-      Optional<RegisteredServer> potentialServer = server.getServer(toTryName);
-      if (potentialServer.isEmpty()) {
-        continue;
-      }
-
-      RegisteredServer registeredServer = potentialServer.get();
-
-      if (selectedServer.isEmpty()) {
-        if (strategy.equalsIgnoreCase("FIRST_AVAILABLE")) {
-          tryIndex = i;
-          return Optional.of(registeredServer);
-        }
-
-        selectedServer = Optional.of(registeredServer);
-        tryIndex = i;
-      } else if (strategy.equalsIgnoreCase("MOST_POPULATED")) {
-        if (registeredServer.getTotalPlayerCount() > selectedServer.get().getTotalPlayerCount()) {
-          selectedServer = Optional.of(registeredServer);
-          tryIndex = i;
-        }
-      } else if (strategy.equalsIgnoreCase("LEAST_POPULATED")) {
-        if (registeredServer.getTotalPlayerCount() < selectedServer.get().getTotalPlayerCount()) {
-          selectedServer = Optional.of(registeredServer);
-          tryIndex = i;
-        }
-      }
-    }
-
-    return selectedServer;
-  }
-
-  private static boolean hasSameName(final RegisteredServer server, final String name) {
-    return server.getServerInfo().getName().equalsIgnoreCase(name);
   }
 
   /**
@@ -1504,24 +1107,180 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
    */
   public void setConnectedServer(final @Nullable VelocityServerConnection serverConnection) {
     this.connectedServer = serverConnection;
-    this.tryIndex = 0;
-
-    if (serverConnection != null && server.getConfiguration().getQueue().isRemovePlayerOnServerSwitch()) {
-      server.getQueueManager().removeFromAll(get());
-    }
+    resetServerRetrySession();
 
     if (serverConnection == connectionInFlight) {
       connectionInFlight = null;
     }
+
+    if (serverConnection != null) {
+      if (server.isQueueEnabled()) {
+        final String queueServerName = server.getConfiguration().getQueue().getQueueServer();
+        final boolean destinationIsQueueServer = !queueServerName.isEmpty()
+            && serverConnection.getServerInfo().getName().equals(queueServerName);
+
+        if (!destinationIsQueueServer
+            && server.getConfiguration().getQueue().isRemovePlayerOnServerSwitch()
+            && firstServerConnected) {
+          // Only remove player from all queues entirely if this is NOT the first server we connect to (firstServerConnected flag)
+          // to ensure timeouts work correctly when a player re-joins the network.
+          // Also skip removal when moving to the queue-server so the player stays in their queue.
+          server.getQueueManager().removePlayerEntirely(this);
+        }
+
+        // Auto-queue is mutually exclusive with queue-server
+        if (queueServerName.isEmpty()) {
+          tryAutoQueue(serverConnection);
+        }
+
+        if (!firstServerConnected) {
+          tryQueueOnJoin(serverConnection);
+        }
+      }
+
+      if (!firstServerConnected) {
+        firstServerConnected = true;
+      }
+    }
   }
 
   /**
-   * Sends a signal to reset the current connection phase back to the beginning of
-   * the legacy Forge handshake process.
+   * Returns {@code true} if the given server switch should be blocked because the player is
+   * in a queue while on the configured queue-server, and does not have the bypass permission.
    *
-   * <p>This is typically used when reconnecting to a Forge server or when restarting
-   * the modded handshake flow due to plugin logic or player redirection.</p>
+   * <p>The switch is allowed (returns {@code false}) if the destination is one of the servers
+   * the player is currently queued for — this ensures the queue manager can still transfer the
+   * player to their destination without being blocked.</p>
    */
+  private boolean shouldBlockQueueServerSwitch(final VelocityRegisteredServer destination) {
+    if (!server.isQueueEnabled()) {
+      return false;
+    }
+
+    final String queueServerName = server.getConfiguration().getQueue().getQueueServer();
+    if (queueServerName.isEmpty()) {
+      return false;
+    }
+
+    // Only block if the player is currently on the queue-server
+    if (connectedServer == null || !connectedServer.getServerInfo().getName().equals(queueServerName)) {
+      return false;
+    }
+
+    // Don't block if the player is not in any queue
+    if (!server.getQueueManager().isQueued(this)) {
+      return false;
+    }
+
+    // Allow the switch if the destination is a server the player is queued for
+    // (i.e. the queue manager is sending them to their destination)
+    for (final var queue : server.getQueueManager().getQueues()) {
+      if (queue.contains(this) && queue.getName().equals(destination.getServerInfo().getName())) {
+        return false;
+      }
+    }
+
+    // Allow if the player has the bypass permission
+    return !hasPermission("velocity.queue.server-switch.bypass");
+  }
+
+  private void tryAutoQueue(final @NonNull VelocityServerConnection joinedServer) {
+    if (!server.isQueueEnabled() || server.getQueueManager().isQueued(this)) {
+      return;
+    }
+
+    Map<String, List<String>> autoQueueServers = server.getConfiguration().getQueue().getAutoQueueServers();
+
+    String currentServerName = joinedServer.getServerInfo().getName();
+    List<VelocityRegisteredServer> queueServers = autoQueueServers.getOrDefault(currentServerName, emptyList())
+        .stream()
+        .map(server::getServer)
+        .flatMap(Optional::stream)
+        .toList();
+
+    if (queueServers.isEmpty()) {
+      return;
+    }
+
+    if (tryAutoQueueTask != null) {
+      LOGGER.debug("Cancelling previous auto-queue for player {}.", getUsername());
+
+      tryAutoQueueTask.cancel();
+      tryAutoQueueTask = null;
+    }
+
+    LOGGER.debug("Scheduling auto-queue for player {}.", getUsername());
+
+    tryAutoQueueTask = server.getScheduler().buildTask(VelocityVirtualPlugin.INSTANCE, () -> {
+      // Safeguard if this player is offline. Should never be reached because the task
+      // should be cancelled by ConnectedPlayer#disconnected.
+      if (!server.getAllPlayers().contains(this)) {
+        LOGGER.debug("Aborting auto-queueing player {} (now offline).", getUsername());
+        return;
+      }
+
+      if (connectedServer != joinedServer || connectionInFlight != null) {
+        LOGGER.debug("Aborting auto-queueing player {} (server mismatch).", getUsername());
+        return;
+      }
+
+      if (server.getQueueManager().isQueued(this)) {
+        LOGGER.debug("Aborting auto-queueing player {} (now enqueued).", getUsername());
+        return;
+      }
+
+      LOGGER.debug("Auto-queueing player {}.", getUsername());
+      if (server.getConfiguration().getQueue().isAllowMultiQueue()) {
+        for (VelocityRegisteredServer target : queueServers) {
+          server.getQueueManager().queue(this, target);
+        }
+      } else {
+        VelocityRegisteredServer target = queueServers.getFirst();
+        server.getQueueManager().queue(this, target);
+      }
+
+      tryAutoQueueTask = null;
+    })
+        .delay(Duration.ofSeconds(2))
+        .schedule();
+  }
+
+  private void tryQueueOnJoin(final @NonNull VelocityServerConnection firstServer) {
+    final List<String> queueOnJoinServers = server.getConfiguration().getQueue().getQueueOnJoinServers();
+    if (queueOnJoinServers.isEmpty()) {
+      return;
+    }
+
+    LOGGER.debug("Scheduling queue-on-join for player {}.", getUsername());
+
+    tryQueueOnJoinTask = server.getScheduler().buildTask(VelocityVirtualPlugin.INSTANCE, () -> {
+      // Safeguard if this player is offline. Should never be reached because the task
+      // should be cancelled by ConnectedPlayer#disconnected.
+      if (!server.getAllPlayers().contains(this)) {
+        LOGGER.debug("Aborting queue-on-join for player {} (now offline).", getUsername());
+        return;
+      }
+
+      if (connectedServer != firstServer || connectionInFlight != null) {
+        LOGGER.debug("Aborting queue-on-join for player {} (server mismatch).", getUsername());
+        return;
+      }
+
+      LOGGER.debug("Applying queue-on-join for player {}.", getUsername());
+
+      for (final String targetName : queueOnJoinServers) {
+        server.getServer(targetName).ifPresentOrElse(
+            target -> server.getQueueManager().queue(this, target),
+            () -> LOGGER.warn("queue-on-join server '{}' is not registered!", targetName)
+        );
+      }
+
+      tryQueueOnJoinTask = null;
+    })
+        .delay(Duration.ofSeconds(2))
+        .schedule();
+  }
+
   public void sendLegacyForgeHandshakeResetPacket() {
     connectionPhase.resetConnectionPhase(this);
   }
@@ -1540,13 +1299,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     return mc;
   }
 
-  /**
-   * Disconnects any ongoing or established connections. This
-   * method ensures that any connection currently in flight or any
-   * connected server is properly disconnected to clean up resources and
-   * prevent potential memory leaks and is made public to "fix" the ongoing
-   * unexpected disconnection error for some users, on top of making it easily accessible.
-   */
   public void teardown() {
     if (connectionInFlight != null) {
       connectionInFlight.disconnect();
@@ -1556,7 +1308,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
       connectedServer.disconnect();
     }
 
-    Optional<Player> connectedPlayer = server.getPlayer(this.getUniqueId());
+    Optional<ConnectedPlayer> connectedPlayer = server.getPlayer(this.getUniqueId());
     server.unregisterConnection(this);
 
     DisconnectEvent.LoginStatus status;
@@ -1580,33 +1332,10 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     });
   }
 
-  /**
-   * Returns a {@link CompletableFuture} that completes when the player
-   * has been fully torn down and the {@link DisconnectEvent} has been fired.
-   *
-   * <p>This can be used to wait for all teardown logic to finish before proceeding with
-   * further cleanup or dependent operations.</p>
-   *
-   * @return the teardown future
-   */
   public CompletableFuture<Void> getTeardownFuture() {
     return teardownFuture;
   }
 
-  /**
-   * Get instance of itself for other classes to retrieve.
-   *
-   * @return The current labeled class so others can retrieve.
-   */
-  public ConnectedPlayer get() {
-    return this;
-  }
-
-  /**
-   * Returns a string representation of the player, including their username and optionally their IP address.
-   *
-   * @return a string identifying the connected player
-   */
   @Override
   public String toString() {
     final boolean isPlayerAddressLoggingEnabled = server.getConfiguration().isPlayerAddressLoggingEnabled();
@@ -1614,24 +1343,19 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     return "[connected player] " + profile.getName() + " (" + playerIp + ")";
   }
 
-  /**
-   * Evaluates the given permission string using the current {@link PermissionFunction}.
-   *
-   * @param permission the permission to check
-   * @return the tristate result of the permission evaluation
-   */
   @Override
+  @NonNull
   public Tristate getPermissionValue(final String permission) {
-    return permissionFunction.getPermissionValue(permission);
+    return permissionResolver.getPermissionValue(permission);
   }
 
-  /**
-   * Sends a plugin message to the client using a raw byte array.
-   *
-   * @param identifier the plugin message channel
-   * @param data the payload data to send
-   * @return {@code true} if the message was sent
-   */
+  @Override
+  @Nullable
+  @Unmodifiable
+  public Map<String, Boolean> getPermissionMap() {
+    return permissionResolver.getPermissionMap();
+  }
+
   @Override
   public boolean sendPluginMessage(final @NotNull ChannelIdentifier identifier, final byte @NotNull [] data) {
     Preconditions.checkNotNull(identifier, "identifier");
@@ -1642,13 +1366,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     return true;
   }
 
-  /**
-   * Sends a plugin message to the client using a {@link PluginMessageEncoder}.
-   *
-   * @param identifier the plugin message channel
-   * @param dataEncoder the encoder for the payload
-   * @return {@code true} if the message was sent
-   */
   @Override
   public boolean sendPluginMessage(final @NotNull ChannelIdentifier identifier, final @NotNull PluginMessageEncoder dataEncoder) {
     requireNonNull(identifier);
@@ -1666,34 +1383,16 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Gets the brand string reported by the client (e.g., "vanilla", "forge").
-   *
-   * @return the client brand, or {@code null} if not reported
-   */
   @Override
   @Nullable
   public String getClientBrand() {
     return clientBrand;
   }
 
-  /**
-   * Sets the brand string reported by the client.
-   *
-   * @param clientBrand the client brand string
-   */
   void setClientBrand(final @Nullable String clientBrand) {
     this.clientBrand = clientBrand;
   }
 
-  /**
-   * Plays a sound for the player, routed through the current backend when supported.
-   *
-   * <p>No-op for unsupported protocol states/versions or mismatched emitters.</p>
-   *
-   * @param sound the sound to play
-   * @param emitter the sound emitter (self or another player on the same server)
-   */
   @Override
   public void playSound(final @NotNull Sound sound, final @NotNull Sound.Emitter emitter) {
     Preconditions.checkNotNull(sound, "sound");
@@ -1724,13 +1423,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     connection.write(new ClientboundSoundEntityPacket(sound, null, soundEmitterServerConn.getEntityId()));
   }
 
-  /**
-   * Stops a sound on the client when supported.
-   *
-   * <p>No-op for unsupported protocol states/versions.</p>
-   *
-   * @param stop the stop instruction
-   */
   @Override
   public void stopSound(final @NotNull SoundStop stop) {
     Preconditions.checkNotNull(stop, "stop");
@@ -1744,11 +1436,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     connection.write(new ClientboundStopSoundPacket(stop));
   }
 
-  /**
-   * Transfers the player to a new host address, using the Transfer packet (1.20.5+).
-   *
-   * @param address the address to transfer the player to
-   */
   @Override
   public void transferToHost(final @NotNull InetSocketAddress address) {
     Preconditions.checkNotNull(address);
@@ -1768,12 +1455,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     });
   }
 
-  /**
-   * Stores a client cookie (Minecraft 1.20.5+), optionally firing a {@link CookieStoreEvent}.
-   *
-   * @param key the key associated with the cookie
-   * @param data the cookie payload
-   */
   @Override
   public void storeCookie(final Key key, final byte[] data) {
     Preconditions.checkNotNull(key);
@@ -1800,11 +1481,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
         }, connection.eventLoop());
   }
 
-  /**
-   * Requests a cookie from the client (Minecraft 1.20.5+), optionally firing a {@link CookieRequestEvent}.
-   *
-   * @param key the key of the cookie to request
-   */
   @Override
   public void requestCookie(final Key key) {
     Preconditions.checkNotNull(key);
@@ -1823,11 +1499,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
         }, connection.eventLoop());
   }
 
-  /**
-   * Sets the server links displayed in the client's escape menu (Minecraft 1.21+).
-   *
-   * @param links the list of server links to send
-   */
   @Override
   public void setServerLinks(final @NotNull List<ServerLink> links) {
     Preconditions.checkNotNull(links, "links");
@@ -1859,54 +1530,60 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
    */
   @Override
   public int getQueuePriority(final String serverName) {
-    if (!server.getQueueManager().isQueueEnabled()) {
+    if (!server.isQueueEnabled()) {
       return 0;
     }
 
-    // First check for global permissions (higher priority for staff members)
-    for (int i = 100; i > 0; i--) {
-      if (hasPermission("velocity.queue.priority.all." + i)) {
-        return i;
-      }
-    }
+    final int maxPriority = 100;
 
-    // Then check for server-specific permissions (lower priority)
-    for (int i = 100; i > 0; i--) {
-      if (hasPermission("velocity.queue.priority." + serverName + "." + i)) {
-        return i;
-      }
-    }
-
-    return 0;
+    return PermissionUtils.findHighestPermissionValue(this, "velocity.queue.priority.all.", maxPriority)
+        .or(() -> {
+          if (serverName.equals("all")) {
+            // Skip check if serverName == "all" (already checked above).
+            return Optional.empty();
+          } else {
+            return PermissionUtils.findHighestPermissionValue(this, "velocity.queue.priority." + serverName + ".", maxPriority);
+          }
+        })
+        .orElse(0);
   }
 
   /**
-   * Adds the given chat completions to the player's client (1.19.1+).
+   * Computes all queue priority levels assigned to this player across every
+   * registered backend server.
    *
-   * @param completions the completions to add
+   * <p>Each entry corresponds to {@code velocity.queue.priority.<server>.<level>} or
+   * the global {@code velocity.queue.priority.all.<level>} permissions. Higher
+   * values indicate higher priority when entering queues.</p>
+   *
+   * @return a map of server names to their resolved queue priority values
    */
+  @Override
+  public Map<String, Integer> getQueuePriorities() {
+    final Map<String, Integer> priorities = new HashMap<>();
+
+    for (VelocityRegisteredServer server : server.getAllServers()) {
+      final String serverName = server.getServerInfo().getName();
+      priorities.put(serverName, getQueuePriority(serverName));
+    }
+
+    priorities.put("all", getQueuePriority("all"));
+
+    return priorities;
+  }
+
   @Override
   public void addCustomChatCompletions(final @NotNull Collection<String> completions) {
     Preconditions.checkNotNull(completions, "completions");
     this.sendCustomChatCompletionPacket(completions, PlayerChatCompletionPacket.Action.ADD);
   }
 
-  /**
-   * Removes the given chat completions from the player's client (1.19.1+).
-   *
-   * @param completions the completions to remove
-   */
   @Override
   public void removeCustomChatCompletions(final @NotNull Collection<String> completions) {
     Preconditions.checkNotNull(completions, "completions");
     this.sendCustomChatCompletionPacket(completions, PlayerChatCompletionPacket.Action.REMOVE);
   }
 
-  /**
-   * Sets the full list of custom chat completions for the player's client (1.19.1+).
-   *
-   * @param completions the completions to set
-   */
   @Override
   public void setCustomChatCompletions(final @NotNull Collection<String> completions) {
     Preconditions.checkNotNull(completions, "completions");
@@ -1920,11 +1597,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Spoofs a chat message as if the player had typed it.
-   *
-   * @param input the message to spoof
-   */
   @Override
   public void spoofChatInput(final String input) {
     Preconditions.checkArgument(input.length() <= LegacyChatPacket.MAX_SERVERBOUND_MESSAGE_LENGTH,
@@ -1952,34 +1624,18 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     return this.resourcePackHandler;
   }
 
-  /**
-   * Sends a legacy resource pack offer to the player by URL (deprecated).
-   *
-   * @param url the resource pack URL
-   */
   @Override
   @Deprecated
   public void sendResourcePack(final String url) {
     sendResourcePackOffer(new VelocityResourcePackInfo.BuilderImpl(url).build());
   }
 
-  /**
-   * Sends a legacy resource pack offer to the player with hash (deprecated).
-   *
-   * @param url the resource pack URL
-   * @param hash the SHA-1 hash of the pack
-   */
   @Override
   @Deprecated
   public void sendResourcePack(final String url, final byte[] hash) {
     sendResourcePackOffer(new VelocityResourcePackInfo.BuilderImpl(url).setHash(hash).build());
   }
 
-  /**
-   * Sends a resource pack offer to the player.
-   *
-   * @param packInfo the resource pack metadata
-   */
   @Override
   public void sendResourcePackOffer(final ResourcePackInfo packInfo) {
     this.resourcePackHandler.checkAlreadyAppliedPack(packInfo.getHash());
@@ -1989,11 +1645,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Sends a multipack resource request to the player (1.20+).
-   *
-   * @param request the resource pack request
-   */
   @Override
   public void sendResourcePacks(final @NotNull ResourcePackRequest request) {
     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_8)) {
@@ -2002,9 +1653,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Clears all resource packs from the player's client (1.20.3+).
-   */
   @Override
   public void clearResourcePacks() {
     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_20_3)) {
@@ -2013,12 +1661,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Removes specific resource packs by UUID.
-   *
-   * @param id the first pack UUID to remove
-   * @param others optional additional UUIDs
-   */
   @Override
   public void removeResourcePacks(final @NotNull UUID id, final @NotNull UUID @NotNull... others) {
     if (this.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_20_3)) {
@@ -2035,11 +1677,6 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Removes all packs in the given {@link ResourcePackRequest}.
-   *
-   * @param request the request object
-   */
   @Override
   public void removeResourcePacks(final @NotNull ResourcePackRequest request) {
     for (final net.kyori.adventure.resource.ResourcePackInfo resourcePackInfo : request.packs()) {
@@ -2047,22 +1684,11 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Removes all packs in the given {@link ResourcePackRequestLike}.
-   *
-   * @param request the request object
-   */
   @Override
   public void removeResourcePacks(final @NotNull ResourcePackRequestLike request) {
     removeResourcePacks(request.asResourcePackRequest());
   }
 
-  /**
-   * Removes the given resource packs individually.
-   *
-   * @param request the first pack to remove
-   * @param others additional packs to remove
-   */
   @Override
   public void removeResourcePacks(final @NotNull ResourcePackInfoLike request,
                                   final @NotNull ResourcePackInfoLike @NotNull... others) {
@@ -2072,43 +1698,23 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  /**
-   * Gets the currently applied resource pack (deprecated).
-   *
-   * @return the applied pack, or {@code null} if none
-   */
   @Override
   @Deprecated
   public @Nullable ResourcePackInfo getAppliedResourcePack() {
     return this.resourcePackHandler.getFirstAppliedPack();
   }
 
-  /**
-   * Gets the next resource pack to be applied (deprecated).
-   *
-   * @return the pending pack, or {@code null} if none
-   */
   @Override
   @Deprecated
   public @Nullable ResourcePackInfo getPendingResourcePack() {
     return this.resourcePackHandler.getFirstPendingPack();
   }
 
-  /**
-   * Gets the list of applied resource packs for this player.
-   *
-   * @return the collection of applied packs
-   */
   @Override
   public @NotNull Collection<ResourcePackInfo> getAppliedResourcePacks() {
     return this.resourcePackHandler.getAppliedResourcePacks();
   }
 
-  /**
-   * Gets the list of resource packs that are pending application.
-   *
-   * @return the collection of pending packs
-   */
   @Override
   public @NotNull Collection<ResourcePackInfo> getPendingResourcePacks() {
     return this.resourcePackHandler.getPendingResourcePacks();
@@ -2149,11 +1755,17 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
       final Long sentTime = serverConnection.getPendingPings().remove(packet.getRandomId());
       if (sentTime != null) {
         final MinecraftConnection smc = serverConnection.getConnection();
-        if (smc != null) {
+        final StateRegistry clientState = connection.getState();
+        final boolean stateAllowsForward = smc != null
+            && !smc.isClosed()
+            && clientState == smc.getState()
+            && (clientState == StateRegistry.CONFIG || clientState == StateRegistry.PLAY);
+        if (stateAllowsForward) {
           setPing(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - sentTime));
           smc.write(packet);
-          return true;
         }
+        // We removed this, and so this is ours
+        return true;
       }
     }
 
@@ -2164,7 +1776,8 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
    * Switches the connection to the client into config state.
    */
   public void switchToConfigState() {
-    server.getEventManager().fire(new PlayerEnterConfigurationEvent(this, getConnectionInFlightOrConnectedServer()))
+    final VelocityServerConnection targetServer = getConnectionInFlightOrConnectedServer();
+    server.getEventManager().fire(new PlayerEnterConfigurationEvent(this, targetServer))
         .completeOnTimeout(null, 5, TimeUnit.SECONDS).thenRunAsync(() -> {
           // if the connection was closed earlier, there is a risk that the player is no longer connected
           if (!connection.getChannel().isActive()) {
@@ -2180,9 +1793,9 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
           connection.pendingConfigurationSwitch = true;
           connection.getChannel().pipeline().get(MinecraftEncoder.class).setState(StateRegistry.CONFIG);
           // Make sure we don't send any play packets to the player after update start
-          connection.addPlayPacketQueueHandler();
+          connection.addPlayPacketQueueOutboundHandler();
         }, connection.eventLoop()).exceptionally((ex) -> {
-          logger.error("Error switching player connection to config state", ex);
+          LOGGER.error("Error switching player connection to config state", ex);
           return null;
         });
   }
@@ -2215,86 +1828,43 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     return clientsideChannels;
   }
 
-  /**
-   * Returns the {@link IdentifiedKey} used by the player for secure message signing,
-   * if available.
-   *
-   * <p>This key is exchanged during the login phase in modern Minecraft clients
-   * to verify chat messages and ensure authenticity.</p>
-   *
-   * @return the player's identified key, or {@code null} if not available
-   */
   @Override
   public @Nullable IdentifiedKey getIdentifiedKey() {
     return playerKey;
   }
 
-  /**
-   * Gets the current {@link ProtocolState} of the player's connection.
-   *
-   * <p>This represents the phase of the connection, such as HANDSHAKE, CONFIGURATION, or PLAY.</p>
-   *
-   * @return the current protocol state
-   */
   @Override
   public ProtocolState getProtocolState() {
     return connection.getState().toProtocolState();
   }
 
-  /**
-   * Gets the {@link HandshakeIntent} that the player sent when initiating the connection.
-   *
-   * <p>This intent identifies whether the player intended to login or request server status.</p>
-   *
-   * @return the handshake intent
-   */
   @Override
   public HandshakeIntent getHandshakeIntent() {
     return handshakeIntent;
   }
 
-  /**
-   * Returns the {@link BossBarManager} responsible for handling boss bar
-   * state and packet suppression for this player.
-   *
-   * <p>The manager tracks boss bars across server switches and prevents
-   * sending update packets during login/config phases that would otherwise
-   * disconnect clients (1.20.2+).</p>
-   *
-   * @return the boss bar manager for this player
-   */
   public BossBarManager getBossBarManager() {
     return bossBarManager;
   }
 
   private final class ConnectionRequestBuilderImpl implements ConnectionRequestBuilder {
 
-    /**
-     * The {@link RegisteredServer} the player is attempting to connect to.
-     */
-    private final RegisteredServer toConnect;
+    private final VelocityRegisteredServer toConnect;
 
-    /**
-     * The previously connected {@link VelocityRegisteredServer}, if any.
-     *
-     * <p>This is used to fire {@link com.velocitypowered.api.event.player.ServerPreConnectEvent}
-     * with the correct context and to track switching from one server to another.</p>
-     */
     private final @Nullable VelocityRegisteredServer previousServer;
 
-    ConnectionRequestBuilderImpl(final RegisteredServer toConnect,
+    ConnectionRequestBuilderImpl(final VelocityRegisteredServer toConnect,
                                  final @Nullable VelocityServerConnection previousConnection) {
       this.toConnect = Preconditions.checkNotNull(toConnect, "info");
       this.previousServer = previousConnection == null ? null : previousConnection.getServer();
     }
 
     @Override
-    public RegisteredServer getServer() {
+    public VelocityRegisteredServer getServer() {
       return toConnect;
     }
 
-    private Optional<ConnectionRequestBuilder.Status> checkServer(final RegisteredServer server) {
-      Preconditions.checkArgument(server instanceof VelocityRegisteredServer, "Not a valid Velocity server.");
+    private Optional<ConnectionRequestBuilder.Status> checkServer(final VelocityRegisteredServer server) {
       if (connectionInFlight != null || (connectedServer != null && !connectedServer.hasCompletedJoin())) {
         return Optional.of(ConnectionRequestBuilder.Status.CONNECTION_IN_PROGRESS);
       }
@@ -2316,26 +1886,31 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
           return completedFuture(plainResult(initialCheck.get(), toConnect));
         }
 
+        if (shouldBlockQueueServerSwitch(toConnect)) {
+          sendMessage(Component.translatable("velocity.queue.error.server-switch-blocked"));
+          return completedFuture(plainResult(ConnectionRequestBuilder.Status.CONNECTION_CANCELLED, toConnect));
+        }
+
         ServerPreConnectEvent event = new ServerPreConnectEvent(ConnectedPlayer.this, toConnect, previousServer);
         return server.getEventManager().fire(event).thenComposeAsync(newEvent -> {
-          Optional<RegisteredServer> newDest = newEvent.getResult().getServer();
-          if (newDest.isEmpty()) {
+          // cast required (api event class)
+          VelocityRegisteredServer realDestination = (VelocityRegisteredServer) newEvent.getResult().getServer().orElse(null);
+          if (realDestination == null) {
             return completedFuture(plainResult(ConnectionRequestBuilder.Status.CONNECTION_CANCELLED, toConnect));
           }
 
-          RegisteredServer realDestination = newDest.get();
           Optional<ConnectionRequestBuilder.Status> check = checkServer(realDestination);
           if (check.isPresent()) {
             return completedFuture(plainResult(check.get(), realDestination));
           }
 
           // Check if the player's version is compatible with the server's minimum version
-          if (checkVersionCompatibility(realDestination)) {
+          if (!checkVersionCompatibility(realDestination)) {
             return completedFuture(plainResult(ConnectionRequestBuilder.Status.CONNECTION_CANCELLED, realDestination));
           }
 
-          VelocityRegisteredServer vrs = (VelocityRegisteredServer) realDestination;
-          VelocityServerConnection con = new VelocityServerConnection(vrs, previousServer, ConnectedPlayer.this, server);
+          VelocityServerConnection con = new VelocityServerConnection(
+              realDestination, previousServer, ConnectedPlayer.this, server);
           connectionInFlight = con;
 
           return con.connect().whenCompleteAsync((result, exception) -> {
@@ -2382,20 +1957,16 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
                     .orElse(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
             handleConnectionException(toConnect, DisconnectPacket.create(reason, getProtocolVersion(), connection.getState()), status.isSafe());
 
-            TextComponent textComponent = (TextComponent) reason;
-            if (server.getQueueManager().isQueueEnabled()) {
+            if (server.isQueueEnabled()) {
               for (String r : server.getConfiguration().getQueue().getBannedReason()) {
-                if (containsString(textComponent, r)) {
-                  server.getQueueManager().removeFromAll(get());
+                if (ComponentUtils.containsString(reason, r)) {
+                  server.getQueueManager().removePlayerEntirely(ConnectedPlayer.this);
                 }
               }
             }
           }
           default -> {
-            // In this case, the default handler removes the user on server switch.
-            if (server.getConfiguration().getQueue().isRemovePlayerOnServerSwitch()) {
-              server.getQueueManager().removeFromAll(get());
-            }
+            // The only remaining value is successful (no need to do anything!)
           }
         }
       }, connection.eventLoop()).thenApply(Result::isSuccessful);
@@ -2407,21 +1978,113 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
   }
 
-  private static boolean containsString(final TextComponent component, final String searchString) {
-    if (component.content().contains(searchString)) {
-      return true;
+  /**
+   * Used for choosing fallback servers with consistent ordering during a "fallback session".
+   */
+  public final class ServerRetrySession {
+
+    private final Deque<String> serversToTry;
+
+    private ServerRetrySession() {
+      serversToTry = calculateRetryDeque();
     }
 
-    // Recursively check children components
-    for (Component child : component.children()) {
-      if (child instanceof TextComponent textChild) {
-        if (containsString(textChild, searchString)) {
-          return true;
+    private Deque<String> calculateRetryDeque() {
+      List<String> retryList = new ArrayList<>(FallbackServerResolver.resolveServersToTry(server, ConnectedPlayer.this));
+
+      DynamicFallbackFilter strategy = server.getConfiguration().getDynamicFallbackFilter();
+      switch (strategy) {
+        case FIRST_AVAILABLE -> {
+          // nop
         }
+        case MOST_POPULATED, LEAST_POPULATED -> {
+          Map<String, Integer> playerCounts = calculatePlayerCountMap(retryList);
+          Comparator<String> comparator = Comparator.comparingInt(playerCounts::get);
+          if (strategy == DynamicFallbackFilter.MOST_POPULATED) {
+            comparator = comparator.reversed();
+          }
+
+          retryList.sort(comparator);
+        }
+        default -> throw new IllegalStateException("Unknown dynamic fallback filter " + strategy + ".");
       }
+
+      return new ArrayDeque<>(retryList);
     }
 
-    return false;
+    /**
+     * When a {@code ServerRetrySession} is exhausted, calling {@code getNextServerToTry} will always result in an empty Optional.
+     * This method can be used to check this preemptively.
+     *
+     * @return Whether this retry session is exhausted.
+     */
+    public boolean exhausted() {
+      return serversToTry.isEmpty();
+    }
+
+    /**
+     * Excludes a server name from this retry session, meaning it will never be returned by {@code getNextServerToTry()} after this call.
+     *
+     * @param serverName The name of the server to exclude from this session.
+     */
+    public void exclude(String serverName) {
+      serversToTry.remove(serverName);
+    }
+
+    /**
+     * Excludes a server from this retry session, meaning it will never be returned by {@code getNextServerToTry()} after this call.
+     *
+     * @param server The server to exclude from this session.
+     */
+    public void exclude(VelocityRegisteredServer server) {
+      exclude(server.getServerInfo().getName());
+    }
+
+    /**
+     * Finds another server to attempt to log into if we were unexpectedly disconnected from the
+     * server.
+     *
+     * @return the next server to try
+     */
+    public Optional<VelocityRegisteredServer> getNextServerToTry() {
+      while (!serversToTry.isEmpty()) {
+        String nextServerName = serversToTry.pop();
+
+        if ((connectedServer != null && hasSameName(connectedServer.getServer(), nextServerName))
+            || (connectionInFlight != null && hasSameName(connectionInFlight.getServer(), nextServerName))) {
+          // skip server
+          continue;
+        }
+
+        Optional<VelocityRegisteredServer> maybeNextServer = server.getServer(nextServerName);
+        if (maybeNextServer.isEmpty()) {
+          // invalid server
+          continue;
+        }
+
+        return maybeNextServer;
+      }
+
+      // serversToTry is exhausted
+      return Optional.empty();
+    }
+
+    private Map<String, Integer> calculatePlayerCountMap(Collection<String> serverNames) {
+      Map<String, Integer> result = new HashMap<>(serverNames.size());
+      for (String serverName : serverNames) {
+        int playerCount = server.getServer(serverName)
+            .map(s -> (int) s.getTotalPlayerCount())
+            .orElse(0);
+
+        result.put(serverName, playerCount);
+      }
+
+      return result;
+    }
+
+    private boolean hasSameName(final VelocityRegisteredServer server, final String name) {
+      return server.getServerInfo().getName().equalsIgnoreCase(name);
+    }
   }
 
   /**
@@ -2431,36 +2094,38 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
    * @param server the server to check compatibility with
    * @return {@code true} if the player's version is compatible, {@code false} otherwise
    */
-  public boolean checkVersionCompatibility(final RegisteredServer server) {
+  public boolean checkVersionCompatibility(final VelocityRegisteredServer server) {
     String serverName = server.getServerInfo().getName();
-    String serverMinimumVersion = ConnectedPlayer.this.server.getConfiguration().getMinimumVersionForServer(serverName);
-    
+    String serverMinimumVersion = this.server.getConfiguration().getMinimumVersionForServer(serverName);
+    String serverMaximumVersion = this.server.getConfiguration().getMaximumVersionForServer(serverName)
+        .orElse(ProtocolVersion.MAXIMUM_VERSION.getMostRecentSupportedVersion());
+
     ProtocolVersion minimumProtocolVersion = ProtocolVersion.getVersionByName(serverMinimumVersion);
-    ProtocolVersion maximumProtocolVersion = ProtocolVersion.MAXIMUM_VERSION;
+    ProtocolVersion maximumProtocolVersion = ProtocolVersion.getVersionByName(serverMaximumVersion);
     ProtocolVersion clientProtocolVersion = getProtocolVersion();
 
-    // Compare the client's protocol version with the server's minimum required version
+    // Compare the client's protocol version with the server's minimum and maximum required versions
     if (clientProtocolVersion.lessThan(minimumProtocolVersion)
         || clientProtocolVersion.greaterThan(maximumProtocolVersion)) {
       // Send a message to the player instead of disconnecting them from the proxy
       sendMessage(Component.translatable("velocity.error.modern-forwarding-needs-new-client", NamedTextColor.RED)
           .arguments(
               Argument.string("min", serverMinimumVersion),
-              Argument.string("max", ProtocolVersion.MAXIMUM_VERSION.getMostRecentSupportedVersion())));
-      return true;
+              Argument.string("max", serverMaximumVersion)));
+      return false;
     }
 
     // Check if the server uses modern forwarding and the client is too old
-    PlayerInfoForwarding serverForwardingMode = ((VelocityRegisteredServer) server).getConfiguredPlayerInfoForwarding();
+    PlayerInfoForwarding serverForwardingMode = server.getPlayerInfoForwardingMode();
     if (serverForwardingMode == PlayerInfoForwarding.MODERN && clientProtocolVersion.lessThan(ProtocolVersion.MINECRAFT_1_13)) {
       // Disconnect the player with an appropriate message
       disconnect(Component.translatable("velocity.error.modern-forwarding-needs-new-client", NamedTextColor.RED)
           .arguments(
               Argument.string("min", "1.13"),
-              Argument.string("max", ProtocolVersion.MAXIMUM_VERSION.getMostRecentSupportedVersion())));
-      return true;
+              Argument.string("max", serverMaximumVersion)));
+      return false;
     }
 
-    return false;
+    return true;
   }
 }

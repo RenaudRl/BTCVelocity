@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,45 +27,18 @@ import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.Component;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
-/**
- * A handler for processing session-based commands, implementing {@link RateLimitedCommandHandler}.
- *
- * <p>The {@code SessionCommandHandler} is responsible for handling commands that are specific
- * to a player's session, using {@link SessionPlayerCommandPacket}. It provides logic to
- * process commands that are tied to the context of the current session.</p>
- */
 public class SessionCommandHandler extends RateLimitedCommandHandler<SessionPlayerCommandPacket> {
 
-  /**
-   * The player issuing the command.
-   */
   private final ConnectedPlayer player;
 
-  /**
-   * The proxy server instance, used for configuration and command routing.
-   */
   private final VelocityServer server;
 
-  /**
-   * Constructs a new {@link SessionCommandHandler} for the specified player and server.
-   *
-   * @param player the connected player associated with this handler
-   * @param server the Velocity server instance
-   */
   public SessionCommandHandler(final ConnectedPlayer player, final VelocityServer server) {
     super(player, server);
     this.player = player;
     this.server = server;
   }
 
-  /**
-   * Returns the class of command packets this handler is responsible for.
-   *
-   * <p>This links {@code SessionCommandHandler} to {@link SessionPlayerCommandPacket}
-   * in the command pipeline system.</p>
-   *
-   * @return the {@code SessionPlayerCommandPacket} class
-   */
   @Override
   public Class<SessionPlayerCommandPacket> packetClass() {
     return SessionPlayerCommandPacket.class;
@@ -80,7 +53,7 @@ public class SessionCommandHandler extends RateLimitedCommandHandler<SessionPlay
     if (server.getConfiguration().enforceChatSigning() && packet.isSigned()) {
       // Any signed message produced by the client *must* be passed through to the server to maintain a
       // consistent state for future messages.
-      logger.fatal("A plugin tried to deny a command with signable component(s). This is not supported. "
+      LOGGER.fatal("A plugin tried to deny a command with signable component(s). This is not supported. "
           + "Disconnecting player {}. Command packet: {}",
           player.getUsername(), packet);
       player.disconnect(Component.text(
@@ -111,7 +84,7 @@ public class SessionCommandHandler extends RateLimitedCommandHandler<SessionPlay
   @Nullable
   private MinecraftPacket modifyCommand(final SessionPlayerCommandPacket packet, final String newCommand) {
     if (server.getConfiguration().enforceChatSigning() && packet.isSigned()) {
-      logger.fatal("A plugin tried to change a command with signed component(s). "
+      LOGGER.fatal("A plugin tried to change a command with signed component(s). "
           + "This is not supported. "
           + "Disconnecting player {}. Command packet: {}",
           player.getUsername(), packet);
@@ -130,22 +103,6 @@ public class SessionCommandHandler extends RateLimitedCommandHandler<SessionPlay
         .toServer();
   }
 
-  /**
-   * Handles the execution of a session-based command sent by the player.
-   *
-   * <p>This method performs the following logic:</p>
-   * <ul>
-   *   <li>Fires a {@link CommandExecuteEvent} to allow plugin inspection or modification.</li>
-   *   <li>If denied and the command was signed, the player is disconnected due to
-   *       an illegal protocol state.</li>
-   *   <li>If unchanged or forwarded, the command is sent to the backend server.</li>
-   *   <li>If modified and allowed, it is rebuilt using the session-aware.</li>
-   *   <li>Unconsumed or no-op commands may yield a {@link ChatAcknowledgementPacket}
-   *       if {@code lastSeenMessages} are present and offset is non-zero.</li>
-   * </ul>
-   *
-   * @param packet the session command packet sent by the player
-   */
   @Override
   public void handlePlayerCommandInternal(final SessionPlayerCommandPacket packet) {
     queueCommandResult(this.server, this.player, (event, newLastSeenMessages) -> {

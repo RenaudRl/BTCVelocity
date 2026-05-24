@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,6 +45,8 @@ import java.util.Map;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessageFactory;
+import org.checkerframework.checker.nullness.qual.EnsuresNonNull;
+import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
@@ -52,59 +54,30 @@ import org.checkerframework.checker.nullness.qual.Nullable;
  */
 public final class ConnectionManager {
 
-  /**
-   * The default write buffer watermark used for all Minecraft server channels.
-   */
   private static final WriteBufferWaterMark SERVER_WRITE_MARK = new WriteBufferWaterMark(1 << 20, 1 << 21);
 
-  /**
-   * The logger instance for this class.
-   */
   private static final Logger LOGGER = LogManager.getLogger(ConnectionManager.class, new ParameterizedMessageFactory());
 
-  /**
-   * Tracks all active bound endpoints, keyed by their socket address.
-   */
   private final Multimap<InetSocketAddress, Endpoint> endpoints = HashMultimap.create();
 
-  /**
-   * The {@link TransportType} used for Netty channels (e.g., Epoll, NIO, etc.).
-   */
   private final TransportType transportType;
 
-  /**
-   * The Netty boss group used to accept new connections.
-   */
   private final EventLoopGroup bossGroup;
 
-  /**
-   * The Netty worker group used to handle established connections.
-   */
   private final EventLoopGroup workerGroup;
 
-  /**
-   * A reference to the owning {@link VelocityServer} instance.
-   */
   private final VelocityServer server;
 
-  /**
-   * Holds the active {@link ServerChannelInitializer}, used for incoming Minecraft connections.
-   *
-   * <p>This field is public for compatibility with protocol injection systems like ViaVersion.</p>
-   */
   public final ServerChannelInitializerHolder serverChannelInitializer;
 
-  /**
-   * Holds the active {@link BackendChannelInitializer}, used for backend server connections.
-   *
-   * <p>This field is public for compatibility with protocol injection systems like ViaVersion.</p>
-   */
   public final BackendChannelInitializerHolder backendChannelInitializer;
 
-  /**
-   * The name resolver used to resolve DNS names without blocking the Netty threads.
-   */
   private final SeparatePoolInetNameResolver resolver;
+
+  /**
+   * Shared {@link HttpClient} for pooled http connections.
+   */
+  private volatile @MonotonicNonNull HttpClient sharedHttpClient;
 
   /**
    * Initializes the {@code ConnectionManager}.
@@ -121,10 +94,6 @@ public final class ConnectionManager {
     this.resolver = new SeparatePoolInetNameResolver(GlobalEventExecutor.INSTANCE);
   }
 
-  /**
-   * Logs the current Netty channel configuration, including transport type,
-   * compression backend, and cipher implementation in use.
-   */
   public void logChannelInformation() {
     LOGGER.info("Connections will use {} channels, {} compression, {} ciphers", this.transportType,
         Natives.compress.getLoadedVariant(), Natives.cipher.getLoadedVariant());
@@ -307,42 +276,32 @@ public final class ConnectionManager {
     this.resolver.shutdown();
   }
 
-  /**
-   * Returns the Netty boss event loop group used for accepting incoming connections.
-   *
-   * @return the boss {@link EventLoopGroup}
-   */
   public EventLoopGroup getBossGroup() {
     return bossGroup;
   }
 
-  /**
-   * Returns the {@link ServerChannelInitializerHolder} currently used to initialize
-   * inbound Minecraft server connections.
-   *
-   * @return the server channel initializer holder
-   */
   public ServerChannelInitializerHolder getServerChannelInitializer() {
     return this.serverChannelInitializer;
   }
 
-  /**
-   * Returns an HTTP client instance.
-   *
-   * @return an HTTP client instance.
-   */
   public HttpClient createHttpClient() {
     return HttpClient.newBuilder()
         .executor(this.workerGroup)
         .build();
   }
 
-  /**
-   * Returns the {@link BackendChannelInitializerHolder} currently used to initialize
-   * outbound backend server connections.
-   *
-   * @return the backend channel initializer holder
-   */
+  @EnsuresNonNull("sharedHttpClient")
+  public HttpClient getSharedHttpClient() {
+    if (sharedHttpClient == null) {
+      synchronized (this) {
+        if (sharedHttpClient == null) { // check again in lock
+          sharedHttpClient = createHttpClient();
+        }
+      }
+    }
+    return sharedHttpClient;
+  }
+
   public BackendChannelInitializerHolder getBackendChannelInitializer() {
     return this.backendChannelInitializer;
   }

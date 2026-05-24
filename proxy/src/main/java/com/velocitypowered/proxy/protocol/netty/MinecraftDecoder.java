@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,43 +34,16 @@ import org.jetbrains.annotations.NotNull;
  */
 public class MinecraftDecoder extends ChannelInboundHandlerAdapter {
 
-  /**
-   * Enables debug logging for packet decode failures.
-   */
   public static final boolean DEBUG = Boolean.getBoolean("velocity.packet-decode-logging");
 
-  /**
-   * Shared quiet exception thrown when a packet decode fails and debug is disabled.
-   */
   private static final QuietRuntimeException DECODE_FAILED =
       new QuietRuntimeException("A packet did not decode successfully (invalid data). For more "
           + "information, launch Velocity with -Dvelocity.packet-decode-logging=true to see more.");
 
-  /**
-   * The direction of the packet flow this decoder is handling.
-   *
-   * <p>This defines whether packets are being decoded in the {@code SERVERBOUND}
-   * or {@code CLIENTBOUND} direction, and is used to resolve the correct
-   * {@link StateRegistry.PacketRegistry} for decoding.</p>
-   */
   private final ProtocolUtils.Direction direction;
 
-  /**
-   * The current connection state this decoder is operating under.
-   *
-   * <p>This state affects which packet types are expected and how they
-   * are decoded. States typically include {@code HANDSHAKE}, {@code STATUS},
-   * {@code LOGIN}, and {@code PLAY}.</p>
-   */
   private StateRegistry state;
 
-  /**
-   * The active protocol registry for the current state and direction.
-   *
-   * <p>This registry provides packet ID mappings and decoder constructors
-   * for the selected {@link ProtocolVersion} in the current {@link #state}
-   * and {@link #direction}.</p>
-   */
   private StateRegistry.PacketRegistry.ProtocolRegistry registry;
 
   /**
@@ -84,21 +57,14 @@ public class MinecraftDecoder extends ChannelInboundHandlerAdapter {
     this.state = StateRegistry.HANDSHAKE;
   }
 
-  /**
-   * Handles inbound messages from the Netty pipeline.
-   *
-   * <p>If the message is a {@link ByteBuf}, it is treated as a raw Minecraft packet
-   * and passed to {@link #tryDecode(ChannelHandlerContext, ByteBuf)} for decoding.
-   * Otherwise, the message is forwarded through the pipeline unchanged.</p>
-   *
-   * @param ctx the Netty channel context
-   * @param msg the inbound message to process
-   * @throws Exception if an error occurs during decoding
-   */
   @Override
   public void channelRead(final @NotNull ChannelHandlerContext ctx, final @NotNull Object msg) throws Exception {
     if (msg instanceof ByteBuf buf) {
-      tryDecode(ctx, buf);
+      try {
+        tryDecode(ctx, buf);
+      } finally {
+        buf.release();
+      }
     } else {
       ctx.fireChannelRead(msg);
     }
@@ -106,7 +72,6 @@ public class MinecraftDecoder extends ChannelInboundHandlerAdapter {
 
   private void tryDecode(final ChannelHandlerContext ctx, final ByteBuf buf) throws Exception {
     if (!ctx.channel().isActive() || !buf.isReadable()) {
-      buf.release();
       return;
     }
 
@@ -115,25 +80,25 @@ public class MinecraftDecoder extends ChannelInboundHandlerAdapter {
     MinecraftPacket packet = this.registry.createPacket(packetId);
     if (packet == null) {
       buf.readerIndex(originalReaderIndex);
-      ctx.fireChannelRead(buf);
-    } else {
-      try {
-        doLengthSanityChecks(buf, packet);
-
-        try {
-          packet.decode(buf, direction, registry.version);
-        } catch (Exception e) {
-          throw handleDecodeFailure(e, packet, packetId);
-        }
-
-        if (buf.isReadable()) {
-          throw handleOverflow(packet, buf.readerIndex(), buf.writerIndex());
-        }
-
-        ctx.fireChannelRead(packet);
-      } finally {
-        buf.release();
+      if (this.direction == ProtocolUtils.Direction.SERVERBOUND && this.state != StateRegistry.PLAY) {
+        throw this.handleInvalidPacketId(packetId);
       }
+
+      ctx.fireChannelRead(buf.retain());
+    } else {
+      doLengthSanityChecks(buf, packet);
+
+      try {
+        packet.decode(buf, direction, registry.version);
+      } catch (Exception e) {
+        throw handleDecodeFailure(e, packet, packetId);
+      }
+
+      if (buf.isReadable()) {
+        throw handleOverflow(packet, buf.readerIndex(), buf.writerIndex());
+      }
+
+      ctx.fireChannelRead(packet);
     }
   }
 
@@ -176,35 +141,28 @@ public class MinecraftDecoder extends ChannelInboundHandlerAdapter {
     }
   }
 
+  private Exception handleInvalidPacketId(int packetId) {
+    if (DEBUG) {
+      return new CorruptedFrameException("Invalid packet " + getExtraConnectionDetail(packetId));
+    } else {
+      return DECODE_FAILED;
+    }
+  }
+
   private String getExtraConnectionDetail(final int packetId) {
     return "Direction " + direction + " Protocol " + registry.version + " State " + state
         + " ID 0x" + Integer.toHexString(packetId);
   }
 
-  /**
-   * Sets the protocol version used to look up packet codecs.
-   *
-   * @param protocolVersion the new protocol version
-   */
   public void setProtocolVersion(final ProtocolVersion protocolVersion) {
     this.registry = state.getProtocolRegistry(direction, protocolVersion);
   }
 
-  /**
-   * Sets the current protocol state and updates the packet registry.
-   *
-   * @param state the new connection state
-   */
   public void setState(final StateRegistry state) {
     this.state = state;
     this.setProtocolVersion(registry.version);
   }
 
-  /**
-   * Gets the packet direction handled by this decoder.
-   *
-   * @return the decode direction
-   */
   public ProtocolUtils.Direction getDirection() {
     return direction;
   }

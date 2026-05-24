@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,9 +31,6 @@ import java.nio.charset.StandardCharsets;
 @Sharable
 public final class LegacyPingEncoder extends MessageToByteEncoder<LegacyDisconnect> {
 
-  /**
-   * The singleton instance of this encoder.
-   */
   public static final LegacyPingEncoder INSTANCE = new LegacyPingEncoder();
 
   private LegacyPingEncoder() {

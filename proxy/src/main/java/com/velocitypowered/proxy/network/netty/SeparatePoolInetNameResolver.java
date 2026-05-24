@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,24 +45,12 @@ import java.util.concurrent.TimeUnit;
  */
 public final class SeparatePoolInetNameResolver extends InetNameResolver {
 
-  /**
-   * Executor used to run DNS resolution off the Netty thread.
-   */
   private final ExecutorService resolveExecutor;
 
-  /**
-   * The Netty delegate resolver for actual DNS resolution.
-   */
   private final InetNameResolver delegate;
 
-  /**
-   * Cache storing previously resolved hostnames.
-   */
   private final Cache<String, List<InetAddress>> cache;
 
-  /**
-   * Lazily initialized {@link AddressResolverGroup} wrapper.
-   */
   private AddressResolverGroup<InetSocketAddress> resolverGroup;
 
   /**
@@ -128,11 +116,6 @@ public final class SeparatePoolInetNameResolver extends InetNameResolver {
     }
   }
 
-  /**
-   * Shuts down the internal resolution executor.
-   *
-   * <p>This method should be called during server shutdown to prevent thread leaks.</p>
-   */
   public void shutdown() {
     this.resolveExecutor.shutdown();
   }

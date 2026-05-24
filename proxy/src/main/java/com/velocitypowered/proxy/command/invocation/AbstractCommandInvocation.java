@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,14 +28,8 @@ import com.velocitypowered.api.command.CommandSource;
  */
 abstract class AbstractCommandInvocation<T> implements CommandInvocation<T> {
 
-  /**
-   * The source that invoked the command.
-   */
   private final CommandSource source;
 
-  /**
-   * The parsed arguments for the command.
-   */
   private final T arguments;
 
   protected AbstractCommandInvocation(final CommandSource source, final T arguments) {

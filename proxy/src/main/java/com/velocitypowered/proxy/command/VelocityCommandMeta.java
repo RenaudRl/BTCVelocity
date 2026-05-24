@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,19 +40,10 @@ public final class VelocityCommandMeta implements CommandMeta {
 
   static final class Builder implements CommandMeta.Builder {
 
-    /**
-     * Builder for the command aliases, in lowercase.
-     */
     private final ImmutableSet.Builder<String> aliases;
 
-    /**
-     * Builder for the hint nodes to attach to this command.
-     */
     private final ImmutableList.Builder<CommandNode<CommandSource>> hints;
 
-    /**
-     * The plugin associated with the command, or {@code null} if not set.
-     */
     private @MonotonicNonNull Object plugin;
 
     Builder(final String alias) {
@@ -137,19 +128,10 @@ public final class VelocityCommandMeta implements CommandMeta {
     return meta.getHints().stream().map(VelocityCommandMeta::copyForHinting);
   }
 
-  /**
-   * The set of all command aliases associated with this command, stored in lowercase.
-   */
   private final Set<String> aliases;
 
-  /**
-   * A list of Brigadier nodes used for providing suggestions (hints) to clients.
-   */
   private final List<CommandNode<CommandSource>> hints;
 
-  /**
-   * The plugin that registered the command, or {@code null} if unknown.
-   */
   private final Object plugin;
 
   private VelocityCommandMeta(final Set<String> aliases,

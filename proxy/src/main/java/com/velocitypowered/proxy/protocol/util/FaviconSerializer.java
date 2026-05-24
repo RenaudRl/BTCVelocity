@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,9 +31,6 @@ import java.lang.reflect.Type;
  */
 public final class FaviconSerializer implements JsonSerializer<Favicon>, JsonDeserializer<Favicon> {
 
-  /**
-   * A shared singleton instance of {@code FaviconSerializer}.
-   */
   public static final FaviconSerializer INSTANCE = new FaviconSerializer();
 
   private FaviconSerializer() {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * The Velocity API is licensed under the terms of the MIT License. For more details,
  * reference the LICENSE file in the api top-level directory.
@@ -26,12 +26,20 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 public final class SerializedPluginDescription {
 
   /**
-   * The pattern used to validate plugin IDs.
+   * The string pattern used to validate plugin IDs.
    *
    * <p>Plugin IDs must start with a lowercase letter and may contain lowercase letters,
    * digits, hyphens, and underscores. The total length must not exceed 64 characters.</p>
    */
-  public static final Pattern ID_PATTERN = Pattern.compile("[a-z][a-z0-9-_]{0,63}");
+  public static final String ID_PATTERN_STRING = "[a-z][a-z0-9-_]{0,63}";
+
+  /**
+   * The compiled pattern used to validate plugin IDs.
+   *
+   * <p>Plugin IDs must start with a lowercase letter and may contain lowercase letters,
+   * digits, hyphens, and underscores. The total length must not exceed 64 characters.</p>
+   */
+  public static final Pattern ID_PATTERN = Pattern.compile(ID_PATTERN_STRING);
 
   // @Nullable is used here to make GSON skip these in the serialized file
 

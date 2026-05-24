@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,9 +37,6 @@ import io.netty.buffer.ByteBuf;
  */
 final class StringArgumentPropertySerializer implements ArgumentPropertySerializer<StringArgumentType> {
 
-  /**
-   * A shared singleton instance of {@code StringArgumentPropertySerializer}.
-   */
   public static final ArgumentPropertySerializer<StringArgumentType> STRING = new StringArgumentPropertySerializer();
 
   private StringArgumentPropertySerializer() {

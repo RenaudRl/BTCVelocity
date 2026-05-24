@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,13 +17,14 @@
 
 package com.velocitypowered.proxy;
 
+import com.velocitypowered.api.proxy.server.PlayerInfoForwarding;
 import com.velocitypowered.api.proxy.server.ServerInfo;
-import com.velocitypowered.api.proxy.server.ServerInfoForwardingMode;
 import com.velocitypowered.proxy.util.AddressUtil;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import joptsimple.OptionParser;
 import joptsimple.OptionSet;
 import joptsimple.OptionSpec;
@@ -38,34 +39,16 @@ import org.checkerframework.checker.nullness.qual.Nullable;
  */
 public final class ProxyOptions {
 
-  /**
-   * Logger for reporting command-line parsing or help display issues.
-   */
-  private static final Logger logger = LogManager.getLogger(ProxyOptions.class);
+  private static final Logger LOGGER = LogManager.getLogger(ProxyOptions.class);
 
-  /**
-   * Whether the user requested help using {@code -h} or {@code --help}.
-   */
   private final boolean help;
 
-  /**
-   * The optional port override specified with {@code -p} or {@code --port}.
-   */
   private final @Nullable Integer port;
 
-  /**
-   * Whether the HAProxy protocol override is enabled via {@code --haproxy}.
-   */
   private final @Nullable Boolean haproxy;
 
-  /**
-   * Whether to ignore all servers listed in the Velocity configuration file.
-   */
   private final boolean ignoreConfigServers;
 
-  /**
-   * List of servers provided via the {@code --add-server} command-line flag.
-   */
   private final List<ServerInfo> servers;
 
   /**
@@ -110,7 +93,7 @@ public final class ProxyOptions {
       try {
         parser.printHelpOn(System.out);
       } catch (final IOException e) {
-        logger.error("Could not print help", e);
+        LOGGER.error("Could not print help", e);
       }
     }
   }
@@ -119,38 +102,18 @@ public final class ProxyOptions {
     return this.help;
   }
 
-  /**
-   * Gets the optional port override provided by the {@code --port} flag.
-   *
-   * @return the custom bind port, or {@code null} if not set
-   */
   public @Nullable Integer getPort() {
     return this.port;
   }
 
-  /**
-   * Returns whether the HAProxy protocol is enabled via {@code --haproxy}.
-   *
-   * @return {@code true} if HAProxy is enabled, {@code false} if disabled, or {@code null} if unset
-   */
   public @Nullable Boolean isHaproxy() {
     return this.haproxy;
   }
 
-  /**
-   * Returns whether to skip server definitions from the configuration file.
-   *
-   * @return {@code true} if configuration servers should be ignored
-   */
   public boolean isIgnoreConfigServers() {
     return this.ignoreConfigServers;
   }
 
-  /**
-   * Returns the list of {@link ServerInfo} instances registered via {@code --add-server}.
-   *
-   * @return a list of server entries
-   */
   public List<ServerInfo> getServers() {
     return this.servers;
   }
@@ -174,7 +137,7 @@ public final class ProxyOptions {
       }
 
       InetSocketAddress address;
-      ServerInfoForwardingMode mode = null;
+      PlayerInfoForwarding mode = null;
       try {
         if (split.length >= 3) {
           address = AddressUtil.parseAddress(split[1] + ":" + split[2]);
@@ -187,7 +150,7 @@ public final class ProxyOptions {
 
       if (split.length == 4) {
         try {
-          mode = ServerInfoForwardingMode.valueOf(split[3].toUpperCase());
+          mode = PlayerInfoForwarding.valueOf(split[3].toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
           throw new ValueConversionException("Invalid forwarding mode for server flag with name: " + split[0]);
         }

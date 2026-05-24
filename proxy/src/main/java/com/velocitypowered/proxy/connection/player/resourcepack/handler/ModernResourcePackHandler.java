@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,20 +41,11 @@ import org.jetbrains.annotations.Nullable;
  */
 public final class ModernResourcePackHandler extends ResourcePackHandler {
 
-  /**
-   * Queue of resource packs to be sent to the player, grouped by unique resource pack ID.
-   */
   private final ListMultimap<UUID, ResourcePackInfo> outstandingResourcePacks =
       Multimaps.newListMultimap(new ConcurrentHashMap<>(), LinkedList::new);
 
-  /**
-   * Map of resource packs that have been accepted but not yet successfully applied.
-   */
   private final Map<UUID, ResourcePackInfo> pendingResourcePacks = new ConcurrentHashMap<>();
 
-  /**
-   * Map of resource packs that have been successfully applied by the client.
-   */
   private final Map<UUID, ResourcePackInfo> appliedResourcePacks = new ConcurrentHashMap<>();
 
   ModernResourcePackHandler(final ConnectedPlayer player, final VelocityServer server) {

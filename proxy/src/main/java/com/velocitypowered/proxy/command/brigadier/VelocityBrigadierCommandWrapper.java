@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,14 +28,8 @@ import org.checkerframework.checker.nullness.qual.Nullable;
  */
 public final class VelocityBrigadierCommandWrapper implements Command<CommandSource> {
 
-  /**
-   * The wrapped Brigadier command implementation.
-   */
   private final Command<CommandSource> delegate;
 
-  /**
-   * The object that registered this command.
-   */
   private final Object registrant;
 
   private VelocityBrigadierCommandWrapper(final Command<CommandSource> delegate, final Object registrant) {
@@ -70,11 +64,6 @@ public final class VelocityBrigadierCommandWrapper implements Command<CommandSou
     return delegate.run(context);
   }
 
-  /**
-   * Returns the registrant object associated with this command.
-   *
-   * @return the command's registrant
-   */
   public Object registrant() {
     return registrant;
   }

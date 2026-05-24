@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,19 +31,10 @@ import org.slf4j.LoggerFactory;
 
 class VelocityPluginModule implements Module {
 
-  /**
-   * The parsed plugin description containing metadata and the main class reference.
-   */
   private final JavaVelocityPluginDescription description;
 
-  /**
-   * The plugin container associated with the plugin instance.
-   */
   private final PluginContainer pluginContainer;
 
-  /**
-   * The base directory where all plugin data directories reside.
-   */
   private final Path basePluginPath;
 
   VelocityPluginModule(final JavaVelocityPluginDescription description, final PluginContainer pluginContainer,

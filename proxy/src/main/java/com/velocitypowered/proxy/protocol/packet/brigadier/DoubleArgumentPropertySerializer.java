@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,21 +25,8 @@ import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.velocitypowered.api.network.ProtocolVersion;
 import io.netty.buffer.ByteBuf;
 
-/**
- * The {@code DoubleArgumentPropertySerializer} handles serialization and deserialization
- * of {@link DoubleArgumentType}, preserving optional minimum and maximum constraints.
- *
- * <p>This serializer is used when command arguments require bounded double values,
- * such as for coordinates, motion, or custom numeric inputs.</p>
- *
- * <p>The encoding uses a flags byte to denote the presence of minimum and/or
- * maximum values, followed by the corresponding doubles if present.</p>
- */
 final class DoubleArgumentPropertySerializer implements ArgumentPropertySerializer<DoubleArgumentType> {
 
-  /**
-   * A shared singleton instance of the {@code DoubleArgumentPropertySerializer}.
-   */
   static final DoubleArgumentPropertySerializer DOUBLE = new DoubleArgumentPropertySerializer();
 
   private DoubleArgumentPropertySerializer() {

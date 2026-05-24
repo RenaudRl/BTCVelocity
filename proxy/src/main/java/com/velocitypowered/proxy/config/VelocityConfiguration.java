@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2025 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,9 +24,10 @@ import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.annotations.Expose;
+import com.velocityctd.proxy.config.migration.CtdConfigMigrations;
 import com.velocitypowered.api.proxy.config.BackendServerConfig;
 import com.velocitypowered.api.proxy.config.ProxyConfig;
-import com.velocitypowered.api.proxy.server.ServerInfoForwardingMode;
+import com.velocitypowered.api.proxy.server.PlayerInfoForwarding;
 import com.velocitypowered.api.util.Favicon;
 import com.velocitypowered.api.util.ServerLink;
 import com.velocitypowered.proxy.config.migration.ConfigurationMigration;
@@ -68,108 +69,63 @@ import org.jetbrains.annotations.NotNull;
 @SuppressWarnings("unchecked")
 public final class VelocityConfiguration implements ProxyConfig {
 
-  /**
-   * The logger used to print configuration-related warnings and errors.
-   */
-  private static final Logger logger = LogManager.getLogger(VelocityConfiguration.class);
+  private static final Logger LOGGER = LogManager.getLogger(VelocityConfiguration.class);
 
-  /**
-   * The IP address and port the proxy binds to.
-   * Format: {@code ip:port}, e.g., {@code 0.0.0.0:25565}.
-   */
+  private static final String UNBOUNDED = "UNBOUNDED";
+
   @Expose
   private String bind = "0.0.0.0:25565";
 
-  /**
-   * The Message of the Day (MOTD) shown to clients in the server list.
-   */
   @Expose
-  private String motd = "<aqua>A Velocity Server";
+  private String motdLine1 = "<aqua>BTC Proxy Core";
 
-  /**
-   * Parsed MiniMessage component version of the MOTD, lazily initialized.
-   */
+  @Expose
+  private String motdLine2 = "<yellow>Modern Minecraft 26.1.2 Only";
+
+  @Expose
+  private String motdLine1Alignment = "center";
+
+  @Expose
+  private String motdLine2Alignment = "center";
+
   private @MonotonicNonNull Component motdAsComponent;
 
-  /**
-   * The hover text shown when a user hovers over the MOTD in the server list.
-   */
   @Expose
   private List<String> motdHover = List.of("");
 
-  /**
-   * Parsed hover components from {@link #motdHover}, lazily initialized.
-   */
   private List<@MonotonicNonNull Component> motdHoverComponents;
 
-  /**
-   * The maximum number of players shown to the client in the server list ping.
-   */
   @Expose
   private int showMaxPlayers = 500;
 
-  /**
-   * Whether the proxy should attempt to verify Mojang authentication.
-   */
   @Expose
   private boolean onlineMode = true;
 
-  /**
-   * Whether to prevent clients from connecting directly to backend servers.
-   */
   @Expose
   private boolean preventClientProxyConnections = false;
 
-  /**
-   * Global player info forwarding strategy used by the proxy.
-   */
   @Expose
   private PlayerInfoForwarding playerInfoForwardingMode = PlayerInfoForwarding.NONE;
 
-  /**
-   * Shared secret used to validate forwarded player info (Modern/BungeeGuard).
-   */
-  private final Secrets forwardingSecret;
+  private byte[] forwardingSecret = generateRandomString(12).getBytes(StandardCharsets.UTF_8);
 
-  /**
-   * Whether to announce Forge support to clients in the handshake.
-   */
   @Expose
   private boolean announceForge = false;
 
-  /**
-   * If {@code true}, kicking an authenticated player causes other connections using the same UUID to be dropped.
-   */
   @Expose
-  private boolean onlineModeKickExistingPlayers = false;
+  private boolean kickExistingPlayers = false;
 
-  /**
-   * If {@code true}, when kick-existing-players is enabled, also check for duplicate connections
-   * from the same IP address in addition to username and UUID checks.
-   */
   @Expose
   private boolean kickExistingPlayersCheckIp = false;
 
-  /**
-   * Defines how ping data (e.g. MOTD, players, mods) is forwarded to clients.
-   */
   @Expose
   private PingPassthroughMode pingPassthrough = PingPassthroughMode.DISABLED;
 
-  /**
-   * Whether to include actual player samples in ping response (e.g. tab previews).
-   */
   @Expose
   private boolean samplePlayersInPing = false;
 
-  /**
-   * The configured backend servers and their forwarding behavior.
-   */
   private final Servers servers;
 
-  /**
-   * Virtual host mappings that reroute players to specific server lists.
-   */
   private final ForcedHosts forcedHosts;
 
   /**
@@ -191,21 +147,12 @@ public final class VelocityConfiguration implements ProxyConfig {
   @Expose
   private final ProxyCommandAliases proxyCommandAliases;
 
-  /**
-   * Advanced configuration options for performance and features.
-   */
   @Expose
   private final Advanced advanced;
 
-  /**
-   * Query protocol support configuration.
-   */
   @Expose
   private final Query query;
 
-  /**
-   * Metrics configuration for enabling or disabling bStats.
-   */
   private final Metrics metrics;
 
   /**
@@ -215,32 +162,22 @@ public final class VelocityConfiguration implements ProxyConfig {
   private final Redis redis;
 
   /**
-   * Queue configuration used for handling players attempting to connect to full servers.
+   * Queue configuration used for handling players attempting to connect to servers.
    */
   @Expose
   private final Queue queue;
 
-  /**
-   * Whether to log each player's IP address during connection.
-   */
   @Expose
   private boolean enablePlayerAddressLogging = true;
 
-  /**
-   * Optional favicon shown in ping response. May be null.
-   */
   private @Nullable Favicon favicon;
 
-  /**
-   * Whether key authentication is enforced when online-mode is enabled.
-   * Was added in Minecraft 1.19.
-   */
   @Expose
   private boolean forceKeyAuthentication = true;
 
-  /**
-   * Whether to log all player connection attempts.
-   */
+  @Expose
+  private PacketLimiterConfig packetLimiterConfig = PacketLimiterConfig.DEFAULT;
+
   @Expose
   private boolean logPlayerConnections = true;
 
@@ -269,6 +206,12 @@ public final class VelocityConfiguration implements ProxyConfig {
   private boolean enforceChatSigning = true;
 
   /**
+   * Whether the proxy should tell client that proxy prevents chat reports, useful in NoChatReports mod. (1.19+).
+   */
+  @Expose
+  private boolean preventsChatReports = false;
+
+  /**
    * Whether to translate MiniMessage headers and footers into legacy color codes.
    */
   @Expose
@@ -287,14 +230,15 @@ public final class VelocityConfiguration implements ProxyConfig {
   private String minimumVersion = "1.7.2";
 
   /**
-   * Slash-command shortcuts for routing players to specific servers.
+   * The highest allowed Minecraft client version that can connect to the proxy.
+   * Set to "UNBOUNDED" to allow any version up to the protocol maximum.
    */
+  @Expose
+  private String maximumVersion = UNBOUNDED;
+
   @Expose
   private Map<String, List<String>> slashServers = new HashMap<>();
 
-  /**
-   * A list of configured links available to players via server menus.
-   */
   @Expose
   private Map<String, List<ServerLink>> serverLinks = new HashMap<>();
 
@@ -308,7 +252,7 @@ public final class VelocityConfiguration implements ProxyConfig {
    * Filter strategy used to select the best proxy from {@link #proxyAddresses}.
    */
   @Expose
-  private String dynamicProxyFilter;
+  private DynamicProxyFilterMode dynamicProxyFilter;
 
   /**
    * Server-specific player cap overrides (used for dynamic balancing).
@@ -316,43 +260,32 @@ public final class VelocityConfiguration implements ProxyConfig {
   @Expose
   private Map<String, Integer> playerCaps;
 
-  private VelocityConfiguration(final Servers servers, final ForcedHosts forcedHosts,
-                                final CommandAliases commandAliases,
-                                final ProxyCommandAliases proxyCommandAliases, final Commands commands,
-                                final Advanced advanced, final Query query, final Metrics metrics,
-                                final Redis redis, final Queue queue) {
-    this.servers = servers;
-    this.forcedHosts = forcedHosts;
-    this.commandAliases = commandAliases;
-    this.proxyCommandAliases = proxyCommandAliases;
-    this.commands = commands;
-    this.advanced = advanced;
-    this.query = query;
-    this.metrics = metrics;
-    this.redis = redis;
-    this.queue = queue;
-    this.forwardingSecret = new Secrets("");
-  }
-
-  private VelocityConfiguration(final String bind, final String motd, final List<String> motdHover,
+  private VelocityConfiguration(final String bind, final String motdLine1, final String motdLine2,
+                                final String motdLine1Alignment, final String motdLine2Alignment,
+                                final List<String> motdHover,
                                 final int showMaxPlayers, final boolean onlineMode,
                                 final boolean preventClientProxyConnections, final boolean announceForge,
-                                final PlayerInfoForwarding playerInfoForwardingMode, final Secrets forwardingSecret,
-                                final boolean onlineModeKickExistingPlayers, final boolean kickExistingPlayersCheckIp,
+                                final PlayerInfoForwarding playerInfoForwardingMode, final byte[] forwardingSecret,
+                                final boolean kickExistingPlayers, final boolean kickExistingPlayersCheckIp,
                                 final PingPassthroughMode pingPassthrough,
                                 final boolean samplePlayersInPing, final boolean enablePlayerAddressLogging,
                                 final Servers servers, final ForcedHosts forcedHosts, final CommandAliases commandAliases,
                                 final ProxyCommandAliases proxyCommandAliases, final Commands commands, final Advanced advanced,
                                 final Query query, final Metrics metrics, final boolean forceKeyAuthentication,
+                                final PacketLimiterConfig packetLimiterConfig,
                                 final boolean logPlayerConnections, final boolean logPlayerDisconnections,
                                 final boolean logOfflineConnections, final boolean disableForge,
-                                final boolean enforceChatSigning, final boolean translateHeaderFooter,
+                                final boolean enforceChatSigning, final boolean preventsChatReports, final boolean translateHeaderFooter,
                                 final boolean logMinimumVersion, final String minimumVersion,
+                                final String maximumVersion,
                                 final Redis redis, final Queue queue, final Map<String, List<String>> slashServers,
                                 final Map<String, List<ServerLink>> serverLinks, final List<ProxyAddress> proxyAddresses,
-                                final String dynamicProxyFilter, final Map<String, Integer> playerCaps) {
+                                final DynamicProxyFilterMode dynamicProxyFilter, final Map<String, Integer> playerCaps) {
     this.bind = bind;
-    this.motd = motd;
+    this.motdLine1 = motdLine1;
+    this.motdLine2 = motdLine2;
+    this.motdLine1Alignment = motdLine1Alignment;
+    this.motdLine2Alignment = motdLine2Alignment;
     this.motdHover = motdHover;
     this.showMaxPlayers = showMaxPlayers;
     this.onlineMode = onlineMode;
@@ -360,7 +293,7 @@ public final class VelocityConfiguration implements ProxyConfig {
     this.announceForge = announceForge;
     this.playerInfoForwardingMode = playerInfoForwardingMode;
     this.forwardingSecret = forwardingSecret;
-    this.onlineModeKickExistingPlayers = onlineModeKickExistingPlayers;
+    this.kickExistingPlayers = kickExistingPlayers;
     this.kickExistingPlayersCheckIp = kickExistingPlayersCheckIp;
     this.pingPassthrough = pingPassthrough;
     this.samplePlayersInPing = samplePlayersInPing;
@@ -374,14 +307,17 @@ public final class VelocityConfiguration implements ProxyConfig {
     this.query = query;
     this.metrics = metrics;
     this.forceKeyAuthentication = forceKeyAuthentication;
+    this.packetLimiterConfig = packetLimiterConfig;
     this.logPlayerConnections = logPlayerConnections;
     this.logPlayerDisconnections = logPlayerDisconnections;
     this.logOfflineConnections = logOfflineConnections;
     this.disableForge = disableForge;
     this.enforceChatSigning = enforceChatSigning;
+    this.preventsChatReports = preventsChatReports;
     this.translateHeaderFooter = translateHeaderFooter;
     this.logMinimumVersion = logMinimumVersion;
     this.minimumVersion = minimumVersion;
+    this.maximumVersion = maximumVersion;
     this.redis = redis;
     this.queue = queue;
     this.slashServers = slashServers;
@@ -401,28 +337,28 @@ public final class VelocityConfiguration implements ProxyConfig {
     boolean valid = true;
 
     if (bind.isEmpty()) {
-      logger.error("'bind' option is empty.");
+      LOGGER.error("'bind' option is empty.");
       valid = false;
     } else {
       try {
         AddressUtil.parseAddress(bind);
       } catch (IllegalArgumentException e) {
-        logger.error("'bind' option does not specify a valid IP address.", e);
+        LOGGER.error("'bind' option does not specify a valid IP address.", e);
         valid = false;
       }
     }
 
     if (!onlineMode) {
-      logger.warn("The proxy is running in offline mode! This is a security risk and you will NOT "
+      LOGGER.warn("The proxy is running in offline mode! This is a security risk and you will NOT "
           + "receive any support!");
     }
 
     switch (playerInfoForwardingMode) {
-      case NONE -> logger.warn("Player info forwarding is disabled! All players will appear to be connecting "
+      case NONE -> LOGGER.warn("Player info forwarding is disabled! All players will appear to be connecting "
               + "from the proxy and will have offline-mode UUIDs.");
       case MODERN, BUNGEEGUARD -> {
-        if (forwardingSecret == null || forwardingSecret.getSecrets().isEmpty()) {
-          logger.error("You don't have a forwarding secret set. This is required for security.");
+        if (forwardingSecret == null || forwardingSecret.length == 0) {
+          LOGGER.error("You don't have a forwarding secret set. This is required for security.");
           valid = false;
         }
       }
@@ -431,31 +367,30 @@ public final class VelocityConfiguration implements ProxyConfig {
     }
 
     if (servers.getBackendServers().isEmpty()) {
-      logger.warn("You don't have any servers configured.");
+      LOGGER.warn("You don't have any servers configured.");
     }
 
     for (Map.Entry<String, BackendServerConfig> entry : servers.getBackendServers().entrySet()) {
       try {
         AddressUtil.parseAddress(entry.getValue().address());
       } catch (IllegalArgumentException e) {
-        logger.error("Server {} does not have a valid IP address.", entry.getKey(), e);
+        LOGGER.error("Server {} does not have a valid IP address.", entry.getKey(), e);
         valid = false;
       }
 
-      ServerInfoForwardingMode mode = entry.getValue().forwardingMode();
-      if (mode == ServerInfoForwardingMode.MODERN || mode == ServerInfoForwardingMode.BUNGEEGUARD) {
-        if (forwardingSecret == null || forwardingSecret.getSecrets().isEmpty()) {
-          logger.error("You don't have a forwarding secret set. This is required for security.");
+      PlayerInfoForwarding mode = entry.getValue().forwardingMode();
+      if (mode == PlayerInfoForwarding.MODERN || mode == PlayerInfoForwarding.BUNGEEGUARD) {
+        if (forwardingSecret == null || forwardingSecret.length == 0) {
+          LOGGER.error("You don't have a forwarding secret set. This is required if "
+                  + "you are using MODERN or BUNGEEGUARD forwarding modes.");
           valid = false;
         }
       }
     }
 
-
-
     for (String s : servers.getAttemptConnectionOrder()) {
       if (!servers.getBackendServers().containsKey(s)) {
-        logger.error("Fallback server {} is not registered in your configuration!", s);
+        LOGGER.error("Fallback server {} is not registered in your configuration!", s);
         valid = false;
       }
     }
@@ -464,14 +399,14 @@ public final class VelocityConfiguration implements ProxyConfig {
     if (!configuredForcedHosts.isEmpty()) {
       for (Map.Entry<String, List<String>> entry : configuredForcedHosts.entrySet()) {
         if (entry.getValue().isEmpty()) {
-          logger.error("Forced host '{}' does not contain any servers", entry.getKey());
+          LOGGER.error("Forced host '{}' does not contain any servers", entry.getKey());
           valid = false;
           continue;
         }
 
         for (String server : entry.getValue()) {
           if (!servers.getBackendServers().containsKey(server)) {
-            logger.error("Server '{}' for forced host '{}' does not exist", server, entry.getKey());
+            LOGGER.error("Server '{}' for forced host '{}' does not exist", server, entry.getKey());
             valid = false;
           }
         }
@@ -480,13 +415,13 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     for (Map.Entry<String, List<String>> entry : slashServers.entrySet()) {
       if (entry.getValue().isEmpty()) {
-        logger.error("Slash server alias '{}' does not contain any servers", entry.getKey());
+        LOGGER.error("Slash server alias '{}' does not contain any servers", entry.getKey());
         valid = false;
         continue;
       }
 
       if (!servers.getBackendServers().containsKey(entry.getKey())) {
-        logger.error("Server '{}' does not exist in slash server aliases", entry.getKey());
+        LOGGER.error("Server '{}' does not exist in slash server aliases", entry.getKey());
         valid = false;
       }
     }
@@ -494,40 +429,40 @@ public final class VelocityConfiguration implements ProxyConfig {
     try {
       getMotd();
     } catch (Exception e) {
-      logger.error("Can't parse your MOTD", e);
+      LOGGER.error("Can't parse your MOTD", e);
       valid = false;
     }
 
     try {
       getMotdHover();
     } catch (Exception e) {
-      logger.error("Can't parse your MOTD hover", e);
+      LOGGER.error("Can't parse your MOTD hover", e);
       valid = false;
     }
 
     if (advanced.compressionLevel < -1 || advanced.compressionLevel > 9) {
-      logger.error("Invalid compression level {}", advanced.compressionLevel);
+      LOGGER.error("Invalid compression level {}", advanced.compressionLevel);
       valid = false;
     } else if (advanced.compressionLevel == 0) {
-      logger.warn("ALL packets going through the proxy will be uncompressed. This will increase "
+      LOGGER.warn("ALL packets going through the proxy will be uncompressed. This will increase "
           + "bandwidth usage.");
     }
 
     if (advanced.compressionThreshold < -1) {
-      logger.error("Invalid compression threshold {}", advanced.compressionLevel);
+      LOGGER.error("Invalid compression threshold {}", advanced.compressionLevel);
       valid = false;
     } else if (advanced.compressionThreshold == 0) {
-      logger.warn("ALL packets going through the proxy will be compressed. This will compromise "
+      LOGGER.warn("ALL packets going through the proxy will be compressed. This will compromise "
           + "throughput and increase CPU usage!");
     }
 
     if (advanced.loginRatelimit < 0) {
-      logger.error("Invalid login ratelimit {}ms", advanced.loginRatelimit);
+      LOGGER.error("Invalid login ratelimit {}ms", advanced.loginRatelimit);
       valid = false;
     }
 
     if (advanced.commandRateLimit < 0) {
-      logger.error("Invalid command rate limit {}", advanced.commandRateLimit);
+      LOGGER.error("Invalid command rate limit {}", advanced.commandRateLimit);
       valid = false;
     }
 
@@ -542,16 +477,11 @@ public final class VelocityConfiguration implements ProxyConfig {
       try {
         this.favicon = Favicon.create(faviconPath);
       } catch (Exception e) {
-        logger.info("Unable to load your server-icon.png, continuing without it.", e);
+        LOGGER.info("Unable to load your server-icon.png, continuing without it.", e);
       }
     }
   }
 
-  /**
-   * The current IP and port the proxy is bound to.
-   *
-   * @return the resolved bind address
-   */
   public InetSocketAddress getBind() {
     return AddressUtil.parseAndResolveAddress(bind);
   }
@@ -578,17 +508,17 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   @Override
   public Component getMotd() {
-    if (motdAsComponent == null) {
-      motdAsComponent = MiniMessage.miniMessage().deserialize(motd);
-    }
-
-    return motdAsComponent;
+    return buildAlignedMotd();
   }
 
   @Override
   public List<Component> getMotdHover() {
     if (motdHoverComponents == null) {
       motdHoverComponents = motdHover.stream()
+          // Fix for Fast Server Pings < 1.0.8 showing "Anonymous Players" on an empty line.
+          // See https://github.com/vansencool/FastServerPings/issues/8
+          // May be removed after a while.
+          .map(s -> s.isEmpty() ? " " : s)
           .map(MiniMessage.miniMessage()::deserialize)
           .toList();
     }
@@ -607,56 +537,25 @@ public final class VelocityConfiguration implements ProxyConfig {
   }
 
   @Override
+  public boolean doesPreventChatReports() {
+    return preventsChatReports;
+  }
+
+  @Override
   public boolean shouldPreventClientProxyConnections() {
     return preventClientProxyConnections;
   }
 
-  /**
-   * Gets the global player info forwarding mode used by the proxy.
-   *
-   * <p>This setting determines how Velocity forwards player information
-   * such as UUIDs, IPs, and profile data to backend servers. It can be one of:
-   * <ul>
-   *   <li>{@link PlayerInfoForwarding#NONE} - no forwarding</li>
-   *   <li>{@link PlayerInfoForwarding#LEGACY} - BungeeCord-style forwarding</li>
-   *   <li>{@link PlayerInfoForwarding#BUNGEEGUARD} - BungeeGuard-compatible</li>
-   *   <li>{@link PlayerInfoForwarding#MODERN} - Velocity modern forwarding (recommended)</li>
-   * </ul>
-   *
-   * @return the global {@link PlayerInfoForwarding} mode
-   */
   public PlayerInfoForwarding getPlayerInfoForwardingMode() {
     return playerInfoForwardingMode;
   }
 
-  /**
-   * Gets the secret used for verifying forwarded player info.
-   *
-   * <p>This secret is required for {@link PlayerInfoForwarding#MODERN} and
-   * {@link PlayerInfoForwarding#BUNGEEGUARD} modes. It must be shared securely
-   * between the proxy and backend servers.
-   *
-   * @return a copy of the forwarding secret as a byte array
-   */
-  public byte[] getForwardingSecret(String serverName) {
-    String secret = forwardingSecret.getSecrets().get(serverName);
-    if (secret == null) {
-      // Fallback to "lobby" or "default" or just the first one if specific one not found
-      secret = forwardingSecret.getSecrets().get("lobby");
-      if (secret == null && !forwardingSecret.getSecrets().isEmpty()) {
-        secret = forwardingSecret.getSecrets().values().iterator().next();
-      }
-    }
-    return secret != null ? secret.getBytes(StandardCharsets.UTF_8) : new byte[0];
-  }
-
-  @Deprecated
   public byte[] getForwardingSecret() {
-    return getForwardingSecret("lobby");
+    return forwardingSecret.clone();
   }
 
+  @SuppressWarnings("removal")
   @Override
-  @SuppressWarnings("deprecation")
   public Map<String, String> getServers() {
     Map<String, String> serverAddresses = new HashMap<>();
     getBackendServers().forEach((k, v) -> serverAddresses.put(k, v.address()));
@@ -702,13 +601,8 @@ public final class VelocityConfiguration implements ProxyConfig {
   }
 
   @Override
-  public boolean isCachePlayerProfileResultEnabled() {
-    return advanced.isCachePlayerProfileResultEnabled();
-  }
-
-  @Override
-  public int getProfileCacheExpiryMinutes() {
-    return advanced.getProfileCacheExpiryMinutes();
+  public boolean isForcedHostAsFallback() {
+    return forcedHosts.isForcedHostAsFallback();
   }
 
   @Override
@@ -775,6 +669,24 @@ public final class VelocityConfiguration implements ProxyConfig {
    */
   public boolean isFindEnabled() {
     return commands.isFindEnabled();
+  }
+
+  /**
+   * Returns whether the <code>/gkick</code> command is enabled.
+   *
+   * @return {@code true} if enabled
+   */
+  public boolean isGkickEnabled() {
+    return commands.isGkickEnabled();
+  }
+
+  /**
+   * Returns whether the <code>/gip</code> command is enabled.
+   *
+   * @return {@code true} if enabled
+   */
+  public boolean isGipEnabled() {
+    return commands.isGipEnabled();
   }
 
   /**
@@ -870,119 +782,54 @@ public final class VelocityConfiguration implements ProxyConfig {
     return advanced.getKickAfterRateLimitedCommands();
   }
 
-  /**
-   * Returns whether the PROXY protocol is enabled for incoming connections.
-   *
-   * @return {@code true} if PROXY protocol is enabled, {@code false} otherwise
-   */
   public boolean isProxyProtocol() {
     return advanced.isProxyProtocol();
   }
 
-  /**
-   * Sets whether the PROXY protocol is enabled for incoming connections.
-   *
-   * @param proxyProtocol {@code true} to enable the protocol, {@code false} to disable it
-   */
   public void setProxyProtocol(final boolean proxyProtocol) {
     advanced.setProxyProtocol(proxyProtocol);
   }
 
-  /**
-   * Returns whether TCP Fast Open is enabled for the proxy.
-   *
-   * @return {@code true} if TCP Fast Open is enabled
-   */
   public boolean useTcpFastOpen() {
     return advanced.isTcpFastOpen();
   }
 
-  /**
-   * Gets the metrics configuration.
-   *
-   * @return the {@link Metrics} configuration object
-   */
   public Metrics getMetrics() {
     return metrics;
   }
 
-  /**
-   * Gets the configured ping passthrough mode.
-   *
-   * @return the {@link PingPassthroughMode} being used
-   */
   public PingPassthroughMode getPingPassthrough() {
     return pingPassthrough;
   }
 
-  /**
-   * Returns whether to include actual player samples in server ping responses.
-   *
-   * @return {@code true} if real samples are shown, {@code false} otherwise
-   */
   public boolean getSamplePlayersInPing() {
     return samplePlayersInPing;
   }
 
-  /**
-   * Returns whether player address logging is enabled.
-   *
-   * @return {@code true} if IP address logging is enabled
-   */
   public boolean isPlayerAddressLoggingEnabled() {
     return enablePlayerAddressLogging;
   }
 
-  /**
-   * Returns whether the BungeeCord plugin message channel is enabled.
-   *
-   * @return {@code true} if enabled
-   */
   public boolean isBungeePluginChannelEnabled() {
     return advanced.isBungeePluginMessageChannel();
   }
 
-  /**
-   * Returns whether ping requests are logged in the console.
-   *
-   * @return {@code true} if ping logging is enabled
-   */
   public boolean isShowPingRequests() {
     return advanced.isShowPingRequests();
   }
 
-  /**
-   * Returns whether the proxy attempts to fail over when a server disconnects unexpectedly.
-   *
-   * @return {@code true} if failover is enabled
-   */
   public boolean isFailoverOnUnexpectedServerDisconnect() {
     return advanced.isFailoverOnUnexpectedServerDisconnect();
   }
 
-  /**
-   * Returns whether proxy commands should be announced to players.
-   *
-   * @return {@code true} if proxy commands are announced
-   */
   public boolean isAnnounceProxyCommands() {
     return advanced.isAnnounceProxyCommands();
   }
 
-  /**
-   * Returns whether command executions are logged.
-   *
-   * @return {@code true} if logging is enabled
-   */
   public boolean isLogCommandExecutions() {
     return advanced.isLogCommandExecutions();
   }
 
-  /**
-   * Returns whether player transfers between proxies are accepted.
-   *
-   * @return {@code true} if transfers are accepted
-   */
   @SuppressWarnings("BooleanMethodIsAlwaysInverted")
   public boolean isAcceptTransfers() {
     return this.advanced.isAcceptTransfers();
@@ -1047,26 +894,20 @@ public final class VelocityConfiguration implements ProxyConfig {
    *
    * @return the fallback filter identifier
    */
-  public String getDynamicFallbackFilter() {
+  public DynamicFallbackFilter getDynamicFallbackFilter() {
     return servers.getDynamicFallbackFilter();
   }
 
-  /**
-   * Returns whether key authentication is enforced when online mode is enabled.
-   *
-   * @return {@code true} if key authentication is required
-   */
   public boolean isForceKeyAuthentication() {
     return forceKeyAuthentication;
   }
 
-  /**
-   * Returns whether the proxy uses SO_REUSEPORT when binding network sockets.
-   *
-   * @return {@code true} if reuse port is enabled
-   */
   public boolean isEnableReusePort() {
     return advanced.isEnableReusePort();
+  }
+
+  public PacketLimiterConfig getPacketLimiterConfig() {
+    return packetLimiterConfig;
   }
 
   /**
@@ -1115,11 +956,11 @@ public final class VelocityConfiguration implements ProxyConfig {
   }
 
   /**
-   * Gets the dynamic proxy filter strategy identifier.
+   * Gets the dynamic proxy filter strategy mode.
    *
-   * @return the configured dynamic proxy filter name
+   * @return the configured dynamic proxy filter
    */
-  public String getDynamicProxyFilter() {
+  public DynamicProxyFilterMode getDynamicProxyFilter() {
     return this.dynamicProxyFilter;
   }
 
@@ -1155,7 +996,8 @@ public final class VelocityConfiguration implements ProxyConfig {
   public String toString() {
     return MoreObjects.toStringHelper(this)
         .add("bind", bind)
-        .add("motd", motd)
+        .add("motdLine1", motdLine1)
+        .add("motdLine2", motdLine2)
         .add("motdHover", motdHover)
         .add("showMaxPlayers", showMaxPlayers)
         .add("onlineMode", onlineMode)
@@ -1172,11 +1014,13 @@ public final class VelocityConfiguration implements ProxyConfig {
         .add("favicon", favicon)
         .add("enablePlayerAddressLogging", enablePlayerAddressLogging)
         .add("forceKeyAuthentication", forceKeyAuthentication)
+        .add("packetLimiterConfig", packetLimiterConfig)
         .add("logPlayerConnections", logPlayerConnections)
         .add("logPlayerDisconnections", logPlayerDisconnections)
         .add("logOfflineConnections", logOfflineConnections)
         .add("disableForge", disableForge)
         .add("enforceChatSigning", enforceChatSigning)
+        .add("preventsChatReports", preventsChatReports)
         .add("translateHeaderFooter", translateHeaderFooter)
         .add("logMinimumVersion", logMinimumVersion)
         .add("minimumVersion", minimumVersion)
@@ -1185,13 +1029,6 @@ public final class VelocityConfiguration implements ProxyConfig {
         .toString();
   }
 
-  /**
-   * Reads the Velocity configuration from {@code path}.
-   *
-   * @param path the path to read from
-   * @return the deserialized Velocity configuration
-   * @throws IOException if we could not read from the {@code path}.
-   */
   public static VelocityConfiguration read(final Path path) throws IOException {
     URL defaultConfigLocation = VelocityConfiguration.class.getClassLoader()
         .getResource("default-velocity.toml");
@@ -1224,28 +1061,30 @@ public final class VelocityConfiguration implements ProxyConfig {
       config.load();
 
       try {
-        ConfigDetector detector = new ConfigDetector(logger);
+        ConfigDetector detector = new ConfigDetector(LOGGER);
         ConfigDetector.ConfigAnalysis analysis = detector.analyzeConfiguration(path);
 
         if (!analysis.missingOptions().isEmpty()) {
-          logger.warn("Missing configuration options: {}", String.join(", ", analysis.missingOptions()));
-          logger.warn("Run /velocity configcheck for full details");
+          LOGGER.warn("Missing configuration options: {}", String.join(", ", analysis.missingOptions()));
+          LOGGER.warn("Run /velocity configcheck for full details");
         }
       } catch (IOException e) {
-        logger.debug("Could not perform configuration check during configuration loading", e);
+        LOGGER.debug("Could not perform configuration check during configuration loading", e);
       }
 
-      final ConfigurationMigration[] migrations = {
+      final List<ConfigurationMigration> migrations = new ArrayList<>(List.of(
           new ForwardingMigration(),
           new KeyAuthenticationMigration(),
           new MotdMigration(),
           new MiniMessageTranslationsMigration(),
           new TransferIntegrationMigration()
-      };
+      ));
+
+      migrations.addAll(CtdConfigMigrations.createCtdMigrations());
 
       for (final ConfigurationMigration migration : migrations) {
         if (migration.shouldMigrate(config)) {
-          migration.migrate(config, logger);
+          migration.migrate(config, LOGGER);
         }
       }
 
@@ -1266,13 +1105,43 @@ public final class VelocityConfiguration implements ProxyConfig {
         } else {
           Files.createFile(secretPath);
           Files.writeString(secretPath, forwardingSecretString = generateRandomString(12), StandardCharsets.UTF_8);
-          logger.info("The forwarding-secret-file does not exist. A new file has been created at {}", forwardSecretFile);
+          LOGGER.info("The forwarding-secret-file does not exist. A new file has been created at {}", forwardSecretFile);
         }
       }
 
-      final Secrets forwardingSecret = new Secrets(forwardingSecretString);
-      final String motd = config.getOrElse("motd", "<#09add3>A Velocity Server");
-      final List<String> motdHover = config.getOrElse("motd-hover", new ArrayList<>());
+      final byte[] forwardingSecret = forwardingSecretString.getBytes(StandardCharsets.UTF_8);
+
+      // Read MOTD from dedicated [motd] section, with fallback to legacy root-level keys
+      final Object motdRaw = config.get("motd");
+      final String motdLine1;
+      final String motdLine2;
+      final String motdLine1Alignment;
+      final String motdLine2Alignment;
+      final List<String> motdHover;
+
+      if (motdRaw instanceof CommentedConfig motdConfig && !motdConfig.valueMap().isEmpty()) {
+        // New [motd] section format
+        motdLine1 = motdConfig.getOrElse("motd-line1", "<aqua>BTC Proxy Core");
+        motdLine2 = motdConfig.getOrElse("motd-line2", "<yellow>Modern Minecraft 26.1.2 Only");
+        motdLine1Alignment = motdConfig.getOrElse("line1-alignment", "center");
+        motdLine2Alignment = motdConfig.getOrElse("line2-alignment", "center");
+        motdHover = motdConfig.getOrElse("motd-hover", new ArrayList<>());
+      } else if (config.contains("motd-line1")) {
+        // New root-level MOTD keys (backward compat with new default config)
+        motdLine1 = config.getOrElse("motd-line1", "<aqua>BTC Proxy Core");
+        motdLine2 = config.getOrElse("motd-line2", "<yellow>Modern Minecraft 26.1.2 Only");
+        motdLine1Alignment = config.getOrElse("line1-alignment", "center");
+        motdLine2Alignment = config.getOrElse("line2-alignment", "center");
+        motdHover = config.getOrElse("motd-hover", new ArrayList<>());
+      } else {
+        // Legacy flat motd key for backward compatibility
+        String legacyMotd = config.getOrElse("motd", "<aqua>BTC Proxy Core");
+        motdLine1 = legacyMotd;
+        motdLine2 = "";
+        motdLine1Alignment = "left";
+        motdLine2Alignment = "left";
+        motdHover = config.getOrElse("motd-hover", new ArrayList<>());
+      }
 
       // Read the rest of the config
       final CommentedConfig serversConfig = config.get("servers");
@@ -1285,8 +1154,6 @@ public final class VelocityConfiguration implements ProxyConfig {
       final CommentedConfig metricsConfig = config.get("metrics");
       final CommentedConfig redisConfig = config.get("redis");
       final CommentedConfig queueConfig = config.get("queue");
-      final CommentedConfig secretsConfig = config.get("secrets");
-      // MultiVelocity: Parse secrets section
       final CommentedConfig serverLinksConfig = config.get("server-links");
       final CommentedConfig proxyAddressesConfig = config.get("proxy-addresses");
       final CommentedConfig playerCapsConfig = config.get("playercaps");
@@ -1306,6 +1173,7 @@ public final class VelocityConfiguration implements ProxyConfig {
       final boolean kickExistingCheckIp = config.getOrElse("kick-existing-players-check-ip", false);
       final boolean enablePlayerAddressLogging = config.getOrElse(
               "enable-player-address-logging", true);
+      final PacketLimiterConfig packetLimiterConfig = PacketLimiterConfig.fromConfig(config.get("packet-limiter"));
       final boolean logPlayerConnections = config.getOrElse(
               "log-player-connections", true);
       final boolean logPlayerDisconnections = config.getOrElse(
@@ -1315,11 +1183,14 @@ public final class VelocityConfiguration implements ProxyConfig {
       final boolean disableForge = config.getOrElse("disable-forge", false);
       final boolean enforceChatSigning = config.getOrElse(
               "enforce-chat-signing", false);
+      final boolean preventsChatReports = config.getOrElse(
+              "prevents-chat-reports", false);
       final boolean translateHeaderFooter = config.getOrElse(
               "translate-header-footer", true);
       final boolean logMinimumVersion = config.getOrElse(
               "log-minimum-version", false);
-      final String minimumVersion = config.getOrElse("minimum-version", "1.7.2");
+      final String minimumVersion = config.getOrElse("minimum-version", "26.1.2");
+      final String maximumVersion = config.getOrElse("maximum-version", UNBOUNDED);
       final CommentedConfig slashServersConfig = config.getOrElse("slash-servers", (CommentedConfig) null);
       final Map<String, List<String>> slashServers = new HashMap<>();
       if (slashServersConfig != null) {
@@ -1331,8 +1202,7 @@ public final class VelocityConfiguration implements ProxyConfig {
             List<String> value = ImmutableList.copyOf((List<String>) entry.getValue());
             slashServers.put(entry.getKey(), value);
           } else {
-            throw new IllegalStateException(
-                "Invalid value of type " + entry.getValue().getClass() + " in slash servers!");
+            LOGGER.warn("Invalid value of type {} in slash servers!", entry.getValue().getClass());
           }
         }
       }
@@ -1345,7 +1215,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           String url = link.get("link");
           Object serverName = link.get("server");
           if (!(serverName instanceof List<?> serverList)) {
-            logger.warn("Invalid 'server' value for server-link '{}'. Expected a list of servers like \"factions\" or \"minigames\"", entry.getKey());
+            LOGGER.warn("Invalid 'server' value for server-link '{}'. Expected a list of servers like \"factions\" or \"minigames\"", entry.getKey());
             continue;
           }
 
@@ -1364,10 +1234,11 @@ public final class VelocityConfiguration implements ProxyConfig {
         }
       }
 
-      final List<ProxyAddress> addresses = new ArrayList<>();
-      String filter = "MOST_EMPTY";
+      DynamicProxyFilterMode filter = DynamicProxyFilterMode.MOST_EMPTY;
+      List<ProxyAddress> addresses = new ArrayList<>();
       if (proxyAddressesConfig != null) {
-        filter = proxyAddressesConfig.getOrElse("dynamic-proxy-filter", "MOST_EMPTY");
+        filter = proxyAddressesConfig.getEnumOrElse("dynamic-proxy-filter", filter);
+
         for (CommentedConfig.Entry entry : proxyAddressesConfig.entrySet()) {
           if (entry.getKey().equalsIgnoreCase("dynamic-proxy-filter")) {
             continue;
@@ -1389,7 +1260,7 @@ public final class VelocityConfiguration implements ProxyConfig {
 
       // Throw an exception if the forwarding-secret file is empty and the proxy is using a
       // forwarding mode that requires it.
-      if (forwardingSecret.getSecrets().isEmpty()
+      if (forwardingSecret.length == 0
               && (forwardingMode == PlayerInfoForwarding.MODERN
               || forwardingMode == PlayerInfoForwarding.BUNGEEGUARD)) {
         throw new RuntimeException("The forwarding-secret file must not be empty.");
@@ -1397,7 +1268,10 @@ public final class VelocityConfiguration implements ProxyConfig {
 
       return new VelocityConfiguration(
           bind,
-          motd,
+          motdLine1,
+          motdLine2,
+          motdLine1Alignment,
+          motdLine2Alignment,
           motdHover,
           maxPlayers,
           onlineMode,
@@ -1419,14 +1293,17 @@ public final class VelocityConfiguration implements ProxyConfig {
           new Query(queryConfig),
           new Metrics(metricsConfig),
           forceKeyAuthentication,
+          packetLimiterConfig,
           logPlayerConnections,
           logPlayerDisconnections,
           logOfflineConnections,
           disableForge,
           enforceChatSigning,
+          preventsChatReports,
           translateHeaderFooter,
           logMinimumVersion,
           minimumVersion,
+          maximumVersion,
           new Redis(redisConfig),
           new Queue(queueConfig),
           slashServers,
@@ -1456,35 +1333,34 @@ public final class VelocityConfiguration implements ProxyConfig {
   }
 
   /**
-   * Determines whether Velocity should kick any other existing player sessions
-   * that use the same UUID when a new authenticated player connects.
+   * Determines whether Velocity should kick any existing player session that shares a UUID with
+   * an incoming connection, allowing the new connection to take over.
    *
-   * <p>This is useful for protecting against session hijacking in online-mode.
+   * <p>Works in both online and offline mode. In offline mode the UUID is derived from the
+   * username, so this setting is unsafe unless {@link #isKickExistingPlayersCheckIp()} is also
+   * enabled to restrict kicks to same-IP reconnects.
    *
    * @return true if existing players with matching UUIDs should be kicked
    */
-  public boolean isOnlineModeKickExistingPlayers() {
-    return onlineModeKickExistingPlayers;
+  public boolean isKickExistingPlayers() {
+    return kickExistingPlayers;
   }
 
   /**
-   * Determines whether Velocity should also check for duplicate connections from the same IP address
-   * when kick-existing-players is enabled.
+   * Determines whether kick-existing-players should only fire when the new connection comes from
+   * the same IP address as the existing session.
    *
-   * <p>This provides additional protection against connection loss scenarios where a player
-   * might reconnect from the same IP address with a different username or UUID.
+   * <p>When {@code true}: a duplicate UUID from the same IP kicks the existing session. A duplicate
+   * UUID from a different IP is denied instead, leaving the existing player unaffected.
    *
-   * @return true if IP address checking should be performed for duplicate connections
+   * <p>When {@code false}: any duplicate UUID kicks the existing session unconditionally.
+   *
+   * @return true if the kick is restricted to same-IP connections
    */
   public boolean isKickExistingPlayersCheckIp() {
     return kickExistingPlayersCheckIp;
   }
 
-  /**
-   * Returns whether Velocity should log all player connection attempts.
-   *
-   * @return true if player connections should be logged
-   */
   public boolean isLogPlayerConnections() {
     return logPlayerConnections;
   }
@@ -1578,6 +1454,37 @@ public final class VelocityConfiguration implements ProxyConfig {
   }
 
   /**
+   * Gets the maximum allowed Minecraft version that can connect to the proxy.
+   *
+   * <p>Clients connecting with a higher version than this will be rejected.
+   * Returns an empty optional if no maximum version limit is configured (UNBOUNDED).
+   *
+   * @return the maximum supported version string (e.g., {@code "1.21.10"}), or empty if unbounded
+   */
+  public Optional<String> getMaximumVersion() {
+    return isUnbounded(maximumVersion) ? Optional.empty() : Optional.of(maximumVersion);
+  }
+
+  /**
+   * Gets the maximum allowed Minecraft version for a specific server.
+   *
+   * <p>If the server has a specific maximum version configured, that value is returned.
+   * Otherwise, the global maximum version is used.
+   * Returns an empty optional if the effective maximum version is UNBOUNDED.
+   *
+   * @param serverName the name of the server to check
+   * @return the maximum supported version string for the server, or empty if unbounded
+   */
+  public Optional<String> getMaximumVersionForServer(final String serverName) {
+    final String effective = servers.getServerMaximumVersions().getOrDefault(serverName, maximumVersion);
+    return isUnbounded(effective) ? Optional.empty() : Optional.of(effective);
+  }
+
+  private static boolean isUnbounded(final String version) {
+    return UNBOUNDED.equalsIgnoreCase(version);
+  }
+
+  /**
    * Gets a list of aliases that invoke the {@code /server} command or its variations.
    *
    * <p>These aliases are registered for convenience (e.g. {@code /queue}, {@code /joinqueue}).
@@ -1590,38 +1497,17 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   private static final class Servers {
 
-    /**
-     * The configured mapping of backend servers available for player connections.
-     *
-     * <p>The key is the unique server name used within the proxy (for example,
-     * {@code "lobby"}), and the value is a {@link BackendServerConfig} describing
-     * the backend server's address and its {@link ServerInfoForwardingMode}.</p>
-     *
-     * <p>This map determines the set of servers players can connect to and
-     * specifies whether each server should inherit the global forwarding mode
-     * or use its own explicit mode.</p>
-     */
     private Map<String, BackendServerConfig> servers = ImmutableMap.of(
         "lobby", new BackendServerConfig("127.0.0.1:30066"),
-        "factions", new BackendServerConfig("127.0.0.1:30067", ServerInfoForwardingMode.MODERN),
-        "minigames", new BackendServerConfig("127.0.0.1:30068", ServerInfoForwardingMode.LEGACY)
+        "factions", new BackendServerConfig("127.0.0.1:30067", PlayerInfoForwarding.MODERN),
+        "minigames", new BackendServerConfig("127.0.0.1:30068", PlayerInfoForwarding.LEGACY)
     );
 
-    /**
-     * The ordered list of fallback servers to try when connecting a player.
-     *
-     * <p>This list defines the default connection priority. If a connection to the
-     * first server fails, the proxy tries the next one in order, and so on.
-     */
     private List<String> attemptConnectionOrder = ImmutableList.of("lobby");
 
-    /**
-     * Per-server overrides for minimum version requirements.
-     *
-     * <p>If a server is listed here, it uses the specified minimum version
-     * instead of the global configuration.
-     */
     private Map<String, String> serverMinimumVersions = ImmutableMap.of();
+
+    private Map<String, String> serverMaximumVersions = ImmutableMap.of();
 
     /**
      * The strategy used for choosing a fallback server when {@code attemptConnectionOrder}
@@ -1630,7 +1516,7 @@ public final class VelocityConfiguration implements ProxyConfig {
      * <p>Common values include {@code "FIRST_AVAILABLE"}, {@code "MOST_POPULATED"},
      * or {@code "LEAST_POPULATED"}.
      */
-    private String dynamicFallbackFilter;
+    private DynamicFallbackFilter dynamicFallbackFilter;
 
     /**
      * A list of aliases that invoke server-related commands.
@@ -1641,19 +1527,17 @@ public final class VelocityConfiguration implements ProxyConfig {
     @Expose
     private List<String> serverAliases;
 
-    /**
-     * Creates a new instance.
-     */
     private Servers() {
     }
 
     private Servers(final CommentedConfig config) {
       this.serverAliases = List.of("joinqueue", "queue", "server");
-      this.dynamicFallbackFilter = "FIRST_AVAILABLE";
+      this.dynamicFallbackFilter = DynamicFallbackFilter.FIRST_AVAILABLE;
 
       if (config != null) {
         Map<String, BackendServerConfig> servers = new HashMap<>();
         Map<String, String> serverMinimumVersions = new HashMap<>();
+        Map<String, String> serverMaximumVersions = new HashMap<>();
         for (UnmodifiableConfig.Entry entry : config.entrySet()) {
           if (entry.getKey().equalsIgnoreCase("dynamic-fallbacks-filter")) {
             continue;
@@ -1661,18 +1545,24 @@ public final class VelocityConfiguration implements ProxyConfig {
 
           if (entry.getValue() instanceof CommentedConfig c) {
             String address = null;
-            ServerInfoForwardingMode forwardingMode = null;
+            PlayerInfoForwarding forwardingMode = null;
             for (UnmodifiableConfig.Entry entry2 : c.entrySet()) {
               if (entry2.getKey().equalsIgnoreCase("address")) {
                 address = entry2.getValue();
               }
 
               if (entry2.getKey().equalsIgnoreCase("forwarding-mode")) {
-                forwardingMode = ServerInfoForwardingMode.valueOf(ServerInfoForwardingMode.class, entry2.getValue());
+                String forwardingModeName = entry2.getValue();
+                forwardingMode = PlayerInfoForwarding.valueOf(
+                    forwardingModeName.toUpperCase(Locale.ROOT));
               }
 
               if (entry2.getKey().equalsIgnoreCase("minimum-version")) {
-                serverMinimumVersions.put(cleanServerName(entry.getKey()), entry2.getValue());
+                serverMinimumVersions.put(cleanValue(entry.getKey()), entry2.getValue());
+              }
+
+              if (entry2.getKey().equalsIgnoreCase("maximum-version")) {
+                serverMaximumVersions.put(cleanValue(entry.getKey()), entry2.getValue());
               }
             }
 
@@ -1680,10 +1570,10 @@ public final class VelocityConfiguration implements ProxyConfig {
               throw new IllegalArgumentException("Server entry " + entry.getKey() + " is missing address!");
             }
 
-            servers.put(cleanServerName(entry.getKey()), new BackendServerConfig(address, forwardingMode));
+            servers.put(cleanValue(entry.getKey()), new BackendServerConfig(address, forwardingMode));
             // Support for old server config system (forwarding mode will be null)
           } else if (entry.getValue() instanceof String v) {
-            servers.put(cleanServerName(entry.getKey()), new BackendServerConfig(v));
+            servers.put(cleanValue(entry.getKey()), new BackendServerConfig(v));
           } else {
             if (!entry.getKey().equalsIgnoreCase("try")
                 && !entry.getKey().equalsIgnoreCase("dynamic-fallbacks-filter")
@@ -1696,17 +1586,11 @@ public final class VelocityConfiguration implements ProxyConfig {
 
         this.servers = ImmutableMap.copyOf(servers);
         this.serverMinimumVersions = ImmutableMap.copyOf(serverMinimumVersions);
+        this.serverMaximumVersions = ImmutableMap.copyOf(serverMaximumVersions);
         this.attemptConnectionOrder = config.getOrElse("try", attemptConnectionOrder).stream().toList();
-        this.dynamicFallbackFilter = config.getOrElse("dynamic-fallbacks-filter", "FIRST_AVAILABLE");
+        this.dynamicFallbackFilter = config.getEnumOrElse("dynamic-fallbacks-filter", DynamicFallbackFilter.FIRST_AVAILABLE);
         this.serverAliases = config.getOrElse("server-aliases", List.of("joinqueue", "queue", "server"));
       }
-    }
-
-    private Servers(final Map<String, BackendServerConfig> servers, final List<String> attemptConnectionOrder) {
-      this.servers = servers;
-      this.attemptConnectionOrder = attemptConnectionOrder;
-      this.serverAliases = List.of("joinqueue", "queue", "server");
-      this.dynamicFallbackFilter = "FIRST_AVAILABLE";
     }
 
     public List<String> getServerAliases() {
@@ -1725,7 +1609,7 @@ public final class VelocityConfiguration implements ProxyConfig {
       return attemptConnectionOrder;
     }
 
-    public String getDynamicFallbackFilter() {
+    public DynamicFallbackFilter getDynamicFallbackFilter() {
       return dynamicFallbackFilter;
     }
 
@@ -1741,16 +1625,23 @@ public final class VelocityConfiguration implements ProxyConfig {
       this.serverMinimumVersions = serverMinimumVersions;
     }
 
+    public Map<String, String> getServerMaximumVersions() {
+      return serverMaximumVersions;
+    }
+
+    public void setServerMaximumVersions(final Map<String, String> serverMaximumVersions) {
+      this.serverMaximumVersions = serverMaximumVersions;
+    }
+
     /**
      * TOML requires keys to match a regex of {@code [A-Za-z0-9_-]} unless it is wrapped in quotes;
-     * however, the TOML parser returns the key with the quotes so we need to clean the server name
-     * before we pass it onto server registration to keep proper server name behavior.
+     * however, the TOML parser returns the key with the quotes so we need to clean the value.
      *
-     * @param name the server name to clean
-     * @return the cleaned server name
+     * @param value the value to clean
+     * @return the cleaned value
      */
-    private String cleanServerName(final String name) {
-      return name.replace("\"", "");
+    private String cleanValue(final String value) {
+      return value.replace("\"", "");
     }
 
     @Override
@@ -1759,6 +1650,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           + "servers=" + servers
           + ", attemptConnectionOrder=" + attemptConnectionOrder
           + ", serverMinimumVersions=" + serverMinimumVersions
+          + ", serverMaximumVersions=" + serverMaximumVersions
           + '}';
     }
   }
@@ -1785,7 +1677,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           } else if (value instanceof String str) {
             parsed.put(entry.getKey(), List.of(str));
           } else {
-            logger.warn("Invalid value in [command-aliases] for '{}': {}", entry.getKey(), value);
+            LOGGER.warn("Invalid value in [command-aliases] for '{}': {}", entry.getKey(), value);
           }
         }
       }
@@ -1827,7 +1719,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           } else if (value instanceof String str) {
             parsed.put(entry.getKey(), List.of(str));
           } else {
-            logger.warn("Invalid value in [proxy-command-aliases] for '{}': {}", entry.getKey(), value);
+            LOGGER.warn("Invalid value in [proxy-command-aliases] for '{}': {}", entry.getKey(), value);
           }
         }
       }
@@ -1849,33 +1741,30 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   private static final class ForcedHosts {
 
-    /**
-     * A mapping of virtual hostnames to server connection targets.
-     *
-     * <p>Each key represents a hostname (e.g., {@code play.example.com}) and its
-     * corresponding value is a list of backend server names that should be attempted
-     * in order when a player connects using that hostname.</p>
-     *
-     * <p>Used to route players based on the hostname they use to connect.</p>
-     */
     private Map<String, List<String>> forcedHosts = ImmutableMap.of();
+
+    private boolean forcedHostAsFallback = true;
 
     private ForcedHosts() {
     }
 
     private ForcedHosts(final CommentedConfig config) {
       if (config != null) {
+        forcedHostAsFallback = config.get("forced-host-as-fallback");
+
         Map<String, List<String>> forcedHosts = new HashMap<>();
         for (UnmodifiableConfig.Entry entry : config.entrySet()) {
+          String key = entry.getKey().toLowerCase(Locale.ROOT);
+          if (key.equals("forced-host-as-fallback")) {
+            continue;
+          }
+
           if (entry.getValue() instanceof String) {
-            forcedHosts.put(entry.getKey().toLowerCase(Locale.ROOT),
-                ImmutableList.of(entry.getValue()));
+            forcedHosts.put(key, ImmutableList.of(entry.getValue()));
           } else if (entry.getValue() instanceof List) {
-            forcedHosts.put(entry.getKey().toLowerCase(Locale.ROOT),
-                ImmutableList.copyOf((List<String>) entry.getValue()));
+            forcedHosts.put(key, ImmutableList.copyOf((List<String>) entry.getValue()));
           } else {
-            throw new IllegalStateException(
-                "Invalid value of type " + entry.getValue().getClass() + " in forced hosts!");
+            LOGGER.warn("Invalid value of type {} in forced hosts!", entry.getValue().getClass());
           }
         }
 
@@ -1893,6 +1782,14 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     private void setForcedHosts(final Map<String, List<String>> forcedHosts) {
       this.forcedHosts = forcedHosts;
+    }
+
+    private boolean isForcedHostAsFallback() {
+      return forcedHostAsFallback;
+    }
+
+    private void setForcedHostAsFallback(boolean forcedHostAsFallback) {
+      this.forcedHostAsFallback = forcedHostAsFallback;
     }
 
     @Override
@@ -1932,6 +1829,20 @@ public final class VelocityConfiguration implements ProxyConfig {
      */
     @Expose
     private boolean findCommand = true;
+
+    /**
+     * Whether the /gkick command is enabled.
+     * Allows operators to kick players across the entire network.
+     */
+    @Expose
+    private boolean gkickCommand = true;
+
+    /**
+     * Whether the /gip command is enabled.
+     * Allows operators to retrieve the IP address of an online player.
+     */
+    @Expose
+    private boolean gipCommand = true;
 
     /**
      * Whether the /glist command is enabled.
@@ -1990,6 +1901,8 @@ public final class VelocityConfiguration implements ProxyConfig {
         this.alertCommand = config.getOrElse("alert-enabled", true);
         this.alertRawCommand = config.getOrElse("alertraw-enabled", true);
         this.findCommand = config.getOrElse("find-enabled", true);
+        this.gkickCommand = config.getOrElse("gkick-enabled", true);
+        this.gipCommand = config.getOrElse("gip-enabled", true);
         this.glistCommand = config.getOrElse("glist-enabled", true);
         this.plistCommand = config.getOrElse("plist-enabled", true);
         this.hubCommand = config.getOrElse("hub-enabled", true);
@@ -2014,6 +1927,14 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     public boolean isFindEnabled() {
       return findCommand;
+    }
+
+    public boolean isGkickEnabled() {
+      return gkickCommand;
+    }
+
+    public boolean isGipEnabled() {
+      return gipCommand;
     }
 
     public boolean isGlistEnabled() {
@@ -2063,133 +1984,60 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   private static final class Advanced {
 
-    /**
-     * Whether to cache player profile results retrieved from Mojang session servers.
-     */
-    @Expose
-    private boolean cachePlayerProfileResult = false;
-
-    /**
-     * How long (in minutes) cached player profiles are retained before expiring.
-     */
-    @Expose
-    private int profileCacheExpiryMinutes = 1440;
-
-    /**
-     * The size threshold (in bytes) at which packets are compressed.
-     * -1 disables compression, 0 compresses all packets.
-     */
     @Expose
     private int compressionThreshold = 256;
 
-    /**
-     * The compression level (0–9) used for packet compression.
-     * -1 uses the system default.
-     */
     @Expose
     private int compressionLevel = -1;
 
-    /**
-     * The time (in milliseconds) that must pass before a player can log in again.
-     */
     @Expose
     private int loginRatelimit = 3000;
 
-    /**
-     * The timeout (in milliseconds) for establishing a connection to a backend server.
-     */
     @Expose
     private int connectionTimeout = 5000;
 
-    /**
-     * The timeout (in milliseconds) for reading packets from a backend server.
-     */
     @Expose
     private int readTimeout = 30000;
 
-    /**
-     * Whether to enable support for the HAProxy PROXY protocol.
-     */
     @Expose
     private boolean proxyProtocol = false;
 
-    /**
-     * Whether to enable TCP Fast Open (may require OS-level support).
-     */
     @Expose
     private boolean tcpFastOpen = false;
 
-    /**
-     * Whether to enable support for the BungeeCord plugin messaging channel.
-     */
     @Expose
     private boolean bungeePluginMessageChannel = true;
 
-    /**
-     * Whether to log incoming ping requests in the console.
-     */
     @Expose
     private boolean showPingRequests = false;
 
-    /**
-     * Whether to failover players to other servers if they are unexpectedly disconnected.
-     */
     @Expose
     private boolean failoverOnUnexpectedServerDisconnect = true;
 
-    /**
-     * Whether to include proxy command aliases (e.g. `/server`) in tab-completions.
-     */
     @Expose
     private boolean announceProxyCommands = true;
 
-    /**
-     * Whether to log every command executed by players.
-     */
     @Expose
     private boolean logCommandExecutions = false;
 
-    /**
-     * Whether to accept `/transfer` messages from other proxies in a multi-proxy network.
-     */
     @Expose
     private boolean acceptTransfers = false;
 
-    /**
-     * Whether to enable SO_REUSEPORT if supported by the OS.
-     */
     @Expose
     private boolean enableReusePort = false;
 
-    /**
-     * Maximum number of commands per second before a player is rate-limited.
-     */
     @Expose
     private int commandRateLimit = 50;
 
-    /**
-     * Whether to allow rate-limited commands to be forwarded anyway (best-effort).
-     */
     @Expose
     private boolean forwardCommandsIfRateLimited = true;
 
-    /**
-     * Number of rate-limited commands before a player is kicked.
-     * 0 disables kicking.
-     */
     @Expose
     private int kickAfterRateLimitedCommands = 0;
 
-    /**
-     * Maximum number of tab-complete requests per second before rate-limiting is applied.
-     */
     @Expose
     private int tabCompleteRateLimit = 10;
 
-    /**
-     * Number of rate-limited tab-complete requests before a player is kicked.
-     * 0 disables kicking.
-     */
     @Expose
     private int kickAfterRateLimitedTabCompletes = 0;
 
@@ -2234,7 +2082,7 @@ public final class VelocityConfiguration implements ProxyConfig {
      * Custom brand name shown for the proxy in debug/version displays.
      */
     @Expose
-    private String proxyBrandCustom = "Velocity";
+    private String proxyBrandCustom = "BTC Proxy Core";
 
     /**
      * Custom brand name shown for the backend server in debug/version displays.
@@ -2247,8 +2095,6 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     private Advanced(final CommentedConfig config) {
       if (config != null) {
-        this.cachePlayerProfileResult = config.getOrElse("cache-player-profile-result", false);
-        this.profileCacheExpiryMinutes = config.getOrElse("cache-profile-expiry-minutes", 1440);
         this.compressionThreshold = config.getIntOrElse("compression-threshold", 256);
         this.compressionLevel = config.getIntOrElse("compression-level", -1);
         this.loginRatelimit = config.getIntOrElse("login-ratelimit", 3000);
@@ -2277,7 +2123,7 @@ public final class VelocityConfiguration implements ProxyConfig {
         this.serverBrand = config.getOrElse("server-brand", "{backend-brand} ({proxy-brand})");
         this.fallbackVersionPing = config.getOrElse("fallback-version-ping", "{proxy-brand} {protocol-min}-{protocol-max}");
         this.alwaysFallBackPing = config.getOrElse("always-fallback-ping", false);
-        this.proxyBrandCustom = config.getOrElse("custom-brand-proxy", "Velocity");
+        this.proxyBrandCustom = config.getOrElse("custom-brand-proxy", "BTC Proxy Core");
         this.backendBrandCustom = config.getOrElse("custom-brand-backend", "Paper");
       }
 
@@ -2285,14 +2131,6 @@ public final class VelocityConfiguration implements ProxyConfig {
           .serialize(MiniMessage.miniMessage().deserialize(this.serverBrand));
       this.fallbackVersionPingAsString = LegacyComponentSerializer.legacySection()
           .serialize(MiniMessage.miniMessage().deserialize(this.fallbackVersionPing));
-    }
-
-    public boolean isCachePlayerProfileResultEnabled() {
-      return this.cachePlayerProfileResult;
-    }
-
-    public int getProfileCacheExpiryMinutes() {
-      return this.profileCacheExpiryMinutes;
     }
 
     public int getCompressionThreshold() {
@@ -2402,9 +2240,7 @@ public final class VelocityConfiguration implements ProxyConfig {
     @Override
     public String toString() {
       return "Advanced{"
-          + "cachePlayerProfileResult=" + cachePlayerProfileResult
-          + ", profileCacheExpiryMinutes=" + profileCacheExpiryMinutes
-          + ", compressionThreshold=" + compressionThreshold
+          + "compressionThreshold=" + compressionThreshold
           + ", compressionLevel=" + compressionLevel
           + ", loginRatelimit=" + loginRatelimit
           + ", connectionTimeout=" + connectionTimeout
@@ -2430,36 +2266,15 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   private static final class Query {
 
-    /**
-     * Whether the legacy GameSpy query protocol is enabled.
-     *
-     * <p>This allows tools like server lists or query clients to gather basic server
-     * metadata (name, player count, etc.) through UDP.</p>
-     */
     @Expose
     private boolean queryEnabled = false;
 
-    /**
-     * The port on which the proxy will listen for query protocol requests.
-     *
-     * <p>This can be the same as or different from the main proxy port.</p>
-     */
     @Expose
     private int queryPort = 25565;
 
-    /**
-     * The string returned as the "map name" in the query response.
-     *
-     * <p>Purely cosmetic, often shown as the server name in query-compatible tools.</p>
-     */
     @Expose
     private String queryMap = "Velocity";
 
-    /**
-     * Whether the proxy should include plugin names in query responses.
-     *
-     * <p>This is often disabled to avoid leaking plugin information to the public.</p>
-     */
     @Expose
     private boolean showPlugins = false;
 
@@ -2514,11 +2329,6 @@ public final class VelocityConfiguration implements ProxyConfig {
    */
   public static final class Metrics {
 
-    /**
-     * Whether metrics collection via bStats is enabled.
-     * When enabled, Velocity will anonymously report usage statistics
-     * such as player counts, Java version, and operating system to bStats.org.
-     */
     private boolean enabled = true;
 
     private Metrics(final CommentedConfig toml) {
@@ -2527,13 +2337,37 @@ public final class VelocityConfiguration implements ProxyConfig {
       }
     }
 
-    /**
-     * Returns whether metrics reporting to bStats is enabled.
-     *
-     * @return true if metrics are enabled, false otherwise
-     */
     public boolean isEnabled() {
       return enabled;
+    }
+  }
+
+  /**
+   * Configuration for packet limiting.
+   *
+   * @param interval the interval in seconds to measure packets over
+   * @param pps      the maximum number of packets per second allowed
+   * @param bytes    the maximum number of bytes per second allowed
+   */
+  public record PacketLimiterConfig(int interval, int pps, int bytes) {
+    public static PacketLimiterConfig DEFAULT = new PacketLimiterConfig(7, 500, -1);
+
+    /**
+     * returns a PacketLimiterConfig from a config section, or the default if the section is null.
+     *
+     * @param config the configuration object to parse
+     * @return the packet limiter config, or the default if {@code config} is null
+     */
+    public static PacketLimiterConfig fromConfig(CommentedConfig config) {
+      if (config != null) {
+        return new PacketLimiterConfig(
+            config.getIntOrElse("interval", DEFAULT.interval()),
+            config.getIntOrElse("packets-per-second", DEFAULT.pps()),
+            config.getIntOrElse("bytes-per-second", DEFAULT.bytes())
+        );
+      } else {
+        return DEFAULT;
+      }
     }
   }
 
@@ -2566,10 +2400,6 @@ public final class VelocityConfiguration implements ProxyConfig {
    */
   public static final class Redis {
 
-    /**
-     * Whether Redis support is enabled.
-     * If true, Velocity will attempt to connect to a Redis server for multi-proxy coordination.
-     */
     @Expose
     private boolean enabled;
 
@@ -2641,11 +2471,6 @@ public final class VelocityConfiguration implements ProxyConfig {
       }
     }
 
-    /**
-     * Returns whether Redis integration is enabled.
-     *
-     * @return {@code true} if Redis is enabled, {@code false} otherwise
-     */
     public boolean isEnabled() {
       return enabled;
     }
@@ -2658,6 +2483,7 @@ public final class VelocityConfiguration implements ProxyConfig {
     public String getHost() {
       return host;
     }
+
 
     /**
      * Gets the Redis server port.
@@ -2700,6 +2526,7 @@ public final class VelocityConfiguration implements ProxyConfig {
      *
      * @return the maximum number of connections
      */
+    @Deprecated(forRemoval = true)
     public int getMaxConcurrentConnections() {
       return maxConcurrentConnections;
     }
@@ -2733,9 +2560,6 @@ public final class VelocityConfiguration implements ProxyConfig {
    */
   public static final class Queue {
 
-    /**
-     * Whether the queue system is enabled.
-     */
     @Expose
     private boolean enabled;
 
@@ -2833,6 +2657,22 @@ public final class VelocityConfiguration implements ProxyConfig {
      */
     private List<String> bannedReason;
 
+    /**
+     * A map of key-value server pairs for automatic queuing.
+     */
+    private Map<String, List<String>> autoQueueServers;
+
+    /**
+     * The name of the server players are moved to when they enter any queue.
+     * Mutually exclusive with auto-queue-servers.
+     */
+    private String queueServer;
+
+    /**
+     * A list of server queues a player is automatically entered into on their first proxy join.
+     */
+    private List<String> queueOnJoinServers;
+
     private Queue(final CommentedConfig config) {
       if (config == null) {
         return;
@@ -2844,7 +2684,7 @@ public final class VelocityConfiguration implements ProxyConfig {
       this.sendDelay = config.getOrElse("send-delay", 1.0);
       this.queueDelay = config.getOrElse("queue-delay", 0.0);
       this.messageDelay = config.getOrElse("message-delay", 1.0);
-      this.backendPingInterval = config.getOrElse("backend-ping-interval", 1.0);
+      this.backendPingInterval = config.getOrElse("backend-ping-interval", 5.0);
       this.maxSendRetries = config.getOrElse("max-send-retries", 10);
       this.removePlayerOnServerSwitch = config.getOrElse("remove-player-on-server-switch", true);
       this.forwardKickReason = config.getOrElse("forward-kick-reason", true);
@@ -2855,6 +2695,49 @@ public final class VelocityConfiguration implements ProxyConfig {
       this.queueAdminAliases = config.getOrElse("queue-admin-aliases", new ArrayList<>());
       this.masterProxyIds = config.getOrElse("master-proxy-ids", new ArrayList<>());
       this.bannedReason = config.getOrElse("banned-reason", new ArrayList<>());
+      this.queueServer = config.getOrElse("queue-server", "");
+      this.queueOnJoinServers = parseQueueOnJoinServers(config.get("queue-on-join"));
+      this.autoQueueServers = parseAutoQueueServers(config.get("auto-queue-servers"));
+
+      if (!this.queueServer.isEmpty() && !this.autoQueueServers.isEmpty()) {
+        LOGGER.warn("Both 'queue-server' and 'auto-queue-servers' are configured in [queue]. "
+            + "These features are mutually exclusive; 'auto-queue-servers' will be ignored.");
+      }
+    }
+
+    private Map<String, List<String>> parseAutoQueueServers(CommentedConfig config) {
+      if (config == null) {
+        return ImmutableMap.of();
+      }
+      Map<String, List<String>> autoQueueServers = new HashMap<>();
+      for (UnmodifiableConfig.Entry entry : config.entrySet()) {
+        String key = entry.getKey();
+
+        if (entry.getValue() instanceof String) {
+          String target = entry.getValue();
+          autoQueueServers.put(key, ImmutableList.of(target));
+        } else if (entry.getValue() instanceof List) {
+          List<String> targets = entry.getValue();
+          autoQueueServers.put(key, ImmutableList.copyOf(targets));
+        } else {
+          LOGGER.warn("Invalid value of type {} in auto queue servers!", entry.getValue().getClass());
+        }
+      }
+
+      return ImmutableMap.copyOf(autoQueueServers);
+    }
+
+    private List<String> parseQueueOnJoinServers(Object raw) {
+      if (raw instanceof String s) {
+        return s.isEmpty() ? ImmutableList.of() : ImmutableList.of(s);
+      } else if (raw instanceof List<?> list) {
+        return list.stream()
+            .filter(e -> e instanceof String)
+            .map(e -> (String) e)
+            .filter(s -> !s.isEmpty())
+            .collect(ImmutableList.toImmutableList());
+      }
+      return ImmutableList.of();
     }
 
     /**
@@ -3011,6 +2894,34 @@ public final class VelocityConfiguration implements ProxyConfig {
       return masterProxyIds;
     }
 
+    /**
+     * Gets a map of key-value server name pairs for auto-queueing.
+     *
+     * @return a map of key-value server name pairs.
+     */
+    public Map<String, List<String>> getAutoQueueServers() {
+      return autoQueueServers;
+    }
+
+    /**
+     * Gets the name of the server players are moved to when they enter any queue.
+     * Empty string means disabled.
+     *
+     * @return the queue server name, or an empty string if not configured
+     */
+    public String getQueueServer() {
+      return queueServer == null ? "" : queueServer;
+    }
+
+    /**
+     * Gets the list of server queues a player is automatically entered into on their first proxy join.
+     *
+     * @return list of server names, or an empty list if not configured
+     */
+    public List<String> getQueueOnJoinServers() {
+      return queueOnJoinServers == null ? ImmutableList.of() : queueOnJoinServers;
+    }
+
     @Override
     public String toString() {
       return "Queue{"
@@ -3027,6 +2938,9 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", noQueueServers=" + noQueueServers
           + ", overrideBungeeMessaging=" + overrideBungeeMessaging
           + ", leaveQueueAliases=" + leaveQueueAliases
+          + ", autoQueueServers=" + autoQueueServers
+          + ", queueServer=" + queueServer
+          + ", queueOnJoinServers=" + queueOnJoinServers
           + ", queueAdminAliases=" + queueAdminAliases
           + ", masterProxyIds=" + masterProxyIds
           + ", bannedReason=" + bannedReason
@@ -3034,65 +2948,53 @@ public final class VelocityConfiguration implements ProxyConfig {
     }
   }
 
-  /**
-   * Configuration for secrets.
-   */
-  public static class Secrets {
 
-    private Map<String, String> secrets = ImmutableMap.of(
-        "lobby", "secret1",
-        "factions", "secret2",
-        "minigames", "secret3"
-    );
+  private net.kyori.adventure.text.Component buildAlignedMotd() {
+    net.kyori.adventure.text.minimessage.MiniMessage miniMessage =
+        net.kyori.adventure.text.minimessage.MiniMessage.miniMessage();
 
-    private Secrets() {
+    net.kyori.adventure.text.Component line1 = buildAlignedLine(motdLine1, motdLine1Alignment, miniMessage);
+    net.kyori.adventure.text.Component line2 = buildAlignedLine(motdLine2, motdLine2Alignment, miniMessage);
+
+    if (motdLine2.isEmpty()) {
+      return line1;
+    }
+    return line1.append(net.kyori.adventure.text.Component.newline()).append(line2);
+  }
+
+  private net.kyori.adventure.text.Component buildAlignedLine(
+      String rawText,
+      String alignment,
+      net.kyori.adventure.text.minimessage.MiniMessage miniMessage
+  ) {
+    if (rawText == null || rawText.isEmpty()) {
+      return net.kyori.adventure.text.Component.empty();
     }
 
-    // Legacy constructor
-    /**
-     * Creates a new instance from a legacy secret string.
-     *
-     * @param legacySecret the legacy secret
-     */
-    public Secrets(String legacySecret) {
-      if (legacySecret != null && !legacySecret.isEmpty()) {
-        this.secrets = ImmutableMap.of("lobby", legacySecret);
-      } else {
-        this.secrets = ImmutableMap.of();
-      }
+    net.kyori.adventure.text.Component parsed = miniMessage.deserialize(rawText);
+    if (alignment == null || alignment.equalsIgnoreCase("left")) {
+      return parsed;
     }
 
-    private Secrets(CommentedConfig config) {
-      if (config != null) {
-        Map<String, String> secrets = new HashMap<>();
-        for (UnmodifiableConfig.Entry entry : config.entrySet()) {
-          if (entry.getValue() instanceof String) {
-            secrets.put(entry.getKey(), entry.getValue());
-          } else {
-            if (!entry.getKey().equalsIgnoreCase("try")) {
-              throw new IllegalArgumentException(
-                  "Server entry " + entry.getKey() + " is not a string!");
-            }
-          }
-        }
-        this.secrets = ImmutableMap.copyOf(secrets);
-      }
+    // Minecraft MOTD uses ~45 visible chars per line (pixel-width based, this is an approximation)
+    int targetLength = 45;
+    String plainText = miniMessage.stripTags(rawText);
+    int currentLength = plainText.length();
+
+    if (currentLength >= targetLength) {
+      return parsed;
     }
 
-    public Map<String, String> getSecrets() {
-      return secrets;
+    int diff = targetLength - currentLength;
+    String spaces;
+    if (alignment.equalsIgnoreCase("center")) {
+      spaces = " ".repeat(diff / 2);
+    } else if (alignment.equalsIgnoreCase("right")) {
+      spaces = " ".repeat(diff);
+    } else {
+      return parsed;
     }
 
-    public void setSecrets(Map<String, String> secrets) {
-      this.secrets = secrets;
-    }
-
-
-    @Override
-    public String toString() {
-      return "Secrets{"
-          + "secrets=" + secrets
-          + '}';
-    }
+    return net.kyori.adventure.text.Component.text(spaces).append(parsed);
   }
 }
