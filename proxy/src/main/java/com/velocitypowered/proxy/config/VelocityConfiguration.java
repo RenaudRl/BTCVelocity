@@ -2675,10 +2675,26 @@ public final class VelocityConfiguration implements ProxyConfig {
       this.useSsl = config.getOrElse("use-ssl", false);
       this.maxPoolSize = config.getOrElse("max-pool-size", 10);
       this.minIdle = config.getOrElse("min-idle", 2);
-      this.connectionTimeout = config.getOrElse("connection-timeout", 5000L);
-      this.idleTimeout = config.getOrElse("idle-timeout", 300000L);
-      this.maxLifetime = config.getOrElse("max-lifetime", 600000L);
+      this.connectionTimeout = getLong(config, "connection-timeout", 5000L);
+      this.idleTimeout = getLong(config, "idle-timeout", 300000L);
+      this.maxLifetime = getLong(config, "max-lifetime", 600000L);
       this.jdbcUrl = config.getOrElse("jdbc-url", null);
+    }
+
+    /**
+     * Reads a numeric config value as a {@code long}. TOML integers that fit in an {@code int}
+     * are decoded as {@link Integer} by the config library, so a plain {@code getOrElse} with a
+     * {@code long} default would throw {@link ClassCastException}. This normalizes any
+     * {@link Number} to {@code long} and falls back to {@code def} when absent.
+     *
+     * @param config the config section
+     * @param path the value key
+     * @param def the default value when absent or not numeric
+     * @return the value as a long
+     */
+    private static long getLong(final CommentedConfig config, final String path, final long def) {
+      final Object value = config.get(path);
+      return value instanceof Number number ? number.longValue() : def;
     }
 
     public boolean isEnabled() {
