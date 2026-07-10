@@ -172,7 +172,7 @@ dependencies {
 </dependencies>
 ```
 
-- **Javadoc**: https://borntocraftstudio.net/repo/javadoc/velocity/
+- **Javadoc**: https://borntocraftstudio.net/public/repo/javadoc/velocity/
 - The same repository also hosts the backend API `dev.btc.core:api` (BTC-CORE).
 - Repo layout and republish instructions: [`repo/README.md`](repo/README.md).
 
