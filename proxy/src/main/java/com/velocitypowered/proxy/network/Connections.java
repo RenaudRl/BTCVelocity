@@ -30,6 +30,18 @@ public final class Connections {
 
   public static final String COMPRESSION_ENCODER = "compression-encoder";
 
+  /**
+   * Handler that records the compressed size of inbound buffers before decompression.
+   * Sits before {@link #COMPRESSION_DECODER} in the pipeline.
+   */
+  public static final String COMPRESSION_RATIO_MONITOR = "compression-ratio-monitor";
+
+  /**
+   * Handler that enforces decompression-bomb protections after decompression.
+   * Sits after {@link #COMPRESSION_DECODER} in the pipeline.
+   */
+  public static final String DECOMPRESSION_BOMB_HANDLER = "decompression-bomb-handler";
+
   public static final String FLOW_HANDLER = "flow-handler";
 
   public static final String FRAME_DECODER = "frame-decoder";

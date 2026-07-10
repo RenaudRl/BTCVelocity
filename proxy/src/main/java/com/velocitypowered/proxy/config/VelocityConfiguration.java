@@ -24,7 +24,7 @@ import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.annotations.Expose;
-import com.velocityctd.proxy.config.migration.CtdConfigMigrations;
+import com.btcvelocity.proxy.config.migration.BtcConfigMigrations;
 import com.velocitypowered.api.proxy.config.BackendServerConfig;
 import com.velocitypowered.api.proxy.config.ProxyConfig;
 import com.velocitypowered.api.proxy.server.PlayerInfoForwarding;
@@ -161,11 +161,20 @@ public final class VelocityConfiguration implements ProxyConfig {
   @Expose
   private final Redis redis;
 
+  private final @Nullable Postgres postgres;
+
   /**
    * Queue configuration used for handling players attempting to connect to servers.
    */
   @Expose
   private final Queue queue;
+
+  /**
+   * Security configuration for anti-decompression-bomb protection and other network-layer
+   * safeguards.
+   */
+  @Expose
+  private final Security security;
 
   @Expose
   private boolean enablePlayerAddressLogging = true;
@@ -278,7 +287,9 @@ public final class VelocityConfiguration implements ProxyConfig {
                                 final boolean enforceChatSigning, final boolean preventsChatReports, final boolean translateHeaderFooter,
                                 final boolean logMinimumVersion, final String minimumVersion,
                                 final String maximumVersion,
-                                final Redis redis, final Queue queue, final Map<String, List<String>> slashServers,
+                                final Redis redis, final @Nullable Postgres postgres,
+                                final Queue queue, final Security security,
+                                final Map<String, List<String>> slashServers,
                                 final Map<String, List<ServerLink>> serverLinks, final List<ProxyAddress> proxyAddresses,
                                 final DynamicProxyFilterMode dynamicProxyFilter, final Map<String, Integer> playerCaps) {
     this.bind = bind;
@@ -319,7 +330,9 @@ public final class VelocityConfiguration implements ProxyConfig {
     this.minimumVersion = minimumVersion;
     this.maximumVersion = maximumVersion;
     this.redis = redis;
+    this.postgres = postgres;
     this.queue = queue;
+    this.security = security;
     this.slashServers = slashServers;
     this.serverLinks = serverLinks;
     this.proxyAddresses = proxyAddresses;
@@ -920,12 +933,33 @@ public final class VelocityConfiguration implements ProxyConfig {
   }
 
   /**
+   * Gets the PostgreSQL configuration block.
+   *
+   * @return the {@link Postgres} configuration, or {@code null} if not enabled
+   */
+  public @Nullable Postgres getPostgres() {
+    return postgres;
+  }
+
+  /**
    * Gets the Queue configuration block.
    *
    * @return the {@link Queue} configuration
    */
   public @NotNull Queue getQueue() {
     return queue;
+  }
+
+  /**
+   * Gets the Security configuration block.
+   *
+   * <p>This block controls anti-decompression-bomb protection and other network-layer security
+   * safeguards.</p>
+   *
+   * @return the {@link Security} configuration
+   */
+  public @NotNull Security getSecurity() {
+    return security;
   }
 
   /**
@@ -1080,7 +1114,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           new TransferIntegrationMigration()
       ));
 
-      migrations.addAll(CtdConfigMigrations.createCtdMigrations());
+      migrations.addAll(BtcConfigMigrations.createBtcMigrations());
 
       for (final ConfigurationMigration migration : migrations) {
         if (migration.shouldMigrate(config)) {
@@ -1153,7 +1187,9 @@ public final class VelocityConfiguration implements ProxyConfig {
       final CommentedConfig queryConfig = config.get("query");
       final CommentedConfig metricsConfig = config.get("metrics");
       final CommentedConfig redisConfig = config.get("redis");
+      final CommentedConfig postgresConfig = config.get("postgresql");
       final CommentedConfig queueConfig = config.get("queue");
+      final CommentedConfig securityConfig = config.get("security");
       final CommentedConfig serverLinksConfig = config.get("server-links");
       final CommentedConfig proxyAddressesConfig = config.get("proxy-addresses");
       final CommentedConfig playerCapsConfig = config.get("playercaps");
@@ -1305,7 +1341,9 @@ public final class VelocityConfiguration implements ProxyConfig {
           minimumVersion,
           maximumVersion,
           new Redis(redisConfig),
+          new Postgres(postgresConfig),
           new Queue(queueConfig),
+          new Security(securityConfig),
           slashServers,
           links,
           addresses,
@@ -2404,6 +2442,14 @@ public final class VelocityConfiguration implements ProxyConfig {
     private boolean enabled;
 
     /**
+     * The backend type to use for the cache/pub/sub layer.
+     * Supported values: "redis", "valkey", "dragonfly".
+     * All three are protocol-compatible with Lettuce.
+     */
+    @Expose
+    private String backend = "redis";
+
+    /**
      * The hostname or IP address of the Redis server to connect to.
      */
     @Expose
@@ -2453,6 +2499,7 @@ public final class VelocityConfiguration implements ProxyConfig {
       }
 
       this.enabled = config.getOrElse("enabled", false);
+      this.backend = config.getOrElse("backend", "redis");
       this.host = config.getOrElse("host", "127.0.0.1");
       this.port = config.getOrElse("port", 6379);
       this.username = config.getOrElse("username", "");
@@ -2473,6 +2520,15 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     public boolean isEnabled() {
       return enabled;
+    }
+
+    /**
+     * Gets the backend type for the cache/pub/sub layer.
+     *
+     * @return the backend type: "redis", "valkey", or "dragonfly"
+     */
+    public String getBackend() {
+      return backend;
     }
 
     /**
@@ -2545,12 +2601,152 @@ public final class VelocityConfiguration implements ProxyConfig {
     public String toString() {
       return "Redis{"
           + "enabled=" + enabled
+          + ", backend=" + backend
           + ", host=" + host
           + ", port=" + port
           + ", username=" + username
           // password excluded for security
           + ", useSsl=" + useSsl
           + ", maxConcurrentConnections=" + maxConcurrentConnections
+          + '}';
+    }
+  }
+
+  /**
+   * PostgreSQL configuration data.
+   *
+   * <p>When enabled, BTC Velocity will use PostgreSQL as a persistent storage
+   * backend for player data, proxy state, and cross-server synchronization.
+   * This is an alternative to MySQL and provides better performance for
+   * write-heavy workloads.</p>
+   */
+  public static final class Postgres {
+
+    @Expose
+    private boolean enabled = false;
+
+    @Expose
+    private String host = "127.0.0.1";
+
+    @Expose
+    private int port = 5432;
+
+    @Expose
+    private String database = "btcvelocity";
+
+    @Expose
+    private String username = "btcvelocity";
+
+    @Expose
+    private String password = "";
+
+    @Expose
+    private boolean useSsl = false;
+
+    @Expose
+    private int maxPoolSize = 10;
+
+    @Expose
+    private int minIdle = 2;
+
+    @Expose
+    private long connectionTimeout = 5000;
+
+    @Expose
+    private long idleTimeout = 300000;
+
+    @Expose
+    private long maxLifetime = 600000;
+
+    @Expose
+    private @Nullable String jdbcUrl = null;
+
+    private Postgres(final CommentedConfig config) {
+      if (config == null) {
+        return;
+      }
+
+      this.enabled = config.getOrElse("enabled", false);
+      this.host = config.getOrElse("host", "127.0.0.1");
+      this.port = config.getOrElse("port", 5432);
+      this.database = config.getOrElse("database", "btcvelocity");
+      this.username = config.getOrElse("username", "btcvelocity");
+      this.password = config.getOrElse("password", "");
+      this.useSsl = config.getOrElse("use-ssl", false);
+      this.maxPoolSize = config.getOrElse("max-pool-size", 10);
+      this.minIdle = config.getOrElse("min-idle", 2);
+      this.connectionTimeout = config.getOrElse("connection-timeout", 5000L);
+      this.idleTimeout = config.getOrElse("idle-timeout", 300000L);
+      this.maxLifetime = config.getOrElse("max-lifetime", 600000L);
+      this.jdbcUrl = config.getOrElse("jdbc-url", null);
+    }
+
+    public boolean isEnabled() {
+      return enabled;
+    }
+
+    public String getHost() {
+      return host;
+    }
+
+    public int getPort() {
+      return port;
+    }
+
+    public String getDatabase() {
+      return database;
+    }
+
+    public String getUsername() {
+      return username;
+    }
+
+    public String getPassword() {
+      return password;
+    }
+
+    public boolean isUseSsl() {
+      return useSsl;
+    }
+
+    public int getMaxPoolSize() {
+      return maxPoolSize;
+    }
+
+    public int getMinIdle() {
+      return minIdle;
+    }
+
+    public long getConnectionTimeout() {
+      return connectionTimeout;
+    }
+
+    public long getIdleTimeout() {
+      return idleTimeout;
+    }
+
+    public long getMaxLifetime() {
+      return maxLifetime;
+    }
+
+    public @Nullable String getJdbcUrl() {
+      return jdbcUrl;
+    }
+
+    @Override
+    public String toString() {
+      return "Postgres{"
+          + "enabled=" + enabled
+          + ", host='" + host + '\''
+          + ", port=" + port
+          + ", database='" + database + '\''
+          + ", username='" + username + '\''
+          + ", useSsl=" + useSsl
+          + ", maxPoolSize=" + maxPoolSize
+          + ", minIdle=" + minIdle
+          + ", connectionTimeout=" + connectionTimeout
+          + ", idleTimeout=" + idleTimeout
+          + ", maxLifetime=" + maxLifetime
           + '}';
     }
   }
@@ -2598,6 +2794,12 @@ public final class VelocityConfiguration implements ProxyConfig {
      */
     @Expose
     private double backendPingInterval;
+
+    /**
+     * The maximum number of players to transfer from a single queue per tick.
+     */
+    @Expose
+    private int maxBatchSize;
 
     /**
      * The maximum number of times the proxy should attempt to send a player before failing.
@@ -2685,6 +2887,7 @@ public final class VelocityConfiguration implements ProxyConfig {
       this.queueDelay = config.getOrElse("queue-delay", 0.0);
       this.messageDelay = config.getOrElse("message-delay", 1.0);
       this.backendPingInterval = config.getOrElse("backend-ping-interval", 5.0);
+      this.maxBatchSize = config.getOrElse("max-batch-size", 5);
       this.maxSendRetries = config.getOrElse("max-send-retries", 10);
       this.removePlayerOnServerSwitch = config.getOrElse("remove-player-on-server-switch", true);
       this.forwardKickReason = config.getOrElse("forward-kick-reason", true);
@@ -2840,6 +3043,15 @@ public final class VelocityConfiguration implements ProxyConfig {
     }
 
     /**
+     * Gets the maximum number of players transferred from a single queue per tick.
+     *
+     * @return the maximum batch size
+     */
+    public int getMaxBatchSize() {
+      return maxBatchSize;
+    }
+
+    /**
      * Returns whether players are allowed to join multiple queues simultaneously.
      *
      * @return {@code true} if multi-queue is enabled, {@code false} otherwise
@@ -2932,6 +3144,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", maxSendRetries=" + maxSendRetries
           + ", messageDelay=" + messageDelay
           + ", backendPingInterval=" + backendPingInterval
+          + ", maxBatchSize=" + maxBatchSize
           + ", sendDelay=" + sendDelay
           + ", queueDelay=" + queueDelay
           + ", allowMultiQueue=" + allowMultiQueue
@@ -2944,6 +3157,124 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", queueAdminAliases=" + queueAdminAliases
           + ", masterProxyIds=" + masterProxyIds
           + ", bannedReason=" + bannedReason
+          + '}';
+    }
+  }
+
+  /**
+   * Security configuration for anti-decompression-bomb protection and other network-layer
+   * safeguards.
+   *
+   * <p>This configuration block controls the {@code DecompressionBombHandler} and
+   * {@code CompressionRatioMonitor} Netty handlers that protect the proxy from malicious
+   * clients or backend servers sending small compressed payloads that expand into enormous
+   * uncompressed buffers (decompression bombs).</p>
+   */
+  public static final class Security {
+
+    /**
+     * Whether anti-decompression-bomb protection is enabled. When {@code true}, the
+     * {@code CompressionRatioMonitor} and {@code DecompressionBombHandler} are inserted into
+     * the Netty pipeline whenever compression is enabled on a connection.
+     */
+    @Expose
+    private boolean enabled;
+
+    /**
+     * The maximum allowed decompressed payload size, in bytes. A decompressed buffer larger
+     * than this triggers a violation. Default: 8&nbsp;MiB (8&thinsp;388&thinsp;608).
+     */
+    @Expose
+    private int maxDecompressedSize;
+
+    /**
+     * The maximum allowed compression ratio (decompressed&nbsp;:&nbsp;compressed). A ratio
+     * exceeding this value triggers a violation. Default: 100 (i.e., 100:1).
+     */
+    @Expose
+    private int maxCompressionRatio;
+
+    /**
+     * The number of violations tolerated before the offending connection is closed.
+     * Default: 3.
+     */
+    @Expose
+    private int maxViolations;
+
+    /**
+     * The default maximum decompressed size (8&nbsp;MiB).
+     */
+    private static final int DEFAULT_MAX_DECOMPRESSED_SIZE = 8 * 1024 * 1024;
+
+    /**
+     * The default maximum compression ratio.
+     */
+    private static final int DEFAULT_MAX_COMPRESSION_RATIO = 100;
+
+    /**
+     * The default maximum number of violations.
+     */
+    private static final int DEFAULT_MAX_VIOLATIONS = 3;
+
+    private Security(final CommentedConfig config) {
+      if (config == null) {
+        // Apply defaults when the [security] section is absent from the config file.
+        this.enabled = true;
+        this.maxDecompressedSize = DEFAULT_MAX_DECOMPRESSED_SIZE;
+        this.maxCompressionRatio = DEFAULT_MAX_COMPRESSION_RATIO;
+        this.maxViolations = DEFAULT_MAX_VIOLATIONS;
+        return;
+      }
+
+      this.enabled = config.getOrElse("enabled", true);
+      this.maxDecompressedSize = config.getOrElse("max-decompressed-size", DEFAULT_MAX_DECOMPRESSED_SIZE);
+      this.maxCompressionRatio = config.getOrElse("max-compression-ratio", DEFAULT_MAX_COMPRESSION_RATIO);
+      this.maxViolations = config.getOrElse("max-violations", DEFAULT_MAX_VIOLATIONS);
+    }
+
+    /**
+     * Gets whether anti-decompression-bomb protection is enabled.
+     *
+     * @return {@code true} if the protection handlers should be wired into the pipeline
+     */
+    public boolean isEnabled() {
+      return enabled;
+    }
+
+    /**
+     * Gets the maximum allowed decompressed payload size.
+     *
+     * @return the maximum decompressed size in bytes
+     */
+    public int getMaxDecompressedSize() {
+      return maxDecompressedSize;
+    }
+
+    /**
+     * Gets the maximum allowed compression ratio.
+     *
+     * @return the maximum compression ratio (decompressed:compressed)
+     */
+    public int getMaxCompressionRatio() {
+      return maxCompressionRatio;
+    }
+
+    /**
+     * Gets the maximum number of violations before a connection is closed.
+     *
+     * @return the maximum violation count
+     */
+    public int getMaxViolations() {
+      return maxViolations;
+    }
+
+    @Override
+    public String toString() {
+      return "Security{"
+          + "enabled=" + enabled
+          + ", maxDecompressedSize=" + maxDecompressedSize
+          + ", maxCompressionRatio=" + maxCompressionRatio
+          + ", maxViolations=" + maxViolations
           + '}';
     }
   }

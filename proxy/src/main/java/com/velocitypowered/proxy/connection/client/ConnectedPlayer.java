@@ -17,7 +17,7 @@
 
 package com.velocitypowered.proxy.connection.client;
 
-import static com.velocityctd.proxy.permission.PermissionResolverAdapterFactory.createPermissionResolverAdapter;
+import static com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory.createPermissionResolverAdapter;
 import static com.velocitypowered.api.proxy.ConnectionRequestBuilder.Status.ALREADY_CONNECTED;
 import static com.velocitypowered.proxy.connection.util.ConnectionRequestResults.plainResult;
 import static java.util.Collections.emptyList;
@@ -26,10 +26,10 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 
 import com.google.common.base.Preconditions;
 import com.google.gson.JsonObject;
-import com.velocityctd.api.permission.PermissionResolver;
-import com.velocityctd.api.queue.QueueState;
-import com.velocityctd.proxy.permission.PermissionUtils;
-import com.velocityctd.proxy.queue.VelocityQueue;
+import com.btcvelocity.api.permission.PermissionResolver;
+import com.btcvelocity.api.queue.QueueState;
+import com.btcvelocity.proxy.permission.PermissionUtils;
+import com.btcvelocity.proxy.queue.VelocityQueue;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.DisconnectEvent.LoginStatus;
 import com.velocitypowered.api.event.connection.PreTransferEvent;

@@ -31,7 +31,8 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 
 public class PluginMessagePacket extends DeferredByteBufHolder implements MinecraftPacket {
 
-  private static final int MAX_PAYLOAD_SIZE = Integer.getInteger("velocity.max-plugin-message-payload-size", 32767);
+  // BTC: increased from 32767 (32KB) to 2097152 (2MB) for Axiom large payload support
+  private static final int MAX_PAYLOAD_SIZE = Integer.getInteger("velocity.max-plugin-message-payload-size", 2097152);
 
   private @Nullable String channel;
 

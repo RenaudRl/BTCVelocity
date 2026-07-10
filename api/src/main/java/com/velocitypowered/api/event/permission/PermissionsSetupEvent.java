@@ -7,8 +7,9 @@
 
 package com.velocitypowered.api.event.permission;
 
+import com.btcvelocity.api.permission.PermissionResolver;
+
 import com.google.common.base.Preconditions;
-import com.velocityctd.api.permission.PermissionResolver;
 import com.velocitypowered.api.event.annotation.AwaitingEvent;
 import com.velocitypowered.api.permission.PermissionFunction;
 import com.velocitypowered.api.permission.PermissionProvider;

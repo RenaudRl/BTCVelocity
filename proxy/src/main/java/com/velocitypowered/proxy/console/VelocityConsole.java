@@ -17,9 +17,9 @@
 
 package com.velocitypowered.proxy.console;
 
-import static com.velocityctd.proxy.permission.PermissionResolverAdapterFactory.createPermissionResolverAdapter;
+import static com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory.createPermissionResolverAdapter;
 
-import com.velocityctd.api.permission.PermissionResolver;
+import com.btcvelocity.api.permission.PermissionResolver;
 import com.velocitypowered.api.event.permission.PermissionsSetupEvent;
 import com.velocitypowered.api.permission.PermissionFunction;
 import com.velocitypowered.api.permission.PermissionProvider;

@@ -22,28 +22,34 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.velocityctd.proxy.cluster.VelocityClusterPlayerService;
-import com.velocityctd.proxy.cluster.VelocityClusterProxyService;
-import com.velocityctd.proxy.cluster.local.LocalClusterPlayerService;
-import com.velocityctd.proxy.cluster.local.LocalClusterProxyService;
-import com.velocityctd.proxy.cluster.redis.RedisClusterPlayerService;
-import com.velocityctd.proxy.cluster.redis.RedisClusterProxyService;
-import com.velocityctd.proxy.command.builtin.AlertCommand;
-import com.velocityctd.proxy.command.builtin.AlertRawCommand;
-import com.velocityctd.proxy.command.builtin.FindCommand;
-import com.velocityctd.proxy.command.builtin.GipCommand;
-import com.velocityctd.proxy.command.builtin.GkickCommand;
-import com.velocityctd.proxy.command.builtin.HubCommand;
-import com.velocityctd.proxy.command.builtin.LeaveQueueCommand;
-import com.velocityctd.proxy.command.builtin.PingCommand;
-import com.velocityctd.proxy.command.builtin.PlistCommand;
-import com.velocityctd.proxy.command.builtin.ProxyAliasCommand;
-import com.velocityctd.proxy.command.builtin.QueueAdminCommand;
-import com.velocityctd.proxy.command.builtin.SlashServerCommand;
-import com.velocityctd.proxy.command.builtin.TransferCommand;
-import com.velocityctd.proxy.queue.RedisVelocityQueueManager;
-import com.velocityctd.proxy.queue.VelocityQueueManager;
-import com.velocityctd.proxy.redis.VelocityRedis;
+import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
+import com.btcvelocity.proxy.bridge.VelocityBridgeChannel;
+import com.btcvelocity.proxy.bridge.WorldRegistry;
+import com.btcvelocity.proxy.cluster.VelocityClusterPlayerService;
+import com.btcvelocity.proxy.cluster.VelocityClusterProxyService;
+import com.btcvelocity.proxy.cluster.local.LocalClusterPlayerService;
+import com.btcvelocity.proxy.cluster.local.LocalClusterProxyService;
+import com.btcvelocity.proxy.cluster.redis.RedisClusterPlayerService;
+import com.btcvelocity.proxy.cluster.redis.RedisClusterProxyService;
+import com.btcvelocity.proxy.command.builtin.AlertCommand;
+import com.btcvelocity.proxy.command.builtin.AlertRawCommand;
+import com.btcvelocity.proxy.command.builtin.FindCommand;
+import com.btcvelocity.proxy.command.builtin.GipCommand;
+import com.btcvelocity.proxy.command.builtin.GkickCommand;
+import com.btcvelocity.proxy.command.builtin.HubCommand;
+import com.btcvelocity.proxy.command.builtin.LeaveQueueCommand;
+import com.btcvelocity.proxy.command.builtin.PingCommand;
+import com.btcvelocity.proxy.command.builtin.PlistCommand;
+import com.btcvelocity.proxy.command.builtin.ProxyAliasCommand;
+import com.btcvelocity.proxy.command.builtin.QueueAdminCommand;
+import com.btcvelocity.proxy.command.builtin.SlashServerCommand;
+import com.btcvelocity.proxy.command.builtin.TransferCommand;
+import com.btcvelocity.proxy.queue.RedisVelocityQueueManager;
+import com.btcvelocity.proxy.queue.VelocityQueueManager;
+import com.btcvelocity.proxy.redis.VelocityRedis;
+import com.btcvelocity.proxy.storage.PostgresConfiguration;
+import com.btcvelocity.proxy.storage.PostgresPool;
+import com.btcvelocity.proxy.storage.VelocityStorageService;
 import com.velocitypowered.api.command.BrigadierCommand;
 import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
@@ -107,6 +113,7 @@ import java.net.http.HttpClient;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -264,6 +271,35 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    */
   private @MonotonicNonNull VelocityClusterProxyService clusterProxyService;
 
+  /**
+   * The PostgreSQL connection pool, initialized when PostgreSQL storage
+   * is enabled in the configuration.
+   */
+  private @MonotonicNonNull PostgresPool postgresPool;
+
+  /**
+   * The storage service backed by PostgreSQL, initialized when
+   * PostgreSQL storage is enabled in the configuration.
+   */
+  private @MonotonicNonNull VelocityStorageService storageService;
+
+  /**
+   * The {@code btc:bridge} channel service used to exchange messages between the proxy
+   * and its backend servers.
+   */
+  private @MonotonicNonNull VelocityBridgeChannel bridgeChannel;
+
+  /**
+   * Registry of the latest {@link com.btcvelocity.api.bridge.BridgeMessage.Health} reports
+   * received from each backend via the bridge channel.
+   */
+  private @MonotonicNonNull BackendHealthRegistry backendHealthRegistry;
+
+  /**
+   * Registry of the worlds currently loaded on each backend, tracked via the bridge channel.
+   */
+  private @MonotonicNonNull WorldRegistry worldRegistry;
+
   VelocityServer(final ProxyOptions options) {
     pluginManager = new VelocityPluginManager(this);
     eventManager = new VelocityEventManager(pluginManager);
@@ -303,6 +339,55 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    */
   public VelocityRedis getRedis() {
     return redis;
+  }
+
+  /**
+   * Returns the {@link PostgresPool} instance, or {@code null} if PostgreSQL
+   * storage is not enabled.
+   *
+   * @return the {@link PostgresPool} instance, or {@code null}
+   */
+  public @Nullable PostgresPool getPostgresPool() {
+    return postgresPool;
+  }
+
+  /**
+   * Returns the {@link VelocityStorageService} instance, or {@code null} if
+   * PostgreSQL storage is not enabled.
+   *
+   * @return the {@link VelocityStorageService} instance, or {@code null}
+   */
+  public @Nullable VelocityStorageService getStorageService() {
+    return storageService;
+  }
+
+  /**
+   * Returns the {@link VelocityBridgeChannel} used to exchange {@code btc:bridge} messages
+   * with backend servers.
+   *
+   * @return the bridge channel
+   */
+  public VelocityBridgeChannel getBridgeChannel() {
+    return bridgeChannel;
+  }
+
+  /**
+   * Returns the {@link BackendHealthRegistry} that stores the latest health report from
+   * each backend server.
+   *
+   * @return the backend health registry
+   */
+  public BackendHealthRegistry getBackendHealthRegistry() {
+    return backendHealthRegistry;
+  }
+
+  /**
+   * Returns the {@link WorldRegistry} that tracks which worlds are loaded on which backends.
+   *
+   * @return the world registry
+   */
+  public WorldRegistry getWorldRegistry() {
+    return worldRegistry;
   }
 
   @Override
@@ -466,6 +551,42 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         queueManager = new VelocityQueueManager(this);
       }
     }
+
+    // Initialize PostgreSQL storage if enabled
+    if (configuration.getPostgres() != null && configuration.getPostgres().isEnabled()) {
+      final VelocityConfiguration.Postgres pgConfig = configuration.getPostgres();
+      final PostgresConfiguration poolConfig = PostgresConfiguration.builder()
+          .host(pgConfig.getHost())
+          .port(pgConfig.getPort())
+          .database(pgConfig.getDatabase())
+          .username(pgConfig.getUsername())
+          .password(pgConfig.getPassword())
+          .useSsl(pgConfig.isUseSsl())
+          .maxPoolSize(pgConfig.getMaxPoolSize())
+          .minIdle(pgConfig.getMinIdle())
+          .connectionTimeout(pgConfig.getConnectionTimeout())
+          .idleTimeout(pgConfig.getIdleTimeout())
+          .maxLifetime(pgConfig.getMaxLifetime())
+          .jdbcUrl(pgConfig.getJdbcUrl())
+          .build();
+
+      postgresPool = new PostgresPool(poolConfig);
+      try {
+        postgresPool.initializeSchema();
+      } catch (SQLException e) {
+        throw new RuntimeException("Failed to initialize PostgreSQL schema", e);
+      }
+      storageService = new VelocityStorageService(postgresPool, this);
+      LOGGER.info("PostgreSQL storage backend enabled and initialized");
+    }
+
+    // Initialize the btc:bridge channel for proxy <-> backend messaging
+    bridgeChannel = new VelocityBridgeChannel(this);
+    backendHealthRegistry = new BackendHealthRegistry();
+    worldRegistry = new WorldRegistry();
+    bridgeChannel.registerListener(backendHealthRegistry::onHealth);
+    bridgeChannel.registerListener(worldRegistry::onWorldLoaded);
+    bridgeChannel.registerListener(worldRegistry::onWorldUnloaded);
 
     registerCommands();
 
@@ -748,7 +869,11 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     registerCommand(configuration.isGkickEnabled(), GkickCommand::new);
     registerCommand(configuration.isGipEnabled(), GipCommand::new);
     registerCommand(configuration.isTransferEnabled(), TransferCommand::new);
-    registerCommand(configuration.isGlistEnabled(), GlistCommand::new);
+    // In multi-proxy mode, /plist is a superset of /glist (adds proxy filtering).
+    // Avoid registering both simultaneously to prevent command overlap.
+    final boolean plistActive = configuration.isPlistEnabled()
+        && getClusterProxyService() != null && getClusterProxyService().isMultiProxy();
+    registerCommand(configuration.isGlistEnabled() && !plistActive, GlistCommand::new);
     registerCommand(configuration.isPlistEnabled(), PlistCommand::new);
     registerCommand(configuration.isPingEnabled(), PingCommand::new);
     registerCommand(configuration.isSendEnabled(), SendCommand::new);
@@ -980,9 +1105,25 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         this.queueManager.teardown();
       }
 
+      // Shut down the btc:bridge channel and its listeners
+      if (this.bridgeChannel != null) {
+        this.bridgeChannel.shutdown();
+      }
+      if (this.worldRegistry != null) {
+        this.worldRegistry.clear();
+      }
+
       // Disable Redis if we have it enabled
       if (this.configuration.getRedis().isEnabled()) {
         this.redis.shutdown();
+      }
+
+      // Shut down PostgreSQL storage if it is enabled
+      if (this.storageService != null) {
+        this.storageService.shutdown();
+      }
+      if (this.postgresPool != null) {
+        this.postgresPool.shutdown();
       }
 
       // Since we manually removed the shutdown hook, we need to handle the shutdown ourselves.

@@ -7,9 +7,10 @@
 
 package com.velocitypowered.api.proxy;
 
-import com.velocityctd.api.cluster.ClusterPlayerService;
-import com.velocityctd.api.cluster.ClusterProxyService;
-import com.velocityctd.api.queue.QueueManager;
+import com.btcvelocity.api.cluster.ClusterPlayerService;
+import com.btcvelocity.api.cluster.ClusterProxyService;
+import com.btcvelocity.api.queue.QueueManager;
+
 import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.event.EventManager;

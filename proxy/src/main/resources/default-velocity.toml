@@ -409,8 +409,15 @@ show-plugins = false
 # Should Redis be used to communicate between multiple Velocity proxies?
 enabled = false
 
+# The backend type for the cache/pub/sub layer.
+# Supported values: "redis", "valkey", "dragonfly".
+# All three are protocol-compatible — no code changes required, just switch the backend.
+# Recommendation: Use "valkey" for open-source purity, "dragonfly" for raw performance.
+backend = "redis"
+
 # What address, port, and other credentials should be used to link all Velocity functions to Redis?
 # Leave the username blank if you do not have a defined username for your Redis database.
+# For Dragonfly and Valkey, the connection parameters are identical to Redis.
 host = "127.0.0.1"
 port = 6379
 username = ""
@@ -429,6 +436,32 @@ max-concurrent-connections = 50
 #
 # Your server will not start if this is blank and Redis is on.
 proxy-id = ""
+
+[postgresql]
+# Should PostgreSQL be used as a persistent storage backend?
+# When enabled, BTC Velocity will use PostgreSQL for player data, proxy state,
+# and cross-server synchronization. This replaces or complements MySQL setups.
+# Recommended for production: PostgreSQL offers better concurrency and JSON support.
+enabled = false
+
+# Connection parameters
+host = "127.0.0.1"
+port = 5432
+database = "btcvelocity"
+username = "btcvelocity"
+password = ""
+use-ssl = false
+
+# Alternatively, provide a full JDBC URL (overrides the above parameters):
+# jdbc-url = "jdbc:postgresql://127.0.0.1:5432/btcvelocity?ssl=false&application_name=BTCVelocity"
+jdbc-url = ""
+
+# Connection pool settings (HikariCP)
+max-pool-size = 10
+min-idle = 2
+connection-timeout = 5000
+idle-timeout = 300000
+max-lifetime = 600000
 
 [queue]
 # Whether the queue system is enabled. This will fully unregister
@@ -481,6 +514,10 @@ message-delay = 1.0
 # How often to ping backend servers to check if they're online.
 backend-ping-interval = 5.0
 
+# The maximum number of players to transfer from a single queue per tick.
+# Higher values drain queues faster but may cause burst load on backend servers.
+max-batch-size = 5
+
 # The number tries should a user be sent to a server before it removes the user from a queue.
 max-send-retries = 10
 
@@ -526,6 +563,36 @@ override-bungee-messaging = true
 ]
 
 "factions-limbo" = "factions"
+
+[security]
+# Anti-decompression-bomb protection for the proxy.
+# A decompression bomb is a small compressed packet that expands into an enormous
+# uncompressed payload, consuming memory and CPU. This is a critical security
+# measure for any proxy exposed to the internet.
+#
+# When enabled, the proxy inserts two Netty handlers into every connection's
+# pipeline whenever compression is active:
+#   1. CompressionRatioMonitor — records the compressed size before decompression
+#   2. DecompressionBombHandler — checks the decompressed size and compression
+#      ratio after decompression, drops violating packets, and closes the
+#      connection after too many violations.
+enabled = true
+
+# The maximum allowed decompressed payload size, in bytes.
+# A decompressed buffer larger than this triggers a violation.
+# Default: 8388608 (8 MiB).
+max-decompressed-size = 8388608
+
+# The maximum allowed compression ratio (decompressed:compressed).
+# If a packet's decompressed size divided by its compressed size exceeds this
+# value, a violation is recorded. Default: 100 (100:1).
+# Lower values are stricter; higher values allow more expansion.
+max-compression-ratio = 100
+
+# The number of violations tolerated before the offending connection is closed.
+# Each violating packet is dropped (not forwarded), and after this many
+# violations the connection is terminated. Default: 3.
+max-violations = 3
 
 [playercaps]
 # This allows you to define the maximum amount of players that can be on any

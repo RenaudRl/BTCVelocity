@@ -7,7 +7,8 @@
 
 package com.velocitypowered.api.proxy.server;
 
-import com.velocityctd.api.queue.Queue;
+import com.btcvelocity.api.queue.Queue;
+
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.messages.ChannelMessageSink;
 import java.util.Collection;

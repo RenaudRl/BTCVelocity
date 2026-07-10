@@ -7,7 +7,8 @@
 
 package com.velocitypowered.api.permission;
 
-import com.velocityctd.api.permission.PermissionResolver;
+import com.btcvelocity.api.permission.PermissionResolver;
+
 import java.util.Map;
 import net.kyori.adventure.permission.PermissionChecker;
 import org.checkerframework.checker.nullness.qual.NonNull;

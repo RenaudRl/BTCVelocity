@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git branch *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(find * -name *)",
+      "Bash(grep *)",
+      "Bash(xargs ls *)"
+    ]
+  }
+}

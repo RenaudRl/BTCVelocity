@@ -7,7 +7,7 @@
 
 package com.velocitypowered.api.permission;
 
-import com.velocityctd.api.permission.PermissionResolver;
+import com.btcvelocity.api.permission.PermissionResolver;
 
 /**
  * Provides {@link PermissionFunction}s for {@link PermissionSubject}s.

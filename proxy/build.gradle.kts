@@ -2,7 +2,7 @@ import com.github.jengelman.gradle.plugins.shadow.transformers.Log4j2PluginsCach
 
 plugins {
     application
-    id("velocity-ctd-publish")
+    id("btcvelocity-publish")
     id("velocity-init-manifest")
     alias(libs.plugins.shadow)
 }
@@ -92,18 +92,13 @@ tasks {
 
         relocate("org.bstats", "com.velocitypowered.proxy.bstats")
 
-        // Include Configurate 3
-        val configurateBuildTask = project(":deprecated-configurate3").tasks.named("shadowJar")
-        dependsOn(configurateBuildTask)
-        from(zipTree(configurateBuildTask.map { it.outputs.files.singleFile }))
-
-        // Embed :velocity-luckperms-integration as META-INF/velocityctd/integrations/velocity-luckperms-integration.jar
+        // Embed :velocity-luckperms-integration as META-INF/btcvelocity/integrations/velocity-luckperms-integration.jar
         val lpJar = project(":velocity-luckperms-integration")
             .tasks
             .named<Jar>("jar")
         dependsOn(lpJar)
         from(lpJar.flatMap { it.archiveFile }) {
-            into("META-INF/velocityctd/integrations")
+            into("META-INF/btcvelocity/integrations")
             rename { "velocity-luckperms-integration.jar" }
         }
     }
@@ -157,6 +152,8 @@ dependencies {
     runtimeOnly(libs.jline.terminal.ffm)
     runtimeOnly(libs.disruptor)
     implementation(libs.fastutil)
+    implementation(libs.postgresql)
+    implementation(libs.hikari)
     implementation(platform(libs.adventure.bom))
     implementation(libs.adventure.text.serializer.json.legacy.impl)
     implementation(libs.adventure.facet)

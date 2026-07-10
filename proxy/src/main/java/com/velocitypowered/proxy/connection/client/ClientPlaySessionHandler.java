@@ -21,7 +21,7 @@ import static com.velocitypowered.proxy.protocol.util.PluginMessageUtil.construc
 
 import com.google.common.collect.ImmutableList;
 import com.mojang.brigadier.suggestion.Suggestion;
-import com.velocityctd.api.event.player.TabCompleteRequestEvent;
+import com.btcvelocity.api.event.player.TabCompleteRequestEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.CookieReceiveEvent;
 import com.velocitypowered.api.event.player.PlayerChannelRegisterEvent;

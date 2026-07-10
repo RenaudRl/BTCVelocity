@@ -1,6 +1,6 @@
 plugins {
     `java-library`
-    id("velocity-ctd-publish")
+    id("btcvelocity-publish")
 }
 
 java {

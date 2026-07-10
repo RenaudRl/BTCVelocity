@@ -27,8 +27,8 @@ import static java.util.Objects.requireNonNull;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import com.velocityctd.proxy.queue.VelocityQueue;
-import com.velocityctd.proxy.queue.VelocityQueueManager;
+import com.btcvelocity.proxy.queue.VelocityQueue;
+import com.btcvelocity.proxy.queue.VelocityQueueManager;
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier;
 import com.velocitypowered.api.proxy.messages.PluginMessageEncoder;
 import com.velocitypowered.api.proxy.server.PingOptions;

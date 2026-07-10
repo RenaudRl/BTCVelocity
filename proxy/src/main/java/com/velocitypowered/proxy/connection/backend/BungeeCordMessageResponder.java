@@ -17,7 +17,7 @@
 
 package com.velocitypowered.proxy.connection.backend;
 
-import com.velocityctd.proxy.queue.VelocityQueue;
+import com.btcvelocity.proxy.queue.VelocityQueue;
 import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.api.permission.Tristate;
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier;

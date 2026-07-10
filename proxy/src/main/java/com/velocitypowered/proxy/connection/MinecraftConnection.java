@@ -21,11 +21,15 @@ import static com.velocitypowered.proxy.network.Connections.CIPHER_DECODER;
 import static com.velocitypowered.proxy.network.Connections.CIPHER_ENCODER;
 import static com.velocitypowered.proxy.network.Connections.COMPRESSION_DECODER;
 import static com.velocitypowered.proxy.network.Connections.COMPRESSION_ENCODER;
+import static com.velocitypowered.proxy.network.Connections.COMPRESSION_RATIO_MONITOR;
+import static com.velocitypowered.proxy.network.Connections.DECOMPRESSION_BOMB_HANDLER;
 import static com.velocitypowered.proxy.network.Connections.FRAME_DECODER;
 import static com.velocitypowered.proxy.network.Connections.FRAME_ENCODER;
 import static com.velocitypowered.proxy.network.Connections.MINECRAFT_DECODER;
 import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 
+import com.btcvelocity.proxy.security.CompressionRatioMonitor;
+import com.btcvelocity.proxy.security.DecompressionBombHandler;
 import com.google.common.base.Preconditions;
 import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.natives.compression.VelocityCompressor;
@@ -33,6 +37,7 @@ import com.velocitypowered.natives.encryption.VelocityCipher;
 import com.velocitypowered.natives.encryption.VelocityCipherFactory;
 import com.velocitypowered.natives.util.Natives;
 import com.velocitypowered.proxy.VelocityServer;
+import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.client.ClientPlaySessionHandler;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.connection.client.HandshakeSessionHandler;
@@ -599,6 +604,14 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
       final ChannelHandler removedEncoder = channel.pipeline().remove(COMPRESSION_ENCODER);
 
       if (removedDecoder != null && removedEncoder != null) {
+        // Remove anti-decompression-bomb handlers when compression is disabled.
+        if (channel.pipeline().get(COMPRESSION_RATIO_MONITOR) != null) {
+          channel.pipeline().remove(COMPRESSION_RATIO_MONITOR);
+        }
+        if (channel.pipeline().get(DECOMPRESSION_BOMB_HANDLER) != null) {
+          channel.pipeline().remove(DECOMPRESSION_BOMB_HANDLER);
+        }
+
         channel.pipeline().addBefore(MINECRAFT_DECODER, FRAME_ENCODER,
             MinecraftVarintLengthEncoder.INSTANCE);
         channel.pipeline().fireUserEventTriggered(VelocityConnectionEvent.COMPRESSION_DISABLED);
@@ -622,6 +635,20 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
         channel.pipeline().remove(FRAME_ENCODER);
         channel.pipeline().addBefore(MINECRAFT_DECODER, COMPRESSION_DECODER, decoder);
         channel.pipeline().addBefore(MINECRAFT_ENCODER, COMPRESSION_ENCODER, encoder);
+
+        // Wire anti-decompression-bomb handlers if security protection is enabled.
+        // The CompressionRatioMonitor sits BEFORE the decompressor to record compressed
+        // sizes; the DecompressionBombHandler sits AFTER the decompressor to enforce
+        // size and ratio limits on the decompressed output.
+        final VelocityConfiguration.Security security = server.getConfiguration().getSecurity();
+        if (security.isEnabled()) {
+          channel.pipeline().addBefore(COMPRESSION_DECODER, COMPRESSION_RATIO_MONITOR,
+              new CompressionRatioMonitor(security.getMaxDecompressedSize(),
+                  security.getMaxCompressionRatio(), security.getMaxViolations()));
+          channel.pipeline().addAfter(COMPRESSION_DECODER, DECOMPRESSION_BOMB_HANDLER,
+              new DecompressionBombHandler(security.getMaxDecompressedSize(),
+                  security.getMaxCompressionRatio(), security.getMaxViolations()));
+        }
 
         channel.pipeline().fireUserEventTriggered(VelocityConnectionEvent.COMPRESSION_ENABLED);
       }

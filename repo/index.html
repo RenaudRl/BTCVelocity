@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BTC Studio Repository</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 820px; margin: 40px auto; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
+        h1 { color: #f0a500; } h3 { color: #f0a500; margin-bottom: 6px; }
+        a { color: #4da6ff; } code { background: #2a2a3e; padding: 2px 6px; border-radius: 3px; }
+        .card { background: #252540; border: 1px solid #333; border-radius: 8px; padding: 15px 20px; margin: 15px 0; }
+        .card h2 { margin-top: 0; color: #f0a500; }
+        pre { background: #111; padding: 12px; border-radius: 5px; overflow-x: auto; }
+        .tag { display:inline-block; background:#333; color:#f0a500; font-size:12px; padding:2px 8px; border-radius:10px; margin-left:8px; }
+    </style>
+</head>
+<body>
+    <h1>BTC Studio Repository</h1>
+    <p>Dépôt Maven unifié des APIs du réseau <strong>Born To Craft</strong> — proxy <strong>BTC Velocity</strong> et serveur <strong>BTC-CORE</strong>.</p>
+
+    <div class="card">
+        <h2>Ajouter le dépôt</h2>
+        <h3>Gradle (Kotlin DSL)</h3>
+        <pre>repositories {
+    maven("https://borntocraftstudio.net/repo/")
+}</pre>
+        <h3>Maven</h3>
+        <pre>&lt;repository&gt;
+    &lt;id&gt;btcstudio&lt;/id&gt;
+    &lt;url&gt;https://borntocraftstudio.net/repo/&lt;/url&gt;
+&lt;/repository&gt;</pre>
+    </div>
+
+    <div class="card">
+        <h2>BTC Velocity API <span class="tag">dev.btc.velocity:api:0.1</span></h2>
+        <p>API du proxy Velocity haute performance (cluster, queue, bridge, permissions).</p>
+        <h3>Gradle</h3>
+        <pre>dependencies {
+    compileOnly("dev.btc.velocity:api:0.1")
+}</pre>
+        <h3>Maven</h3>
+        <pre>&lt;dependency&gt;
+    &lt;groupId&gt;dev.btc.velocity&lt;/groupId&gt;
+    &lt;artifactId&gt;api&lt;/artifactId&gt;
+    &lt;version&gt;0.1&lt;/version&gt;
+    &lt;scope&gt;provided&lt;/scope&gt;
+&lt;/dependency&gt;</pre>
+        <p><a href="javadoc/velocity/index.html">Javadoc BTC Velocity →</a></p>
+    </div>
+
+    <div class="card">
+        <h2>BTC-CORE API <span class="tag">dev.btc.core:api:26.1.2.build.19-alpha</span></h2>
+        <p>API du fork serveur optimisé basé sur AdvancedSlimePaper 26.1.2.</p>
+        <h3>Gradle</h3>
+        <pre>dependencies {
+    compileOnly("dev.btc.core:api:26.1.2.build.19-alpha")
+}</pre>
+        <h3>Maven</h3>
+        <pre>&lt;dependency&gt;
+    &lt;groupId&gt;dev.btc.core&lt;/groupId&gt;
+    &lt;artifactId&gt;api&lt;/artifactId&gt;
+    &lt;version&gt;26.1.2.build.19-alpha&lt;/version&gt;
+    &lt;scope&gt;provided&lt;/scope&gt;
+&lt;/dependency&gt;</pre>
+        <p><a href="javadoc/core/index.html">Javadoc BTC-CORE →</a></p>
+    </div>
+
+    <div class="card">
+        <h2>Documentation</h2>
+        <p><a href="javadoc/index.html">Toutes les Javadoc →</a></p>
+    </div>
+
+    <p style="text-align:center;color:#666;margin-top:40px;">BTC Studio &copy; 2026</p>
+</body>
+</html>

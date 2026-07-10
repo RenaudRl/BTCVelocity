@@ -22,7 +22,7 @@ import static net.kyori.adventure.text.event.HoverEvent.showText;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.tree.LiteralCommandNode;
-import com.velocityctd.proxy.command.CommandUtils;
+import com.btcvelocity.proxy.command.CommandUtils;
 import com.velocitypowered.api.command.BrigadierCommand;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.permission.Tristate;

@@ -20,7 +20,7 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
-rootProject.name = "btc-proxy-core"
+rootProject.name = "btc-velocity"
 
 sequenceOf(
     "api",
@@ -33,7 +33,4 @@ sequenceOf(
     project(project).projectDir = file(it)
 }
 
-// Include Configurate 3
-val deprecatedConfigurateModule = ":deprecated-configurate3"
-include(deprecatedConfigurateModule)
-project(deprecatedConfigurateModule).projectDir = file("proxy/deprecated/configurate3")
+
