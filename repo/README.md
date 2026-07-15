@@ -1,4 +1,4 @@
-# BTC Studio Repository
+﻿# BTC Studio Repository
 
 Dépôt Maven **statique unifié** hébergeant les APIs publiques du réseau Born To Craft :
 
@@ -10,7 +10,7 @@ Dépôt Maven **statique unifié** hébergeant les APIs publiques du réseau Bor
 ## Structure
 
 ```
-repo/                                  ← upload tel quel sur borntocraftstudio.net/repo/
+repo/                                  ← upload tel quel sur borntocraftstudio.net/public/repo/
 ├── index.html                         ← page d'accueil
 ├── dev/btc/velocity/api/              ← API BTC Velocity
 │   ├── maven-metadata.xml
@@ -31,7 +31,7 @@ repo/                                  ← upload tel quel sur borntocraftstudio
 **Gradle (Kotlin DSL)**
 ```kotlin
 repositories {
-    maven("https://borntocraftstudio.net/repo/")
+    maven("https://borntocraftstudio.net/public/repo/")
 }
 ```
 
@@ -39,7 +39,7 @@ repositories {
 ```xml
 <repository>
     <id>btcstudio</id>
-    <url>https://borntocraftstudio.net/repo/</url>
+    <url>https://borntocraftstudio.net/public/repo/</url>
 </repository>
 ```
 
@@ -77,8 +77,8 @@ dependencies {
 
 ### Javadoc
 
-- BTC Velocity : https://borntocraftstudio.net/repo/javadoc/velocity/
-- BTC-CORE : https://borntocraftstudio.net/repo/javadoc/core/
+- BTC Velocity : https://borntocraftstudio.net/public/repo/javadoc/velocity/
+- BTC-CORE : https://borntocraftstudio.net/public/repo/javadoc/core/
 
 ## Republier / mettre à jour
 
@@ -88,6 +88,6 @@ L'API BTC Velocity se republie directement dans `repo/` via Gradle :
 bash repo/publish.sh
 ```
 
-Puis commit + upload du dossier `repo/` sur `borntocraftstudio.net/repo/`.
+Puis commit + upload du dossier `repo/` sur `borntocraftstudio.net/public/repo/`.
 L'API BTC-CORE est fournie depuis le projet BTC-CORE-Fork (voir son propre `publish.sh`)
 et copiée dans `repo/dev/btc/core/` + `repo/javadoc/core/`.

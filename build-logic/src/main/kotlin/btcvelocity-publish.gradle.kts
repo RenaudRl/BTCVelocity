@@ -43,8 +43,8 @@ extensions.configure<PublishingExtension> {
 
     repositories {
         // Unified static BTC Studio Maven repo, committed under <root>/repo/ and
-        // uploaded as-is to https://borntocraftstudio.net/repo/ .
-        // Hosts both dev.btc.core:api and dev.btc.velocity:api side by side.
+        // uploaded as-is to https://borntocraftstudio.net/public/repo/ .
+        // Hosts dev.btc.core:api, dev.btc.velocity:api and dev.btc.mobs:api side by side.
         maven {
             name = "btcRepo"
             url = uri(rootProject.layout.projectDirectory.dir("repo"))

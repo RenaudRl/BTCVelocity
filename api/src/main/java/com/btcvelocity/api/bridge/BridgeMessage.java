@@ -138,4 +138,34 @@ public sealed interface BridgeMessage {
       return "queue_status_response";
     }
   }
+
+  /**
+   * Backend -&gt; Proxy: move a single player (identified by UUID) to another backend
+   * server. The proxy resolves the player through its cluster registry and issues the
+   * move, so the player need not be connected to the requesting backend.
+   *
+   * @param uuid         the player's unique id
+   * @param targetServer the name of the destination server
+   */
+  record ConnectRequest(UUID uuid, String targetServer) implements BridgeMessage {
+    @Override
+    public String type() {
+      return "connect_request";
+    }
+  }
+
+  /**
+   * Backend -&gt; Proxy: move a group of players (for example a whole party) to a
+   * destination server in a single request. Members may be spread across several
+   * backends; the proxy moves each one it can resolve.
+   *
+   * @param members      the unique ids of the players to move
+   * @param targetServer the name of the destination server
+   */
+  record PartyWarp(List<UUID> members, String targetServer) implements BridgeMessage {
+    @Override
+    public String type() {
+      return "party_warp";
+    }
+  }
 }

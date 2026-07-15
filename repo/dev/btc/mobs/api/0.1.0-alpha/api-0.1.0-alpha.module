@@ -1,0 +1,146 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "dev.btc.mobs",
+    "module": "api",
+    "version": "0.1.0-alpha",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.0.0"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib"
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-api",
+          "version": {
+            "requires": "4.26.1"
+          }
+        }
+      ],
+      "dependencyConstraints": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "api-0.1.0-alpha.jar",
+          "url": "api-0.1.0-alpha.jar",
+          "size": 216602,
+          "sha512": "3f86fdab16c382bf529742a00cfcb5056f04c5dc021402d64aa8a8f8eeb05953751824f40cb7590a867ee7fc8699fd7862ee8bb376d24c84686004cde84e1d5a",
+          "sha256": "deb865316023083fcc3b8144691b735e284121fc9d1cac2de407a2f180ed420d",
+          "sha1": "d3a20cc02c32a2912296db6e9e1f241c2f18dc48",
+          "md5": "ad175ecb4ddcda09758f2c8bb437c237"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-reflect"
+        },
+        {
+          "group": "org.jetbrains.kotlinx",
+          "module": "kotlinx-coroutines-core",
+          "version": {
+            "requires": "1.9.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib"
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-api",
+          "version": {
+            "requires": "4.26.1"
+          }
+        }
+      ],
+      "dependencyConstraints": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-reflect",
+          "version": {
+            "requires": "2.3.20"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "api-0.1.0-alpha.jar",
+          "url": "api-0.1.0-alpha.jar",
+          "size": 216602,
+          "sha512": "3f86fdab16c382bf529742a00cfcb5056f04c5dc021402d64aa8a8f8eeb05953751824f40cb7590a867ee7fc8699fd7862ee8bb376d24c84686004cde84e1d5a",
+          "sha256": "deb865316023083fcc3b8144691b735e284121fc9d1cac2de407a2f180ed420d",
+          "sha1": "d3a20cc02c32a2912296db6e9e1f241c2f18dc48",
+          "md5": "ad175ecb4ddcda09758f2c8bb437c237"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "api-0.1.0-alpha-sources.jar",
+          "url": "api-0.1.0-alpha-sources.jar",
+          "size": 55928,
+          "sha512": "3b2fa686a018bd041983eedce37a58f062119527af1ec697e7f6af9b7501387f7661d2dfd962b6220bd0e0b9bfd4f3461000ee22f5f5297d5aac3128ceb34447",
+          "sha256": "373ef5b5580027ba57d27e85ff60f14d3a9d5095c973739aa7367fe807d3e34c",
+          "sha1": "099c606977f43855737670b4c6a2d36e2a462b12",
+          "md5": "f8f9b9fde4deaf7dcb1d5ef0cd64f28f"
+        }
+      ]
+    }
+  ]
+}

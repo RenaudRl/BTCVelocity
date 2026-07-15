@@ -587,6 +587,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     bridgeChannel.registerListener(backendHealthRegistry::onHealth);
     bridgeChannel.registerListener(worldRegistry::onWorldLoaded);
     bridgeChannel.registerListener(worldRegistry::onWorldUnloaded);
+    // Proxy-driven social transport (connect / party warp) from the social extensions.
+    bridgeChannel.registerListener(
+        new com.btcvelocity.proxy.bridge.SocialTransferHandler(clusterPlayerService));
 
     registerCommands();
 

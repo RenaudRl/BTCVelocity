@@ -1,4 +1,4 @@
-# 🌌 BTC Velocity — High-Performance Minecraft Proxy
+﻿# 🌌 BTC Velocity — High-Performance Minecraft Proxy
 
 ![Banner](https://img.shields.io/badge/Minecraft-26.1.2_%2B_26.2-blue?style=for-the-badge&logo=minecraft)
 ![Java](https://img.shields.io/badge/Java-21%2B-orange?style=for-the-badge&logo=openjdk)
@@ -134,7 +134,7 @@ proxy provides the classes at runtime).
 ### Gradle (Kotlin DSL)
 ```kotlin
 repositories {
-    maven("https://borntocraftstudio.net/repo/")
+    maven("https://borntocraftstudio.net/public/repo/")
 }
 
 dependencies {
@@ -145,7 +145,7 @@ dependencies {
 ### Gradle (Groovy DSL)
 ```groovy
 repositories {
-    maven { url 'https://borntocraftstudio.net/repo/' }
+    maven { url 'https://borntocraftstudio.net/public/repo/' }
 }
 
 dependencies {
@@ -158,7 +158,7 @@ dependencies {
 <repositories>
     <repository>
         <id>btcstudio</id>
-        <url>https://borntocraftstudio.net/repo/</url>
+        <url>https://borntocraftstudio.net/public/repo/</url>
     </repository>
 </repositories>
 
