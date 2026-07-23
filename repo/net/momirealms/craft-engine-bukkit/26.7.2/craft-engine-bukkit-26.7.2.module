@@ -1,0 +1,38 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "net.momirealms",
+    "module": "craft-engine-bukkit",
+    "version": "26.7.2",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.6.0"
+    }
+  },
+  "variants": [
+    {
+      "name": "shadowRuntimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "shadowed",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "craft-engine-bukkit-26.7.2.jar",
+          "url": "craft-engine-bukkit-26.7.2.jar",
+          "size": 1897924,
+          "sha512": "c9e998f163ed43e145101c61bc06ce843bfc275c90b82a9760614fa3eb8f02360b9b942a85619f6d1d64304d33b5d98d60782ca455ce0a54e51cc5861335e928",
+          "sha256": "269982cc8fef0e8f14ea769bdd35af8c1d52480edf76ff08358909b79adaee63",
+          "sha1": "7d43097df8f63f119926611a4341948bd861a627",
+          "md5": "9bcc94ab9debdfdf021adcf5f1095969"
+        }
+      ]
+    }
+  ]
+}

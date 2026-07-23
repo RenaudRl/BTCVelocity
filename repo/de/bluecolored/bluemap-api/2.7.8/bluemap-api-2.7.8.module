@@ -1,0 +1,132 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "de.bluecolored",
+    "module": "bluemap-api",
+    "version": "2.7.8",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.4.0"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 21,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "com.flowpowered",
+          "module": "flow-math",
+          "version": {
+            "requires": "1.0.3"
+          }
+        },
+        {
+          "group": "com.google.code.gson",
+          "module": "gson",
+          "version": {
+            "requires": "2.8.9"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "bluemap-api-2.7.8.jar",
+          "url": "bluemap-api-2.7.8.jar",
+          "size": 68336,
+          "sha512": "97f62ef56ce152d648b325e39ad9a4b2a0086a865b528194c36473f0890cd0221c67ff81dd530d47c848641d367ceb6b995055bf262a90beac80e68e560a82b5",
+          "sha256": "9a6ba25233cb4b90ff3b89acc20b5f2e908d80cfe99470607380d5dccf9f3620",
+          "sha1": "f59cede0702016555b55c7fdff710526861823da",
+          "md5": "e19e87aceb42318e46bd6ef54badc0b6"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 21,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "com.flowpowered",
+          "module": "flow-math",
+          "version": {
+            "requires": "1.0.3"
+          }
+        },
+        {
+          "group": "com.google.code.gson",
+          "module": "gson",
+          "version": {
+            "requires": "2.8.9"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "bluemap-api-2.7.8.jar",
+          "url": "bluemap-api-2.7.8.jar",
+          "size": 68336,
+          "sha512": "97f62ef56ce152d648b325e39ad9a4b2a0086a865b528194c36473f0890cd0221c67ff81dd530d47c848641d367ceb6b995055bf262a90beac80e68e560a82b5",
+          "sha256": "9a6ba25233cb4b90ff3b89acc20b5f2e908d80cfe99470607380d5dccf9f3620",
+          "sha1": "f59cede0702016555b55c7fdff710526861823da",
+          "md5": "e19e87aceb42318e46bd6ef54badc0b6"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bluemap-api-2.7.8-sources.jar",
+          "url": "bluemap-api-2.7.8-sources.jar",
+          "size": 57798,
+          "sha512": "b24d9d9d639d687d02d2ba22d4764fdb94126c5bc32e37c715a3a9cac619e8a3fbdc658fed9e2e3a407967cbbc3566d471182e73d5ba43e3c7e3156b94accd96",
+          "sha256": "486d3edcb3e72afbbb7d126a020102ce30c4c54a349110e6369ce7f04bffdd51",
+          "sha1": "8c49d05aae3edf1f8f06aff729af2aa6b348a010",
+          "md5": "731366edb6c9c68b49e7a4e26a033deb"
+        }
+      ]
+    },
+    {
+      "name": "javadocElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "javadoc",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bluemap-api-2.7.8-javadoc.jar",
+          "url": "bluemap-api-2.7.8-javadoc.jar",
+          "size": 262113,
+          "sha512": "e91e37d598f992faf4fffa2652a578e97f531d16e6d6a3e8ff59e8e11e313c21dd4c504c380a4ce3249448517143f323f47dc77d708e9849d95ed142b52a68f8",
+          "sha256": "614227657043d3a2918036103fa7161c2fb97d2741ded6ddcc1ab20d376111f3",
+          "sha1": "71365ba7397739ed10a28bf1f53e0a3a46685054",
+          "md5": "26fb453dbe6356d476c541892f862d2d"
+        }
+      ]
+    }
+  ]
+}

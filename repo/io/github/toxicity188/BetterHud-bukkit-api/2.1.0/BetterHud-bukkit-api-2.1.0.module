@@ -1,0 +1,186 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "io.github.toxicity188",
+    "module": "BetterHud-bukkit-api",
+    "version": "2.1.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.6.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "io.github.toxicity188",
+          "module": "BetterCommand",
+          "version": {
+            "requires": "1.4.3"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-api",
+          "version": {
+            "requires": "4.26.1"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-text-minimessage",
+          "version": {
+            "requires": "4.26.1"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-text-serializer-legacy",
+          "version": {
+            "requires": "4.26.1"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-text-serializer-gson",
+          "version": {
+            "requires": "4.26.1"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "BetterHud-api",
+          "version": {
+            "requires": "2.1.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "BetterHud-bukkit-api-2.1.0.jar",
+          "url": "BetterHud-bukkit-api-2.1.0.jar",
+          "size": 12601,
+          "sha512": "6e2cca4e6b13a9fd4593e1e113b1e69a8935b5251cdf977318399debe3385bffee6d18f90ead995cdea538f02d4ad5eac96730d720e8a345899964611400a155",
+          "sha256": "ada12f326b23c414e93af72e5e77e175912e450d0b0a891b755627412c35b231",
+          "sha1": "2cc96331e8c8ad56b34600db0046bded19ce4a1a",
+          "md5": "99c32925a91b594fe2d8b20f755dfc8f"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "io.github.toxicity188",
+          "module": "BetterCommand",
+          "version": {
+            "requires": "1.4.3"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-api",
+          "version": {
+            "requires": "4.26.1"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-text-minimessage",
+          "version": {
+            "requires": "4.26.1"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-text-serializer-legacy",
+          "version": {
+            "requires": "4.26.1"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-text-serializer-gson",
+          "version": {
+            "requires": "4.26.1"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "BetterHud-api",
+          "version": {
+            "requires": "2.1.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "BetterHud-bukkit-api-2.1.0.jar",
+          "url": "BetterHud-bukkit-api-2.1.0.jar",
+          "size": 12601,
+          "sha512": "6e2cca4e6b13a9fd4593e1e113b1e69a8935b5251cdf977318399debe3385bffee6d18f90ead995cdea538f02d4ad5eac96730d720e8a345899964611400a155",
+          "sha256": "ada12f326b23c414e93af72e5e77e175912e450d0b0a891b755627412c35b231",
+          "sha1": "2cc96331e8c8ad56b34600db0046bded19ce4a1a",
+          "md5": "99c32925a91b594fe2d8b20f755dfc8f"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "BetterHud-bukkit-api-2.1.0-sources.jar",
+          "url": "BetterHud-bukkit-api-2.1.0-sources.jar",
+          "size": 9322,
+          "sha512": "230f36641d536dc2ca8303f142ecd320b3c091c53477057decf732eaea8b968edea2c256bd89cf2fae4d339d826897a97590e8173b0421bcb6402a92d6a18cbc",
+          "sha256": "7b0a8a78e758bfdd66da8f5e996443f6ca51881a275080745c058f76cdbb2c88",
+          "sha1": "622608f6635fa3ebd55773cbada3fe8e40ce2206",
+          "md5": "f0f14720ea03ea1f28b22918ed2cdf7f"
+        }
+      ]
+    }
+  ]
+}

@@ -277,9 +277,19 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Base interface for all <code>btc:bridge</code> messages.</div>
 </dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html" class="type-name-link" title="class in com.btcvelocity.api.bridge">BridgeMessage.ConnectRequest</a> - Record Class in <a href="com/btcvelocity/api/bridge/package-summary.html">com.btcvelocity.api.bridge</a></dt>
+<dd>
+<div class="block">Backend -&gt; Proxy: move a single player (identified by UUID) to another backend
+ server.</div>
+</dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html" class="type-name-link" title="class in com.btcvelocity.api.bridge">BridgeMessage.Health</a> - Record Class in <a href="com/btcvelocity/api/bridge/package-summary.html">com.btcvelocity.api.bridge</a></dt>
 <dd>
 <div class="block">Backend -&gt; Proxy: a periodic health report from a backend server.</div>
+</dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html" class="type-name-link" title="class in com.btcvelocity.api.bridge">BridgeMessage.PartyWarp</a> - Record Class in <a href="com/btcvelocity/api/bridge/package-summary.html">com.btcvelocity.api.bridge</a></dt>
+<dd>
+<div class="block">Backend -&gt; Proxy: move a group of players (for example a whole party) to a
+ destination server in a single request.</div>
 </dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.QueueJoin.html" class="type-name-link" title="class in com.btcvelocity.api.bridge">BridgeMessage.QueueJoin</a> - Record Class in <a href="com/btcvelocity/api/bridge/package-summary.html">com.btcvelocity.api.bridge</a></dt>
 <dd>
@@ -794,6 +804,10 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Represents the status of a connection request initiated by a <a href="com/velocitypowered/api/proxy/ConnectionRequestBuilder.html" title="interface in com.velocitypowered.api.proxy"><code>ConnectionRequestBuilder</code></a>.</div>
 </dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#%3Cinit%3E(java.util.UUID,java.lang.String)" class="member-name-link">ConnectRequest(UUID, String)</a> - Constructor for record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.ConnectRequest</a></dt>
+<dd>
+<div class="block">Creates an instance of a <code>ConnectRequest</code> record class.</div>
+</dd>
 <dt><a href="com/velocitypowered/api/proxy/ConnectionRequestBuilder.html#connectWithIndication()" class="member-name-link">connectWithIndication()</a> - Method in interface com.velocitypowered.api.proxy.<a href="com/velocitypowered/api/proxy/ConnectionRequestBuilder.html" title="interface in com.velocitypowered.api.proxy">ConnectionRequestBuilder</a></dt>
 <dd>
 <div class="block">Initiates the connection to the remote server and emits a result on the <a href="https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/CompletableFuture.html" title="class or interface in java.util.concurrent" class="external-link"><code>CompletableFuture</code></a> after the user has logged on.</div>
@@ -1123,7 +1137,15 @@ loadScripts(document, 'script');</script>
 <dd>&nbsp;</dd>
 <dt><a href="com/velocitypowered/api/util/ProxyVersion.html#equals(java.lang.Object)" class="member-name-link">equals(Object)</a> - Method in class com.velocitypowered.api.util.<a href="com/velocitypowered/api/util/ProxyVersion.html" title="class in com.velocitypowered.api.util">ProxyVersion</a></dt>
 <dd>&nbsp;</dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#equals(java.lang.Object)" class="member-name-link">equals(Object)</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.ConnectRequest</a></dt>
+<dd>
+<div class="block">Indicates whether some other object is "equal to" this one.</div>
+</dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html#equals(java.lang.Object)" class="member-name-link">equals(Object)</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.Health</a></dt>
+<dd>
+<div class="block">Indicates whether some other object is "equal to" this one.</div>
+</dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#equals(java.lang.Object)" class="member-name-link">equals(Object)</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.PartyWarp</a></dt>
 <dd>
 <div class="block">Indicates whether some other object is "equal to" this one.</div>
 </dd>
@@ -1564,6 +1586,11 @@ loadScripts(document, 'script');</script>
 <dt><a href="com/velocitypowered/api/event/player/PlayerClientBrandEvent.html#getBrand()" class="member-name-link">getBrand()</a> - Method in class com.velocitypowered.api.event.player.<a href="com/velocitypowered/api/event/player/PlayerClientBrandEvent.html" title="class in com.velocitypowered.api.event.player">PlayerClientBrandEvent</a></dt>
 <dd>
 <div class="block">Gets the brand string sent by the client.</div>
+</dd>
+<dt><a href="com/velocitypowered/api/proxy/ProxyServer.html#getBridgeChannel()" class="member-name-link">getBridgeChannel()</a> - Method in interface com.velocitypowered.api.proxy.<a href="com/velocitypowered/api/proxy/ProxyServer.html" title="interface in com.velocitypowered.api.proxy">ProxyServer</a></dt>
+<dd>
+<div class="block">Gets the <a href="com/btcvelocity/api/bridge/BridgeChannel.html" title="interface in com.btcvelocity.api.bridge"><code>BridgeChannel</code></a> used to exchange <code>btc:bridge</code> messages with the
+ backend servers.</div>
 </dd>
 <dt><a href="com/velocitypowered/api/util/ServerLink.html#getBuiltInType()" class="member-name-link">getBuiltInType()</a> - Method in class com.velocitypowered.api.util.<a href="com/velocitypowered/api/util/ServerLink.html" title="class in com.velocitypowered.api.util">ServerLink</a></dt>
 <dd>
@@ -2539,6 +2566,10 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Gets the identifier of the proxy this player is connected to.</div>
 </dd>
+<dt><a href="com/velocitypowered/api/proxy/ProxyServer.html#getProxyId()" class="member-name-link">getProxyId()</a> - Method in interface com.velocitypowered.api.proxy.<a href="com/velocitypowered/api/proxy/ProxyServer.html" title="interface in com.velocitypowered.api.proxy">ProxyServer</a></dt>
+<dd>
+<div class="block">Gets the identifier of this proxy.</div>
+</dd>
 <dt><a href="com/velocitypowered/api/proxy/server/QueryResponse.html#getProxyPort()" class="member-name-link">getProxyPort()</a> - Method in class com.velocitypowered.api.proxy.server.<a href="com/velocitypowered/api/proxy/server/QueryResponse.html" title="class in com.velocitypowered.api.proxy.server">QueryResponse</a></dt>
 <dd>
 <div class="block">Get proxy (public facing) port.</div>
@@ -2859,6 +2890,10 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Returns the status associated with this result.</div>
 </dd>
+<dt><a href="com/velocitypowered/api/proxy/ProxyServer.html#getStorageService()" class="member-name-link">getStorageService()</a> - Method in interface com.velocitypowered.api.proxy.<a href="com/velocitypowered/api/proxy/ProxyServer.html" title="interface in com.velocitypowered.api.proxy">ProxyServer</a></dt>
+<dd>
+<div class="block">Gets the <a href="com/btcvelocity/api/storage/StorageService.html" title="interface in com.btcvelocity.api.storage"><code>StorageService</code></a> used to persist player data and proxy state.</div>
+</dd>
 <dt><a href="com/velocitypowered/api/command/VelocityBrigadierMessage.html#getString()" class="member-name-link">getString()</a> - Method in class com.velocitypowered.api.command.<a href="com/velocitypowered/api/command/VelocityBrigadierMessage.html" title="class in com.velocitypowered.api.command">VelocityBrigadierMessage</a></dt>
 <dd>
 <div class="block">Returns the message as a plain text.</div>
@@ -3098,7 +3133,15 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Returns whether the player has a hat enabled.</div>
 </dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#hashCode()" class="member-name-link">hashCode()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.ConnectRequest</a></dt>
+<dd>
+<div class="block">Returns a hash code value for this object.</div>
+</dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html#hashCode()" class="member-name-link">hashCode()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.Health</a></dt>
+<dd>
+<div class="block">Returns a hash code value for this object.</div>
+</dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#hashCode()" class="member-name-link">hashCode()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.PartyWarp</a></dt>
 <dd>
 <div class="block">Returns a hash code value for this object.</div>
 </dd>
@@ -3790,6 +3833,10 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Sets the maximum number of players this server purportedly can hold.</div>
 </dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#members()" class="member-name-link">members()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.PartyWarp</a></dt>
+<dd>
+<div class="block">Returns the value of the <a href="./com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#param-members"><code>members</code></a> record component.</div>
+</dd>
 <dt><a href="com/velocitypowered/api/event/player/PlayerChatEvent.ChatResult.html#message(java.lang.String)" class="member-name-link">message(String)</a> - Static method in class com.velocitypowered.api.event.player.<a href="com/velocitypowered/api/event/player/PlayerChatEvent.ChatResult.html" title="class in com.velocitypowered.api.event.player">PlayerChatEvent.ChatResult</a></dt>
 <dd>
 <div class="block">Allows the message to be sent, but silently replaces it with another.</div>
@@ -4012,6 +4059,10 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Minecraft 26.1 to 26.1.2.</div>
 </dd>
+<dt><a href="com/velocitypowered/api/network/ProtocolVersion.html#MINECRAFT_26_2" class="member-name-link">MINECRAFT_26_2</a> - Enum constant in enum class com.velocitypowered.api.network.<a href="com/velocitypowered/api/network/ProtocolVersion.html" title="enum class in com.velocitypowered.api.network">ProtocolVersion</a></dt>
+<dd>
+<div class="block">Minecraft 26.2.</div>
+</dd>
 <dt><a href="com/velocitypowered/api/proxy/messages/MinecraftChannelIdentifier.html" class="type-name-link" title="class in com.velocitypowered.api.proxy.messages">MinecraftChannelIdentifier</a> - Class in <a href="com/velocitypowered/api/proxy/messages/package-summary.html">com.velocitypowered.api.proxy.messages</a></dt>
 <dd>
 <div class="block">Represents a Minecraft 1.13+ channel identifier.</div>
@@ -4181,6 +4232,10 @@ loadScripts(document, 'script');</script>
 </dl>
 <h2 class="title" id="I:P">P</h2>
 <dl class="index">
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#%3Cinit%3E(java.util.List,java.lang.String)" class="member-name-link">PartyWarp(List&lt;UUID&gt;, String)</a> - Constructor for record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.PartyWarp</a></dt>
+<dd>
+<div class="block">Creates an instance of a <code>PartyWarp</code> record class.</div>
+</dd>
 <dt><a href="com/btcvelocity/api/queue/QueueState.html#PAUSED" class="member-name-link">PAUSED</a> - Enum constant in enum class com.btcvelocity.api.queue.<a href="com/btcvelocity/api/queue/QueueState.html" title="enum class in com.btcvelocity.api.queue">QueueState</a></dt>
 <dd>
 <div class="block">The queue is paused and will not transfer players until it is resumed.</div>
@@ -5642,6 +5697,14 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Represents a builder which creates <a href="com/velocitypowered/api/proxy/player/TabListEntry.html" title="interface in com.velocitypowered.api.proxy.player"><code>TabListEntry</code></a>s.</div>
 </dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#targetServer()" class="member-name-link">targetServer()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.ConnectRequest</a></dt>
+<dd>
+<div class="block">Returns the value of the <a href="./com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#param-targetServer"><code>targetServer</code></a> record component.</div>
+</dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#targetServer()" class="member-name-link">targetServer()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.PartyWarp</a></dt>
+<dd>
+<div class="block">Returns the value of the <a href="./com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#param-targetServer"><code>targetServer</code></a> record component.</div>
+</dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.QueueJoin.html#targetServer()" class="member-name-link">targetServer()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.QueueJoin.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.QueueJoin</a></dt>
 <dd>
 <div class="block">Returns the value of the <a href="./com/btcvelocity/api/bridge/BridgeMessage.QueueJoin.html#param-targetServer"><code>targetServer</code></a> record component.</div>
@@ -5692,7 +5755,15 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">Creates a new <a href="com/velocitypowered/api/command/VelocityBrigadierMessage.html" title="class in com.velocitypowered.api.command"><code>VelocityBrigadierMessage</code></a> using the given <a href="https://jd.advntr.dev/api/4.26.1/net/kyori/adventure/text/Component.html" title="class or interface in net.kyori.adventure.text" class="external-link"><code>Component</code></a> as the message.</div>
 </dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#toString()" class="member-name-link">toString()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.ConnectRequest</a></dt>
+<dd>
+<div class="block">Returns a string representation of this record class.</div>
+</dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html#toString()" class="member-name-link">toString()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.Health</a></dt>
+<dd>
+<div class="block">Returns a string representation of this record class.</div>
+</dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#toString()" class="member-name-link">toString()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.PartyWarp</a></dt>
 <dd>
 <div class="block">Returns a string representation of this record class.</div>
 </dd>
@@ -5960,7 +6031,11 @@ loadScripts(document, 'script');</script>
 <dd>
 <div class="block">A value indicating a positive setting.</div>
 </dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#type()" class="member-name-link">type()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.ConnectRequest</a></dt>
+<dd>&nbsp;</dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html#type()" class="member-name-link">type()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.Health.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.Health</a></dt>
+<dd>&nbsp;</dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html#type()" class="member-name-link">type()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.PartyWarp.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.PartyWarp</a></dt>
 <dd>&nbsp;</dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.QueueJoin.html#type()" class="member-name-link">type()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.QueueJoin.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.QueueJoin</a></dt>
 <dd>&nbsp;</dd>
@@ -6073,6 +6148,10 @@ loadScripts(document, 'script');</script>
 <dt><a href="com/btcvelocity/api/storage/PlayerData.html#username()" class="member-name-link">username()</a> - Method in record class com.btcvelocity.api.storage.<a href="com/btcvelocity/api/storage/PlayerData.html" title="class in com.btcvelocity.api.storage">PlayerData</a></dt>
 <dd>
 <div class="block">Returns the value of the <a href="./com/btcvelocity/api/storage/PlayerData.html#param-username"><code>username</code></a> record component.</div>
+</dd>
+<dt><a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#uuid()" class="member-name-link">uuid()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.ConnectRequest</a></dt>
+<dd>
+<div class="block">Returns the value of the <a href="./com/btcvelocity/api/bridge/BridgeMessage.ConnectRequest.html#param-uuid"><code>uuid</code></a> record component.</div>
 </dd>
 <dt><a href="com/btcvelocity/api/bridge/BridgeMessage.QueueJoin.html#uuid()" class="member-name-link">uuid()</a> - Method in record class com.btcvelocity.api.bridge.<a href="com/btcvelocity/api/bridge/BridgeMessage.QueueJoin.html" title="class in com.btcvelocity.api.bridge">BridgeMessage.QueueJoin</a></dt>
 <dd>

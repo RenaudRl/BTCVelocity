@@ -1,0 +1,172 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "io.github.toxicity188",
+    "module": "bettermodel-bukkit-api",
+    "version": "3.3.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.6.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.semver4j",
+          "module": "semver4j",
+          "version": {
+            "requires": "6.0.0"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "dynamicuv",
+          "version": {
+            "requires": "1.2.2"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "java-mesh",
+          "version": {
+            "requires": "0.0.1"
+          }
+        },
+        {
+          "group": "com.github.ben-manes.caffeine",
+          "module": "caffeine",
+          "version": {
+            "requires": "3.2.4"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "bettermodel-api",
+          "version": {
+            "requires": "3.3.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "bettermodel-bukkit-api-3.3.0.jar",
+          "url": "bettermodel-bukkit-api-3.3.0.jar",
+          "size": 18795,
+          "sha512": "7ae18569a3845f9eaff6c035f2d4f126dbef33cbbc3ce89175f4dcfebeabaab81967dfa2eb164af10ec530a5b698259b68fbb78700ef302e42473db31d56786f",
+          "sha256": "d5dc4b0db5e026907417331cebe7f4e0f4c93a6a4e321d8be43237caebfd7870",
+          "sha1": "df2e556e52c190e58553bfc7edc088ef261c92d2",
+          "md5": "db7ccc463c12898d7538cdfd2d04ce78"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.semver4j",
+          "module": "semver4j",
+          "version": {
+            "requires": "6.0.0"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "dynamicuv",
+          "version": {
+            "requires": "1.2.2"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "java-mesh",
+          "version": {
+            "requires": "0.0.1"
+          }
+        },
+        {
+          "group": "com.github.ben-manes.caffeine",
+          "module": "caffeine",
+          "version": {
+            "requires": "3.2.4"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "bettermodel-api",
+          "version": {
+            "requires": "3.3.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "bettermodel-bukkit-api-3.3.0.jar",
+          "url": "bettermodel-bukkit-api-3.3.0.jar",
+          "size": 18795,
+          "sha512": "7ae18569a3845f9eaff6c035f2d4f126dbef33cbbc3ce89175f4dcfebeabaab81967dfa2eb164af10ec530a5b698259b68fbb78700ef302e42473db31d56786f",
+          "sha256": "d5dc4b0db5e026907417331cebe7f4e0f4c93a6a4e321d8be43237caebfd7870",
+          "sha1": "df2e556e52c190e58553bfc7edc088ef261c92d2",
+          "md5": "db7ccc463c12898d7538cdfd2d04ce78"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bettermodel-bukkit-api-3.3.0-sources.jar",
+          "url": "bettermodel-bukkit-api-3.3.0-sources.jar",
+          "size": 16721,
+          "sha512": "c0a876a30526604fa6bc00779dc712ea7674923652d72e4c99bef40bee3a09242654b0997e2cc741c486b25739e03d6b3c87a9c341d6a3e0c3ea7f5d526cd562",
+          "sha256": "3ee46170cc41dea8380b2af6283e63ae42272cdeb400cef6ef069c2253c1dbbb",
+          "sha1": "13908a1f4f77ca63e996153b1e0197d3a8c828fd",
+          "md5": "b610954d69690430caf87aef27b61b4b"
+        }
+      ]
+    }
+  ]
+}

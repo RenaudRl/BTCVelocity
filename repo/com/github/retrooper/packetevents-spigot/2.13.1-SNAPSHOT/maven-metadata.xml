@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata modelVersion="1.1.0">
+  <groupId>com.github.retrooper</groupId>
+  <artifactId>packetevents-spigot</artifactId>
+  <versioning>
+    <lastUpdated>20260715014630</lastUpdated>
+    <snapshot>
+      <timestamp>20260715.014630</timestamp>
+      <buildNumber>1</buildNumber>
+    </snapshot>
+    <snapshotVersions>
+      <snapshotVersion>
+        <classifier>sources</classifier>
+        <extension>jar</extension>
+        <value>2.13.1-20260715.014630-1</value>
+        <updated>20260715014630</updated>
+      </snapshotVersion>
+      <snapshotVersion>
+        <extension>jar</extension>
+        <value>2.13.1-20260715.014630-1</value>
+        <updated>20260715014630</updated>
+      </snapshotVersion>
+      <snapshotVersion>
+        <extension>pom</extension>
+        <value>2.13.1-20260715.014630-1</value>
+        <updated>20260715014630</updated>
+      </snapshotVersion>
+    </snapshotVersions>
+  </versioning>
+  <version>2.13.1-SNAPSHOT</version>
+</metadata>

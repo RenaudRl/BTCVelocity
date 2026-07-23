@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <!-- This module was also published with a richer model, Gradle metadata,  -->
+  <!-- which should be used instead. Do not delete the following line which  -->
+  <!-- is to indicate to Gradle or any Gradle module metadata file consumer  -->
+  <!-- that they should prefer consuming it instead. -->
+  <!-- do_not_remove: published-with-gradle-metadata -->
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.github.toxicity188</groupId>
+  <artifactId>BetterHud-api</artifactId>
+  <version>2.1.0</version>
+  <name>BetterHud-api</name>
+  <description>A multi-platform server-side implementation of HUD in Minecraft, supporting Bukkit(with Folia), Velocity, and Fabric.</description>
+  <url>https://github.com/toxicity188/BetterHud/</url>
+  <inceptionYear>2024</inceptionYear>
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://mit-license.org/</url>
+    </license>
+  </licenses>
+  <developers>
+    <developer>
+      <id>toxicity188</id>
+      <name>toxicity188</name>
+      <url>https://github.com/toxicity188/</url>
+    </developer>
+  </developers>
+  <scm>
+    <connection>scm:git:git://github.com/toxicity188/BetterHud.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/toxicity188/BetterHud.git</developerConnection>
+    <url>https://github.com/toxicity188/BetterHud/</url>
+  </scm>
+  <dependencies>
+    <dependency>
+      <groupId>io.github.toxicity188</groupId>
+      <artifactId>BetterCommand</artifactId>
+      <version>1.4.3</version>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.semver4j</groupId>
+      <artifactId>semver4j</artifactId>
+      <version>6.0.0</version>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-stdlib</artifactId>
+      <version>2.4.0</version>
+      <scope>compile</scope>
+    </dependency>
+  </dependencies>
+</project>

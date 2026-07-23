@@ -1,0 +1,39 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "net.momirealms",
+    "module": "custom-nameplates",
+    "version": "3.0.42",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.1.0"
+    }
+  },
+  "variants": [
+    {
+      "name": "shadowRuntimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "shadowed",
+        "org.gradle.jvm.version": 21,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "custom-nameplates-3.0.42.jar",
+          "url": "custom-nameplates-3.0.42.jar",
+          "size": 1270283,
+          "sha512": "130f1738831fc9ed7b2a00e71748c00f0313d1f119191f384a79073a2ab049dc0778b3595b3b5721f4fa92c2d76336853b60f80debaf3fce14616b752e3c54a6",
+          "sha256": "7e5f9d2590138b5304e97c18f2d66170e5b61f1d09119dcbf7e9d7098dfd4c6e",
+          "sha1": "abc94ef04027edc25f55c00d274da1a09641a008",
+          "md5": "d10c4a8a58dee35d0866ee957c55ba28"
+        }
+      ]
+    }
+  ]
+}
