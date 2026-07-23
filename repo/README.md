@@ -32,6 +32,7 @@ repo/                                  ← upload tel quel sur borntocraftstudio
 ```kotlin
 repositories {
     maven("https://borntocraftstudio.net/repo/")
+    mavenCentral() // requis : le POM importe net.kyori:adventure-bom
 }
 ```
 
@@ -42,6 +43,11 @@ repositories {
     <url>https://borntocraftstudio.net/repo/</url>
 </repository>
 ```
+
+> Maven Central (ou un miroir) doit rester déclaré : le POM de `dev.btc.velocity:api`
+> importe `net.kyori:adventure-bom`, qui n'est pas hébergé ici. Avec le seul dépôt
+> BTC, la résolution échoue sur `Could not parse POM … Could not find
+> net.kyori:adventure-bom`.
 
 ### BTC Velocity API
 
