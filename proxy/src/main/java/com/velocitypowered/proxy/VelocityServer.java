@@ -65,6 +65,7 @@ import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.config.BackendServerConfig;
 import com.velocitypowered.api.proxy.player.ResourcePackInfo;
 import com.velocitypowered.api.proxy.server.ServerInfo;
+import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.api.util.Favicon;
 import com.velocitypowered.api.util.GameProfile;
 import com.velocitypowered.api.util.ProxyVersion;
@@ -101,12 +102,14 @@ import com.velocitypowered.proxy.util.AddressUtil;
 import com.velocitypowered.proxy.util.VelocityChannelRegistrar;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiter;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
+import com.sun.management.HotSpotDiagnosticMXBean;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
@@ -158,6 +161,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
   private static final Logger LOGGER = LogManager.getLogger(VelocityServer.class);
 
   private static final int PRE_SHUTDOWN_TIMEOUT = Integer.getInteger("velocity.pre-shutdown-timeout", 10);
+
+  private static final long STORAGE_HEARTBEAT_INTERVAL_SECONDS =
+      Long.getLong("velocity.storage-heartbeat-interval", 30);
 
   public static final Gson GENERAL_GSON = new GsonBuilder()
       .registerTypeHierarchyAdapter(Favicon.class, FaviconSerializer.INSTANCE)
@@ -217,6 +223,10 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
   private final Map<UUID, ConnectedPlayer> connectionsByUuid = new ConcurrentHashMap<>();
 
   private final Map<String, ConnectedPlayer> connectionsByName = new ConcurrentHashMap<>();
+
+  private final Object sessionIdLock = new Object();
+
+  private volatile @Nullable UUID sessionId;
 
   /**
    * Holds a set of all registered BuiltinCommand instances. Used for unregistering these commands later.
@@ -282,6 +292,12 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    * PostgreSQL storage is enabled in the configuration.
    */
   private @MonotonicNonNull VelocityStorageService storageService;
+
+  /**
+   * The task periodically recording this proxy's heartbeat into the storage backend,
+   * scheduled only when PostgreSQL storage is enabled.
+   */
+  private @MonotonicNonNull ScheduledTask storageHeartbeatTask;
 
   /**
    * The {@code btc:bridge} channel service used to exchange messages between the proxy
@@ -369,6 +385,34 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    */
   public VelocityBridgeChannel getBridgeChannel() {
     return bridgeChannel;
+  }
+
+  /**
+   * Schedules the periodic task recording this proxy's heartbeat into the storage backend.
+   *
+   * <p>The heartbeat lets other proxies and external tooling tell apart a proxy that is
+   * up but empty from one that has died, which a player count alone cannot express.</p>
+   */
+  private void scheduleStorageHeartbeatTask() {
+    storageHeartbeatTask = scheduler
+        .buildTask(VelocityVirtualPlugin.INSTANCE, this::updateStorageHeartbeat)
+        .delay(STORAGE_HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS)
+        .repeat(STORAGE_HEARTBEAT_INTERVAL_SECONDS, TimeUnit.SECONDS)
+        .schedule();
+  }
+
+  /**
+   * Records the current player count and uptime of this proxy into the storage backend.
+   */
+  private void updateStorageHeartbeat() {
+    final long uptimeSeconds = (System.currentTimeMillis() - startTime) / 1000;
+
+    storageService.updateProxyHeartbeat(getProxyId(), getPlayerCount(), uptimeSeconds)
+        .exceptionally(ex -> {
+          LOGGER.warn("Unable to record the proxy heartbeat", ex);
+
+          return null;
+        });
   }
 
   /**
@@ -490,26 +534,12 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     }
 
     // Check for Generational ZGC
-    boolean hasZgc = false;
-    for (String arg : java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments()) {
-      if (arg.contains("-XX:+UseZGC")) {
-        hasZgc = true;
-        break;
-      }
-    }
-    if (!hasZgc) {
+    if (!isVmOptionEnabled("UseZGC")) {
       LOGGER.warn("Generational ZGC is NOT enabled. Performance may be degraded. Add -XX:+UseZGC to your startup flags.");
     }
 
     // Check for Compact Object Headers (JEP 519)
-    boolean hasCompactHeaders = false;
-    for (String arg : java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments()) {
-      if (arg.contains("-XX:+UnlockExperimentalVMOptions") && arg.contains("-XX:+UseCompactObjectHeaders")) {
-        hasCompactHeaders = true;
-        break;
-      }
-    }
-    if (!hasCompactHeaders) {
+    if (!isVmOptionEnabled("UseCompactObjectHeaders")) {
       LOGGER.info("Compact Object Headers (JEP 519) are not active. For maximum RAM density, add -XX:+UseCompactObjectHeaders.");
     }
 
@@ -577,6 +607,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         throw new RuntimeException("Failed to initialize PostgreSQL schema", e);
       }
       storageService = new VelocityStorageService(postgresPool, this);
+      scheduleStorageHeartbeatTask();
       LOGGER.info("PostgreSQL storage backend enabled and initialized");
     }
 
@@ -631,6 +662,27 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       Metrics.VelocityMetrics.startMetrics(this, configuration.getMetrics());
     } else {
       LOGGER.warn("debug environment, metrics is disabled!");
+    }
+  }
+
+  /**
+   * Returns whether a HotSpot VM option is actually in effect.
+   *
+   * <p>This queries the VM for the option's effective value rather than scanning the command line.
+   * A flag can be active without appearing in the arguments (ergonomics, {@code JAVA_TOOL_OPTIONS}),
+   * and conversely the arguments say nothing about whether the VM honoured it.</p>
+   *
+   * @param option the option name, without the {@code -XX:} prefix
+   * @return true if the option exists on this VM and is enabled
+   */
+  private static boolean isVmOptionEnabled(final String option) {
+    try {
+      final HotSpotDiagnosticMXBean bean =
+          ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class);
+      return bean != null && "true".equals(bean.getVMOption(option).getValue());
+    } catch (final IllegalArgumentException | UnsupportedOperationException e) {
+      // Option unknown to this VM, or not a HotSpot VM at all.
+      return false;
     }
   }
 
@@ -1121,7 +1173,11 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         this.redis.shutdown();
       }
 
-      // Shut down PostgreSQL storage if it is enabled
+      // Shut down PostgreSQL storage if it is enabled, stopping the heartbeat first so
+      // that it can never run against an already closed storage service.
+      if (this.storageHeartbeatTask != null) {
+        this.storageHeartbeatTask.cancel();
+      }
       if (this.storageService != null) {
         this.storageService.shutdown();
       }
@@ -1327,6 +1383,39 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     connectionsByName.remove(connection.getUsername().toLowerCase(Locale.US), connection);
     connectionsByUuid.remove(connection.getUniqueId(), connection);
     connection.disconnected();
+
+    if (this.sessionId != null && connectionsByUuid.isEmpty()) {
+      synchronized (this.sessionIdLock) {
+        if (connectionsByUuid.isEmpty()) {
+          this.sessionId = null;
+        }
+      }
+    }
+  }
+
+  /**
+   * Returns the metrics session ID for this proxy, generating one if none is currently active. The
+   * ID is shared by every player connected during a populated period and is regenerated once the
+   * proxy empties. This mirrors the behaviour of a vanilla server, which sends the ID to clients
+   * in the login success packet since Minecraft 26.2.
+   *
+   * @return the current session ID
+   */
+  public UUID getSessionId() {
+    UUID uuid = this.sessionId;
+    if (uuid != null) {
+      return uuid;
+    }
+
+    synchronized (this.sessionIdLock) {
+      uuid = this.sessionId;
+      if (uuid == null) {
+        uuid = UUID.randomUUID();
+        this.sessionId = uuid;
+      }
+
+      return uuid;
+    }
   }
 
   @Override

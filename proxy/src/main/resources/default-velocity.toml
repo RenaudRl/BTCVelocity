@@ -10,7 +10,7 @@ bind = "0.0.0.0:25565"
 # First line of the MOTD
 motd-line1 = "<gradient:gold:yellow><b>BTC Proxy Core</b></gradient>"
 # Second line of the MOTD
-motd-line2 = "<gray>The Ultimate 26.1.2 Experience"
+motd-line2 = "<gray>The Ultimate 26.2 Experience"
 # Alignment for line 1: "left", "center", or "right"
 line1-alignment = "center"
 # Alignment for line 2: "left", "center", or "right"
@@ -45,8 +45,8 @@ translate-header-footer = true
 log-minimum-version = false
 
 # Modify the minimum version, so the proxy blocks out users on the wrong version, rather than the backend server.
-# Modern forwarding supports 1.13, at minimum. Set this to 1.13 or above if you are using modern forwarding.
-minimum-version = "1.7.2"
+# This fork only supports Minecraft 26.2; lowering this value will not enable older clients.
+minimum-version = "26.2"
 
 # Modify the maximum version, so the proxy blocks out users on the wrong version, rather than the backend server.
 # Set to "unbounded" for no maximum version (default behavior).
@@ -177,8 +177,8 @@ bytes-per-second = -1
 # Configure your servers here. Each key represents the server's name, and the value
 # represents the IP address of the server to connect to.
 lobby = "127.0.0.1:30066"
-factions  = { address = "127.0.0.1:30067", forwarding-mode = "modern", minimum-version = "1.13" }
-minigames = { address = "127.0.0.1:30068", forwarding-mode = "legacy", minimum-version = "1.7.2", maximum-version = "1.21.10" }
+factions  = { address = "127.0.0.1:30067", forwarding-mode = "modern", minimum-version = "26.2" }
+minigames = { address = "127.0.0.1:30068", forwarding-mode = "modern", minimum-version = "26.2", maximum-version = "26.2" }
 
 # In what order, we should try servers when a player logs in or is kicked from a server.
 try = [

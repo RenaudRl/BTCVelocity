@@ -1,12 +1,12 @@
-﻿# 🌌 BTC Velocity — High-Performance Minecraft Proxy
+# 🌌 BTC Velocity — High-Performance Minecraft Proxy
 
-![Banner](https://img.shields.io/badge/Minecraft-26.1.2_%2B_26.2-blue?style=for-the-badge&logo=minecraft)
+![Banner](https://img.shields.io/badge/Minecraft-26.2-blue?style=for-the-badge&logo=minecraft)
 ![Java](https://img.shields.io/badge/Java-21%2B-orange?style=for-the-badge&logo=openjdk)
 ![Status](https://img.shields.io/badge/Status-Production_Ready-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)
 
 > [!IMPORTANT]
-> **BTC Velocity** is a custom, high-performance fork of [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD), purpose-built for the **Born to Craft** Minecraft network. Compatible with **Minecraft 26.1.2+** and **Java 21+**.
+> **BTC Velocity** is a custom, high-performance fork of [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD), purpose-built for the **Born to Craft** Minecraft network. Compatible with **Minecraft 26.2** (protocol 776) and **Java 21+**.
 
 ---
 
@@ -134,7 +134,7 @@ proxy provides the classes at runtime).
 ### Gradle (Kotlin DSL)
 ```kotlin
 repositories {
-    maven("https://borntocraftstudio.net/public/repo/")
+    maven("https://borntocraftstudio.net/repo/")
 }
 
 dependencies {
@@ -145,7 +145,7 @@ dependencies {
 ### Gradle (Groovy DSL)
 ```groovy
 repositories {
-    maven { url 'https://borntocraftstudio.net/public/repo/' }
+    maven { url 'https://borntocraftstudio.net/repo/' }
 }
 
 dependencies {
@@ -158,7 +158,7 @@ dependencies {
 <repositories>
     <repository>
         <id>btcstudio</id>
-        <url>https://borntocraftstudio.net/public/repo/</url>
+        <url>https://borntocraftstudio.net/repo/</url>
     </repository>
 </repositories>
 
@@ -172,7 +172,7 @@ dependencies {
 </dependencies>
 ```
 
-- **Javadoc**: https://borntocraftstudio.net/public/repo/javadoc/velocity/
+- **Javadoc**: https://borntocraftstudio.net/repo/javadoc/velocity/
 - The same repository also hosts the backend API `dev.btc.core:api` (BTC-CORE).
 - Repo layout and republish instructions: [`repo/README.md`](repo/README.md).
 

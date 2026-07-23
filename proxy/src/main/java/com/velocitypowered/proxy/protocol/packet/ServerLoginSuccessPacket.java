@@ -38,6 +38,8 @@ public class ServerLoginSuccessPacket implements MinecraftPacket {
 
   private @Nullable List<GameProfile.Property> properties;
 
+  private @Nullable UUID sessionId;
+
   private static final boolean strictErrorHandling = VelocityProperties
           .readBoolean("velocity.strictErrorHandling", true);
 
@@ -73,12 +75,21 @@ public class ServerLoginSuccessPacket implements MinecraftPacket {
     this.properties = properties;
   }
 
+  public @Nullable UUID getSessionId() {
+    return sessionId;
+  }
+
+  public void setSessionId(final @Nullable UUID sessionId) {
+    this.sessionId = sessionId;
+  }
+
   @Override
   public String toString() {
     return "ServerLoginSuccess{"
         + "uuid=" + uuid
         + ", username='" + username + '\''
         + ", properties='" + properties + '\''
+        + ", sessionId=" + sessionId
         + '}';
   }
 
@@ -102,6 +113,10 @@ public class ServerLoginSuccessPacket implements MinecraftPacket {
 
     if (version == ProtocolVersion.MINECRAFT_1_20_5 || version == ProtocolVersion.MINECRAFT_1_21) {
       buf.readBoolean();
+    }
+
+    if (version.noLessThan(ProtocolVersion.MINECRAFT_26_2)) {
+      sessionId = ProtocolUtils.readUuid(buf);
     }
   }
 
@@ -137,6 +152,14 @@ public class ServerLoginSuccessPacket implements MinecraftPacket {
 
     if (version == ProtocolVersion.MINECRAFT_1_20_5 || version == ProtocolVersion.MINECRAFT_1_21) {
       buf.writeBoolean(strictErrorHandling);
+    }
+
+    if (version.noLessThan(ProtocolVersion.MINECRAFT_26_2)) {
+      if (sessionId == null) {
+        throw new IllegalStateException("No session ID specified!");
+      }
+
+      ProtocolUtils.writeUuid(buf, sessionId);
     }
   }
 

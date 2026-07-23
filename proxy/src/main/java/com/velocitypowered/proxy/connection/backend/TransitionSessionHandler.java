@@ -110,6 +110,9 @@ public class TransitionSessionHandler implements MinecraftSessionHandler {
     // Reset Tablist header and footer to prevent desync
     player.clearPlayerListHeaderAndFooter();
 
+    // The backend reports its own online-mode; the client must see the proxy's instead.
+    packet.setOnlineMode(player.isOnlineMode());
+
     // The goods are in hand! We got JoinGame. Let's transition completely to the new state.
     smc.setAutoReading(false);
     server.getEventManager()

@@ -156,7 +156,7 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
       // forwarder. This particular value cannot adequately log the user's username; thus, forcing
       // us to deactivate logging altogether, unlike in the AuthSessionHandler, where logging is by choice.
       connection.setState(StateRegistry.LOGIN);
-      ic.disconnectQuietly(Component.text("This server requires Minecraft 26.1.2 to connect.", NamedTextColor.RED)
+      ic.disconnectQuietly(Component.text("This server requires Minecraft 26.2 to connect.", NamedTextColor.RED)
           .append(Component.newline())
           .append(Component.text("Please update your client to the latest version.", NamedTextColor.GRAY)));
       return;

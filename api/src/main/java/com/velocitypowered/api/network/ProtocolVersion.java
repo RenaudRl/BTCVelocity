@@ -302,7 +302,12 @@ public enum ProtocolVersion implements Ordered<@NotNull ProtocolVersion> {
   /**
    * Minecraft 26.1 to 26.1.2.
    */
-  MINECRAFT_26_1(775, "26.1", "26.1.1", "26.1.2");
+  MINECRAFT_26_1(775, "26.1", "26.1.1", "26.1.2"),
+
+  /**
+   * Minecraft 26.2.
+   */
+  MINECRAFT_26_2(776, "26.2");
 
   /**
    * Bitmask shift used to encode snapshot protocol versions.
@@ -327,7 +332,7 @@ public enum ProtocolVersion implements Ordered<@NotNull ProtocolVersion> {
   /**
    * Represents the lowest supported version.
    */
-  public static final ProtocolVersion MINIMUM_VERSION = MINECRAFT_26_1;
+  public static final ProtocolVersion MINIMUM_VERSION = MINECRAFT_26_2;
   /**
    * Represents the highest supported version.
    */
@@ -448,7 +453,7 @@ public enum ProtocolVersion implements Ordered<@NotNull ProtocolVersion> {
    * @return if the protocol supported
    */
   public boolean isSupported() {
-    return this.protocol >= MINECRAFT_26_1.protocol;
+    return this.protocol >= MINECRAFT_26_2.protocol;
   }
 
   /**

@@ -7,9 +7,11 @@
 
 package com.velocitypowered.api.proxy;
 
+import com.btcvelocity.api.bridge.BridgeChannel;
 import com.btcvelocity.api.cluster.ClusterPlayerService;
 import com.btcvelocity.api.cluster.ClusterProxyService;
 import com.btcvelocity.api.queue.QueueManager;
+import com.btcvelocity.api.storage.StorageService;
 
 import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.command.CommandSource;
@@ -28,6 +30,7 @@ import java.util.Optional;
 import java.util.UUID;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.text.Component;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Provides an interface to a Minecraft server proxy.
@@ -234,6 +237,31 @@ public interface ProxyServer extends Audience {
    * @return the cluster player service
    */
   ClusterPlayerService getClusterPlayerService();
+
+  /**
+   * Gets the {@link StorageService} used to persist player data and proxy state.
+   *
+   * @return the storage service, or {@code null} if PostgreSQL storage is not enabled
+   */
+  @Nullable StorageService getStorageService();
+
+  /**
+   * Gets the {@link BridgeChannel} used to exchange {@code btc:bridge} messages with the
+   * backend servers.
+   *
+   * @return the bridge channel
+   */
+  BridgeChannel getBridgeChannel();
+
+  /**
+   * Gets the identifier of this proxy.
+   *
+   * <p>When Redis is enabled this is the configured proxy id, otherwise a single-proxy
+   * placeholder is returned.</p>
+   *
+   * @return the proxy identifier
+   */
+  String getProxyId();
 
   /**
    * Gets the {@link ClusterProxyService}, used for multi-proxy setups.

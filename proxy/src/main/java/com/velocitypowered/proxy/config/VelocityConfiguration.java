@@ -80,7 +80,7 @@ public final class VelocityConfiguration implements ProxyConfig {
   private String motdLine1 = "<aqua>BTC Proxy Core";
 
   @Expose
-  private String motdLine2 = "<yellow>Modern Minecraft 26.1.2 Only";
+  private String motdLine2 = "<yellow>Modern Minecraft 26.2 Only";
 
   @Expose
   private String motdLine1Alignment = "center";
@@ -236,7 +236,7 @@ public final class VelocityConfiguration implements ProxyConfig {
    * The lowest allowed Minecraft client version that can connect to the proxy.
    */
   @Expose
-  private String minimumVersion = "1.7.2";
+  private String minimumVersion = "26.2";
 
   /**
    * The highest allowed Minecraft client version that can connect to the proxy.
@@ -1156,14 +1156,14 @@ public final class VelocityConfiguration implements ProxyConfig {
       if (motdRaw instanceof CommentedConfig motdConfig && !motdConfig.valueMap().isEmpty()) {
         // New [motd] section format
         motdLine1 = motdConfig.getOrElse("motd-line1", "<aqua>BTC Proxy Core");
-        motdLine2 = motdConfig.getOrElse("motd-line2", "<yellow>Modern Minecraft 26.1.2 Only");
+        motdLine2 = motdConfig.getOrElse("motd-line2", "<yellow>Modern Minecraft 26.2 Only");
         motdLine1Alignment = motdConfig.getOrElse("line1-alignment", "center");
         motdLine2Alignment = motdConfig.getOrElse("line2-alignment", "center");
         motdHover = motdConfig.getOrElse("motd-hover", new ArrayList<>());
       } else if (config.contains("motd-line1")) {
         // New root-level MOTD keys (backward compat with new default config)
         motdLine1 = config.getOrElse("motd-line1", "<aqua>BTC Proxy Core");
-        motdLine2 = config.getOrElse("motd-line2", "<yellow>Modern Minecraft 26.1.2 Only");
+        motdLine2 = config.getOrElse("motd-line2", "<yellow>Modern Minecraft 26.2 Only");
         motdLine1Alignment = config.getOrElse("line1-alignment", "center");
         motdLine2Alignment = config.getOrElse("line2-alignment", "center");
         motdHover = config.getOrElse("motd-hover", new ArrayList<>());
@@ -1225,7 +1225,7 @@ public final class VelocityConfiguration implements ProxyConfig {
               "translate-header-footer", true);
       final boolean logMinimumVersion = config.getOrElse(
               "log-minimum-version", false);
-      final String minimumVersion = config.getOrElse("minimum-version", "26.1.2");
+      final String minimumVersion = config.getOrElse("minimum-version", "26.2");
       final String maximumVersion = config.getOrElse("maximum-version", UNBOUNDED);
       final CommentedConfig slashServersConfig = config.getOrElse("slash-servers", (CommentedConfig) null);
       final Map<String, List<String>> slashServers = new HashMap<>();
