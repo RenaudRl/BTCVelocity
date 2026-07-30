@@ -647,7 +647,8 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
                   security.getMaxCompressionRatio(), security.getMaxViolations()));
           channel.pipeline().addAfter(COMPRESSION_DECODER, DECOMPRESSION_BOMB_HANDLER,
               new DecompressionBombHandler(security.getMaxDecompressedSize(),
-                  security.getMaxCompressionRatio(), security.getMaxViolations()));
+                  security.getMaxCompressionRatio(), security.getMaxViolations(),
+                  security.getRatioCheckMinDecompressedSize()));
         }
 
         channel.pipeline().fireUserEventTriggered(VelocityConnectionEvent.COMPRESSION_ENABLED);

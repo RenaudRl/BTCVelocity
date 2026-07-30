@@ -3218,6 +3218,18 @@ public final class VelocityConfiguration implements ProxyConfig {
     private int maxViolations;
 
     /**
+     * The decompressed size, in bytes, at or above which the compression-ratio check applies.
+     * Packets that decompress to less than this are exempt from the ratio check (but still
+     * subject to {@link #maxDecompressedSize}). Default: 2&nbsp;MiB (2&thinsp;097&thinsp;152).
+     *
+     * <p>A high compression ratio only indicates a bomb when the resulting payload is large;
+     * legitimate Minecraft packets (chunk, light, movement) frequently exceed 100:1 while
+     * remaining tens of kilobytes, and this floor stops them from being flagged.</p>
+     */
+    @Expose
+    private int ratioCheckMinDecompressedSize;
+
+    /**
      * The default maximum decompressed size (8&nbsp;MiB).
      */
     private static final int DEFAULT_MAX_DECOMPRESSED_SIZE = 8 * 1024 * 1024;
@@ -3232,6 +3244,11 @@ public final class VelocityConfiguration implements ProxyConfig {
      */
     private static final int DEFAULT_MAX_VIOLATIONS = 3;
 
+    /**
+     * The default ratio-check floor (2&nbsp;MiB).
+     */
+    private static final int DEFAULT_RATIO_CHECK_MIN_DECOMPRESSED_SIZE = 2 * 1024 * 1024;
+
     private Security(final CommentedConfig config) {
       if (config == null) {
         // Apply defaults when the [security] section is absent from the config file.
@@ -3239,6 +3256,7 @@ public final class VelocityConfiguration implements ProxyConfig {
         this.maxDecompressedSize = DEFAULT_MAX_DECOMPRESSED_SIZE;
         this.maxCompressionRatio = DEFAULT_MAX_COMPRESSION_RATIO;
         this.maxViolations = DEFAULT_MAX_VIOLATIONS;
+        this.ratioCheckMinDecompressedSize = DEFAULT_RATIO_CHECK_MIN_DECOMPRESSED_SIZE;
         return;
       }
 
@@ -3246,6 +3264,8 @@ public final class VelocityConfiguration implements ProxyConfig {
       this.maxDecompressedSize = config.getOrElse("max-decompressed-size", DEFAULT_MAX_DECOMPRESSED_SIZE);
       this.maxCompressionRatio = config.getOrElse("max-compression-ratio", DEFAULT_MAX_COMPRESSION_RATIO);
       this.maxViolations = config.getOrElse("max-violations", DEFAULT_MAX_VIOLATIONS);
+      this.ratioCheckMinDecompressedSize = config.getOrElse(
+          "ratio-check-min-decompressed-size", DEFAULT_RATIO_CHECK_MIN_DECOMPRESSED_SIZE);
     }
 
     /**
@@ -3284,6 +3304,15 @@ public final class VelocityConfiguration implements ProxyConfig {
       return maxViolations;
     }
 
+    /**
+     * Gets the decompressed-size floor at or above which the compression-ratio check applies.
+     *
+     * @return the ratio-check floor, in bytes
+     */
+    public int getRatioCheckMinDecompressedSize() {
+      return ratioCheckMinDecompressedSize;
+    }
+
     @Override
     public String toString() {
       return "Security{"
@@ -3291,6 +3320,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", maxDecompressedSize=" + maxDecompressedSize
           + ", maxCompressionRatio=" + maxCompressionRatio
           + ", maxViolations=" + maxViolations
+          + ", ratioCheckMinDecompressedSize=" + ratioCheckMinDecompressedSize
           + '}';
     }
   }

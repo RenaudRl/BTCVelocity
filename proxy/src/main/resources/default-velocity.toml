@@ -587,7 +587,23 @@ max-decompressed-size = 8388608
 # If a packet's decompressed size divided by its compressed size exceeds this
 # value, a violation is recorded. Default: 100 (100:1).
 # Lower values are stricter; higher values allow more expansion.
+#
+# NOTE: the ratio check only applies to packets that decompress to at least
+# "ratio-check-min-decompressed-size" bytes (see below). A high ratio on a small
+# packet is normal Minecraft traffic (chunk, light and movement data compress far
+# past 100:1 while staying tens of KiB, especially during fast player movement)
+# and is NOT a decompression bomb — a bomb produces a LARGE payload from a tiny
+# input. The absolute "max-decompressed-size" cap protects every packet
+# regardless of this setting.
 max-compression-ratio = 100
+
+# The decompressed size, in bytes, at or above which the compression-ratio check
+# is enforced. Packets that decompress to less than this are exempt from the
+# ratio check (but are still subject to "max-decompressed-size"). This prevents
+# false positives on legitimate, highly compressible packets while keeping bomb
+# detection for anything that actually expands into megabytes.
+# Default: 2097152 (2 MiB), the usual maximum size of a single Minecraft packet.
+ratio-check-min-decompressed-size = 2097152
 
 # The number of violations tolerated before the offending connection is closed.
 # Each violating packet is dropped (not forwarded), and after this many

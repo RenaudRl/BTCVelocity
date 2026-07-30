@@ -40,10 +40,17 @@ import org.jetbrains.annotations.NotNull;
  * <p>Two checks are performed on every inbound {@code ByteBuf}:</p>
  * <ul>
  *   <li><b>Absolute size</b> &mdash; if the decompressed size exceeds
- *       {@link #maxDecompressedSize}, a violation is recorded.</li>
+ *       {@link #maxDecompressedSize}, a violation is recorded. This is the primary defence: a
+ *       bomb is dangerous because of the memory it produces, and this cap bounds it directly.</li>
  *   <li><b>Compression ratio</b> &mdash; if the ratio of decompressed size to compressed size
  *       exceeds {@link #maxCompressionRatio}, a violation is recorded. The compressed size is
- *       obtained from the {@link CompressionRatioMonitor} that sits earlier in the pipeline.</li>
+ *       obtained from the {@link CompressionRatioMonitor} that sits earlier in the pipeline.
+ *       <b>The ratio check is only applied once the decompressed output reaches
+ *       {@link #ratioCheckMinDecompressedSize}</b>: a decompression bomb is defined by a
+ *       <em>large</em> output produced from a tiny input, so a high ratio on a small payload is
+ *       not a bomb. Legitimate Minecraft traffic — chunk, light and entity-movement packets full
+ *       of repeated data, sent in bursts when a player moves fast — routinely compresses well
+ *       beyond 100:1 while staying only tens of kilobytes in size, and must not be flagged.</li>
  * </ul>
  *
  * <p>Each violation drops the offending packet (the buffer is released and not forwarded
@@ -74,9 +81,19 @@ public class DecompressionBombHandler extends ChannelInboundHandlerAdapter {
    */
   public static final int DEFAULT_MAX_VIOLATIONS = 3;
 
+  /**
+   * The default decompressed-size floor below which the compression-ratio check is skipped
+   * (2&nbsp;MiB = 2&thinsp;097&thinsp;152 bytes). This matches the usual maximum size of a single
+   * uncompressed Minecraft packet, so all normal traffic — however compressible — falls below it,
+   * while a genuine bomb producing multiple megabytes still lands in the enforced band between
+   * this floor and {@link #maxDecompressedSize}.
+   */
+  public static final int DEFAULT_RATIO_CHECK_MIN_DECOMPRESSED_SIZE = 2 * 1024 * 1024;
+
   private final int maxDecompressedSize;
   private final int maxCompressionRatio;
   private final int maxViolations;
+  private final int ratioCheckMinDecompressedSize;
 
   /**
    * Per-connection violation counter. Thread-safe via {@link AtomicInteger}.
@@ -84,7 +101,8 @@ public class DecompressionBombHandler extends ChannelInboundHandlerAdapter {
   private final AtomicInteger violations = new AtomicInteger(0);
 
   /**
-   * Creates a new {@code DecompressionBombHandler} with the specified limits.
+   * Creates a new {@code DecompressionBombHandler} with the specified limits and the default
+   * ratio-check floor ({@link #DEFAULT_RATIO_CHECK_MIN_DECOMPRESSED_SIZE}).
    *
    * @param maxDecompressedSize the maximum allowed decompressed payload size, in bytes
    * @param maxCompressionRatio the maximum allowed compression ratio (decompressed:compressed)
@@ -93,16 +111,38 @@ public class DecompressionBombHandler extends ChannelInboundHandlerAdapter {
   public DecompressionBombHandler(final int maxDecompressedSize,
                                   final int maxCompressionRatio,
                                   final int maxViolations) {
+    this(maxDecompressedSize, maxCompressionRatio, maxViolations,
+        DEFAULT_RATIO_CHECK_MIN_DECOMPRESSED_SIZE);
+  }
+
+  /**
+   * Creates a new {@code DecompressionBombHandler} with the specified limits.
+   *
+   * @param maxDecompressedSize           the maximum allowed decompressed payload size, in bytes
+   * @param maxCompressionRatio           the maximum allowed compression ratio
+   *                                      (decompressed:compressed)
+   * @param maxViolations                 the number of violations before the connection is closed
+   * @param ratioCheckMinDecompressedSize the decompressed size, in bytes, at or above which the
+   *                                      compression-ratio check is applied; smaller payloads are
+   *                                      exempt from the ratio check regardless of how well they
+   *                                      compressed
+   */
+  public DecompressionBombHandler(final int maxDecompressedSize,
+                                  final int maxCompressionRatio,
+                                  final int maxViolations,
+                                  final int ratioCheckMinDecompressedSize) {
     this.maxDecompressedSize = maxDecompressedSize;
     this.maxCompressionRatio = maxCompressionRatio;
     this.maxViolations = maxViolations;
+    this.ratioCheckMinDecompressedSize = ratioCheckMinDecompressedSize;
   }
 
   /**
    * Creates a new {@code DecompressionBombHandler} with default limits.
    */
   public DecompressionBombHandler() {
-    this(DEFAULT_MAX_DECOMPRESSED_SIZE, DEFAULT_MAX_COMPRESSION_RATIO, DEFAULT_MAX_VIOLATIONS);
+    this(DEFAULT_MAX_DECOMPRESSED_SIZE, DEFAULT_MAX_COMPRESSION_RATIO, DEFAULT_MAX_VIOLATIONS,
+        DEFAULT_RATIO_CHECK_MIN_DECOMPRESSED_SIZE);
   }
 
   @Override
@@ -125,16 +165,23 @@ public class DecompressionBombHandler extends ChannelInboundHandlerAdapter {
     }
 
     // --- Check 2: compression ratio --------------------------------------------------
-    final CompressionRatioMonitor monitor = ctx.pipeline().get(CompressionRatioMonitor.class);
-    if (monitor != null) {
-      final int compressedSize = monitor.getLastCompressedSize();
-      if (compressedSize > 0) {
-        final double ratio = (double) decompressedSize / (double) compressedSize;
-        if (ratio > maxCompressionRatio) {
-          recordViolation(ctx, buf, remoteAddress,
-              "Compression ratio %.1f:1 (decompressed %,d / compressed %,d) exceeds maximum %d:1",
-              ratio, decompressedSize, compressedSize, maxCompressionRatio);
-          return;
+    // Only enforced once the decompressed output is itself large: a decompression bomb is
+    // defined by a LARGE payload produced from a tiny input. A high ratio on a small packet is
+    // normal Minecraft traffic (repeated chunk/light/movement data compresses far past 100:1
+    // while staying tens of KiB) and must not be treated as an attack. The absolute-size cap
+    // above remains the primary defence for every packet.
+    if (decompressedSize >= ratioCheckMinDecompressedSize) {
+      final CompressionRatioMonitor monitor = ctx.pipeline().get(CompressionRatioMonitor.class);
+      if (monitor != null) {
+        final int compressedSize = monitor.getLastCompressedSize();
+        if (compressedSize > 0) {
+          final double ratio = (double) decompressedSize / (double) compressedSize;
+          if (ratio > maxCompressionRatio) {
+            recordViolation(ctx, buf, remoteAddress,
+                "Compression ratio %.1f:1 (decompressed %,d / compressed %,d) exceeds maximum %d:1",
+                ratio, decompressedSize, compressedSize, maxCompressionRatio);
+            return;
+          }
         }
       }
     }
@@ -204,5 +251,14 @@ public class DecompressionBombHandler extends ChannelInboundHandlerAdapter {
    */
   public int getMaxViolations() {
     return maxViolations;
+  }
+
+  /**
+   * Gets the decompressed-size floor at or above which the compression-ratio check is applied.
+   *
+   * @return the ratio-check floor, in bytes
+   */
+  public int getRatioCheckMinDecompressedSize() {
+    return ratioCheckMinDecompressedSize;
   }
 }
