@@ -1,0 +1,89 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "io.github.miniplaceholders",
+    "module": "miniplaceholders-api",
+    "version": "3.2.0-26.2-BTC-1",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.4.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "team.unnamed",
+          "module": "inject",
+          "version": {
+            "requires": "2.0.1"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "miniplaceholders-api-3.2.0-26.2-BTC-1.jar",
+          "url": "miniplaceholders-api-3.2.0-26.2-BTC-1.jar",
+          "size": 43640,
+          "sha512": "95fd43762f605b5709c33bc0b8f781d0f800dd71d84ed96b1cbb0727edb1f44b349312ce606ad45dccea1f910eb476ac84fdb6b94a145a1d719c5916d6b5f900",
+          "sha256": "581a49c37777a09e0a67a9bcd768740d925c7809237aa736e7d6070cb98b7ee2",
+          "sha1": "d22e5273d9853f902b591f8069739a0da7b34df1",
+          "md5": "f9dd1e557b792cc19de9a1156ab8728b"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "miniplaceholders-api-3.2.0-26.2-BTC-1.jar",
+          "url": "miniplaceholders-api-3.2.0-26.2-BTC-1.jar",
+          "size": 43640,
+          "sha512": "95fd43762f605b5709c33bc0b8f781d0f800dd71d84ed96b1cbb0727edb1f44b349312ce606ad45dccea1f910eb476ac84fdb6b94a145a1d719c5916d6b5f900",
+          "sha256": "581a49c37777a09e0a67a9bcd768740d925c7809237aa736e7d6070cb98b7ee2",
+          "sha1": "d22e5273d9853f902b591f8069739a0da7b34df1",
+          "md5": "f9dd1e557b792cc19de9a1156ab8728b"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "miniplaceholders-api-3.2.0-26.2-BTC-1-sources.jar",
+          "url": "miniplaceholders-api-3.2.0-26.2-BTC-1-sources.jar",
+          "size": 25636,
+          "sha512": "c958f2ebe7d0f4722c4c1a5eefe7dcca9fcd3f8e78bc9024553eccb64549d15c0d0131dfbe11f2ab4d1fbf5ea2e622d28526fa643972f11aa973127fe47fb1ba",
+          "sha256": "54291c19ef91607cb0b130bee142a3139bf67cc3d94ad626d26901dd6e696788",
+          "sha1": "836bc842a4c7e67e8332bc1fe721d06339a4af5e",
+          "md5": "fd4b76b8cd683a5c21ddafb61ed01eb3"
+        }
+      ]
+    }
+  ]
+}

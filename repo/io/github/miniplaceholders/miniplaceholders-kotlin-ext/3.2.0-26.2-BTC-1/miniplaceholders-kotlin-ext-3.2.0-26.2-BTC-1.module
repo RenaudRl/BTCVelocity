@@ -1,0 +1,84 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "io.github.miniplaceholders",
+    "module": "miniplaceholders-kotlin-ext",
+    "version": "3.2.0-26.2-BTC-1",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.4.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "files": [
+        {
+          "name": "miniplaceholders-kotlin-ext-3.2.0-26.2-BTC-1.jar",
+          "url": "miniplaceholders-kotlin-ext-3.2.0-26.2-BTC-1.jar",
+          "size": 5810,
+          "sha512": "1b97e8e47c0608e9b81b2d5be2388461c016569e998b65480acbd39ce85525531513b0385797103c4ff13fc744f6946733af39f8932d88a1f1c39f0584c46231",
+          "sha256": "3f2a5b11615975d2bbb46757bac10ca553154f688c64831bf222a47fd3854249",
+          "sha1": "d194fc7fca01b0d941974098b4ecc6fe97c65b2b",
+          "md5": "4b2505385294ad5f5793a1fd991c7b55"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "files": [
+        {
+          "name": "miniplaceholders-kotlin-ext-3.2.0-26.2-BTC-1.jar",
+          "url": "miniplaceholders-kotlin-ext-3.2.0-26.2-BTC-1.jar",
+          "size": 5810,
+          "sha512": "1b97e8e47c0608e9b81b2d5be2388461c016569e998b65480acbd39ce85525531513b0385797103c4ff13fc744f6946733af39f8932d88a1f1c39f0584c46231",
+          "sha256": "3f2a5b11615975d2bbb46757bac10ca553154f688c64831bf222a47fd3854249",
+          "sha1": "d194fc7fca01b0d941974098b4ecc6fe97c65b2b",
+          "md5": "4b2505385294ad5f5793a1fd991c7b55"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "miniplaceholders-kotlin-ext-3.2.0-26.2-BTC-1-sources.jar",
+          "url": "miniplaceholders-kotlin-ext-3.2.0-26.2-BTC-1-sources.jar",
+          "size": 2699,
+          "sha512": "e0d80e8a0f1dea65441d89fd8ac43c1bb43a10b24bb6d70c250ba75ad0882f390dcb201dc10c93e6d897f7848be26125524bcf537c5ee0e853090ed747fd9541",
+          "sha256": "c72bb91e89bc73e43f94a156fe0dea18b91e9e7ac913c6e617335819a747df83",
+          "sha1": "7fb8291a0fef6667126e2dc29cd46b5739e54540",
+          "md5": "02f572053b68336a6c661651fc116304"
+        }
+      ]
+    }
+  ]
+}
