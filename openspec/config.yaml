@@ -1,0 +1,61 @@
+schema: spec-driven
+
+context: |
+  BTCVelocity is the BTC Studio Minecraft proxy, based on Java 25 and Velocity.
+  Bridge changes must remain non-blocking on Netty event loops, validate all backend/client
+  plugin messages, use explicit backend allowlists, and preserve the existing dirty worktree.
+  The BTC-CORE bridge protocol is a cross-repository contract; changes require compatibility
+  evidence on both proxy and backend. No secrets may be stored in source or tracked env files.
+  Security and protocol claims require tests or an explicit reproduction. Do not mix bridge
+  control-plane messages with client-originated messages without authentication.
+
+rules:
+  proposal:
+    - Include threat model, compatibility matrix, non-goals, and rollback conditions.
+    - Identify every BTC-CORE counterpart and observable verification.
+  design:
+    - Do not block Netty event loops or use unbounded payload parsing.
+    - Keep backend identity, authorization, idempotence, and failure semantics explicit.
+  tasks:
+    - Separate proxy, backend, tests, and operational verification tasks.
+    - Never include secret values in examples, fixtures, logs, or test output.
+
+operations:
+  apply:
+    guidance:
+      - Preserve unrelated dirty changes and review the final diff by change scope.
+      - Run focused unit tests before any live proxy/server test.
+  archive:
+    guidance:
+      - Record proxy/backend compatibility and rollback evidence before archiving.
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+# Add your tech stack, conventions, style guides, domain knowledge, etc.
+# Example:
+#   context: |
+#     Tech stack: TypeScript, React, Node.js
+#     We use conventional commits
+#     Domain: e-commerce platform
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing

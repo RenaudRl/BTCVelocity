@@ -1,0 +1,13 @@
+﻿{
+    "version":  1,
+    "repo":  "BTCVelocity",
+    "created":  "2026-08-16T06:03:07",
+    "tool":  "openspec",
+    "hermesExternalDir":  "/mnt/d/GitHub/BTCVelocity/.hermes/skills",
+    "hermesPatched":  true,
+    "dirsCreated":  [
+                        "openspec",
+                        ".agents",
+                        ".hermes"
+                    ]
+}

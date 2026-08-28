@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-08-16
+goal: Prevent client-originated bridge abuse and make cross-server operations
+  observable and retry-safe.
