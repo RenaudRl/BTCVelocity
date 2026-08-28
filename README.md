@@ -20,15 +20,58 @@ Players → BTC Velocity (proxy) → BTC Core (backend servers)
     PostgreSQL (persistent storage)
 ```
 
-### Core Features
+## ✨ What BTC Velocity Adds
 
-- **Multi-backend cache** : Redis, Valkey, or Dragonfly — switch via single config option
-- **PostgreSQL native support** : HikariCP connection pool, async-friendly
-- **Cluster sync** : Multi-proxy player tracking via Redis pub/sub
-- **Queue system** : Per-server connection queues with dynamic prioritization
-- **Modern forwarding** : Velocity native + BungeeGuard support
-- **Anti-decompression bomb** : Compression ratio monitoring and oversized packet detection
-- **Sub-millisecond latency** : Optimized Netty pipeline, zero-copy where possible
+Every row is a change this fork makes over its Velocity-CTD base. The **Origin** column says where
+the work comes from — **BTC** means it was written here. Full attribution and the statement of
+modifications required by GPLv3 §5(a) are in [NOTICE.md](NOTICE.md).
+
+### Network and protocol
+
+| Feature | Origin | What it does |
+|---|---|---|
+| Minecraft 26.2 | BTC | Protocol 776 support. |
+| `btc:bridge` protocol **v2** | BTC | Typed, versioned messages between proxy and backends. Every message carries an envelope (version, message id, source backend); `Ack`/`Nack` let the sender tell a lost request from a slow one. The sealed hierarchy has an explicit `permits` list, so a message added outside it fails to compile instead of silently decoding as unknown. |
+| Modern forwarding | Velocity | Velocity-native forwarding plus BungeeGuard. |
+| Anti-decompression bomb | BTC | Compression-ratio monitoring with a ratio-check floor, and oversized packet detection. |
+| Netty pipeline tuning | BTC | Zero-copy where possible. |
+
+### Permissions — native, LuckPerms removed
+
+LuckPerms is no longer used anywhere on the BTC network. The `luckperms-integration` module and the
+jar it embedded in the shadow JAR are gone.
+
+| Piece | What it does |
+|---|---|
+| `NativePermissionEvaluator` | Wildcard resolution and inheritance, evaluated against an immutable snapshot — safe to read from any Netty thread. |
+| `NativePermissionService` / `NativePermissionSnapshot` | Loads and swaps the snapshot; MySQL storage is optional. |
+| `NativePermissionResolverProvider` | Discovered through `META-INF/services`. The shadow JAR now calls `mergeServiceFiles()` — without it the last service file wins and the resolver is never found. |
+
+### MOTD
+
+| Before | Now |
+|---|---|
+| Two config keys (`line1-alignment`, `line2-alignment`), whole-line only | Inline `<left>` / `<center>` / `<right>` tags anywhere in the line |
+| Alignment counted in characters | Counted in **pixels**, from the client font's real glyph widths (`MinecraftFontWidth`) — bold and wide glyphs no longer skew the centring |
+| — | One `motd-width` key replaces both alignment keys; `MotdAlignmentMigration` converts existing configs |
+| Padding leaked into the GameSpy query response | `getPlainMotd()` renders without alignment padding |
+
+### Storage and cluster
+
+| Feature | Origin | Notes |
+|---|---|---|
+| Redis / Valkey / Dragonfly | BTC | Protocol-compatible, switched with one `backend` option. Valkey for open-source purity, Dragonfly for raw single-node speed. |
+| PostgreSQL | BTC | Native persistent backend on HikariCP, drop-in for MySQL setups. |
+| Cluster sync | BTC | Multi-proxy player tracking over Redis pub/sub. |
+| Queue system | BTC | Per-server connection queues with dynamic prioritisation. |
+
+### Distribution
+
+| | |
+|---|---|
+| Public API | `dev.btc.velocity:api`, published to <https://borntocraftstudio.net/repo/> |
+| Repository source of truth | [`repo/`](repo/README.md) in this repository, uploaded to the site as-is |
+| Also hosted there | `dev.btc.core:api` (BTC-CORE) and the BTC forks of PacketEvents, CraftEngine, BetterHud, BetterModel, CustomNameplates, BlueMap and MiniPlaceholders — each under its own upstream licence |
 
 ---
 
@@ -209,10 +252,39 @@ BTCVelocity/
 
 ## 📜 Credits & License
 
-- **Base Engine**: [Velocity](https://github.com/PaperMC/Velocity) (GPLv3)
-- **Fork Base**: [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD) by GemstoneGG
-- **Packaging**: Born To Craft Studio
+### Heritage
+
+| Layer | Project | Licence |
+|---|---|---|
+| Base engine | [Velocity](https://github.com/PaperMC/Velocity) (PaperMC) | GPLv3 (proxy) / MIT (api) |
+| Fork base | [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD) by GemstoneGG | GPLv3 |
+| This fork | Born To Craft Studio | GPLv3 / MIT, per module |
+
+### Licence — per module
+
+This repository is **not** under a single licence. Check which module you are copying from.
+
+| Module | Licence |
+|---|---|
+| `proxy/`, `native/`, repository as a whole | **GPL-3.0-or-later** — [LICENSE](LICENSE) |
+| `api/` | **MIT** — [api/LICENSE](api/LICENSE) |
+
+`api/` is MIT because Velocity's API is MIT. That is what lets a third-party plugin build against
+`dev.btc.velocity:api` without becoming GPL — and it also means anything placed in `api/` can be
+reused, relicensed and sold by anyone. Put what you want protected by copyleft in `proxy/`.
+
+### What that means in practice
+
+| | |
+|---|---|
+| You may | Run it, modify it, redistribute it — **including commercially**. GPLv3 §4 explicitly allows charging for a copy. |
+| You must | Ship the complete corresponding source under GPLv3, preserve the copyright notices, and **state that you modified it and when** (§5(a)). |
+| You may not | Relicense the GPL modules under stricter terms, distribute them closed source, or strip the attribution and present this work as your own — that terminates your rights under §8. |
+| Marks | **"Born To Craft", "BTC Studio", "BTC Velocity", "BTCVelocity"** and the associated logos are **not** covered by the GPL or the MIT licence. Fork the code freely, but rebrand your fork. |
+
+Full attribution, the statement of modifications required by §5(a), and the trademark reservation
+are in **[NOTICE.md](NOTICE.md)**. Read it before redistributing.
 
 ---
 
-© 2026 Born To Craft Studio. Licensed under GPLv3.
+© 2026 Born To Craft Studio. Proxy under GPLv3, API under MIT. See [NOTICE.md](NOTICE.md).
