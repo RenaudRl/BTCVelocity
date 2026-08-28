@@ -95,8 +95,7 @@ public class PermissionUtils {
         LOGGER.warn(
             "The permission provider did not expose a permission map, so a slower method will be used "
                 + "for more complex permission checks. If possible, consider switching to a permission "
-                + "provider that integrates with Velocity-CTD's PermissionResolver, or use LuckPerms "
-                + "which has built-in support for this by Velocity-CTD."
+                + "provider that integrates with BTCVelocity's native PermissionResolver."
         );
       }
 

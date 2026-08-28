@@ -26,11 +26,9 @@ sequenceOf(
     "api",
     "native",
     "proxy",
-    "luckperms-integration",
 ).forEach {
     val project = ":velocity-$it"
     include(project)
     project(project).projectDir = file(it)
 }
-
 

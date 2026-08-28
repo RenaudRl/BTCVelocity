@@ -22,6 +22,9 @@ tasks {
     }
 
     shadowJar {
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+        mergeServiceFiles()
+
         filesMatching("META-INF/org/apache/logging/log4j/core/config/plugins/**") {
             duplicatesStrategy = DuplicatesStrategy.INCLUDE
         }
@@ -92,15 +95,6 @@ tasks {
 
         relocate("org.bstats", "com.velocitypowered.proxy.bstats")
 
-        // Embed :velocity-luckperms-integration as META-INF/btcvelocity/integrations/velocity-luckperms-integration.jar
-        val lpJar = project(":velocity-luckperms-integration")
-            .tasks
-            .named<Jar>("jar")
-        dependsOn(lpJar)
-        from(lpJar.flatMap { it.archiveFile }) {
-            into("META-INF/btcvelocity/integrations")
-            rename { "velocity-luckperms-integration.jar" }
-        }
     }
 
     runShadow {
@@ -154,6 +148,7 @@ dependencies {
     implementation(libs.fastutil)
     implementation(libs.postgresql)
     implementation(libs.hikari)
+    implementation(libs.mysql.connector)
     implementation(platform(libs.adventure.bom))
     implementation(libs.adventure.text.serializer.json.legacy.impl)
     implementation(libs.adventure.facet)

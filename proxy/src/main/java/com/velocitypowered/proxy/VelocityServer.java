@@ -44,6 +44,7 @@ import com.btcvelocity.proxy.command.builtin.ProxyAliasCommand;
 import com.btcvelocity.proxy.command.builtin.QueueAdminCommand;
 import com.btcvelocity.proxy.command.builtin.SlashServerCommand;
 import com.btcvelocity.proxy.command.builtin.TransferCommand;
+import com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory;
 import com.btcvelocity.proxy.queue.RedisVelocityQueueManager;
 import com.btcvelocity.proxy.queue.VelocityQueueManager;
 import com.btcvelocity.proxy.redis.VelocityRedis;
@@ -620,7 +621,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     bridgeChannel.registerListener(worldRegistry::onWorldUnloaded);
     // Proxy-driven social transport (connect / party warp) from the social extensions.
     bridgeChannel.registerListener(
-        new com.btcvelocity.proxy.bridge.SocialTransferHandler(clusterPlayerService));
+        new com.btcvelocity.proxy.bridge.SocialTransferHandler(clusterPlayerService, this));
 
     registerCommands();
 
@@ -1184,6 +1185,8 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       if (this.postgresPool != null) {
         this.postgresPool.shutdown();
       }
+
+      PermissionResolverAdapterFactory.shutdown();
 
       // Since we manually removed the shutdown hook, we need to handle the shutdown ourselves.
       LogManager.shutdown();

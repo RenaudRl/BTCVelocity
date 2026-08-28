@@ -17,7 +17,7 @@
 - Proxy core: `proxy/src/main/java/`
 - API: `api/src/main/java/`
 - Native: `native/src/main/java/`
-- LuckPerms integration: `luckperms-integration/`
+- Native permissions: `proxy/src/main/java/com/btcvelocity/proxy/permission/`
 
 ## Project Memory
 

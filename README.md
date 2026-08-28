@@ -187,7 +187,7 @@ BTCVelocity/
 │   ├── com.btcvelocity.proxy/  → Custom code (cluster, commands, queue, redis, storage)
 │   └── com.velocitypowered.*   → Upstream Velocity code
 ├── native/                     → Netty native transports
-├── luckperms-integration/      → LuckPerms permission resolver
+├── proxy/src/main/.../permission → Native BTC permissions resolver (optional MySQL/Redis)
 ├── config/checkstyle/          → Code style configuration
 └── Docs/                       → Reference documentation
 ```

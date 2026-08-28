@@ -495,11 +495,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
   }
 
   void setPermissionFunction(final PermissionFunction permissionFunction) {
-    if (permissionFunction instanceof PermissionResolver resolver) {
-      this.permissionResolver = resolver;
-    } else {
-      this.permissionResolver = createPermissionResolverAdapter(this, permissionFunction);
-    }
+    this.permissionResolver = createPermissionResolverAdapter(this, permissionFunction);
   }
 
   @Override

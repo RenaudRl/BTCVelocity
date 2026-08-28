@@ -131,8 +131,6 @@ public final class VelocityConsole extends SimpleTerminalConsole implements Cons
               + " back to the default permission function.",
           permissionProvider.getClass().getName());
       this.permissionResolver = DEFAULT_PERMISSION_RESOLVER;
-    } else if (permissionFunction instanceof PermissionResolver) {
-      this.permissionResolver = (PermissionResolver) permissionFunction;
     } else {
       this.permissionResolver = createPermissionResolverAdapter(this, permissionFunction);
     }
