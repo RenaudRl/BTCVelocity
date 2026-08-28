@@ -364,13 +364,17 @@ public final class BridgeCodec {
       case BridgeMessage.WorldLoaded value -> {
         bounded(value.serverName(), limits.maxStringLength(), false);
         bounded(value.worldName(), limits.maxWorldNameLength(), false);
-        if (value.loadTimeMs() < 0) throw new IllegalArgumentException("invalid load time");
+        if (value.loadTimeMs() < 0) {
+          throw new IllegalArgumentException("invalid load time");
+        }
       }
       case BridgeMessage.WorldLoadFailed value -> {
         bounded(value.serverName(), limits.maxStringLength(), false);
         bounded(value.worldName(), limits.maxWorldNameLength(), false);
         bounded(value.reason(), limits.maxStringLength(), false);
-        if (value.loadTimeMs() < 0) throw new IllegalArgumentException("invalid load time");
+        if (value.loadTimeMs() < 0) {
+          throw new IllegalArgumentException("invalid load time");
+        }
       }
       case BridgeMessage.WorldUnloaded value -> {
         bounded(value.serverName(), limits.maxStringLength(), false);
@@ -378,7 +382,9 @@ public final class BridgeCodec {
       }
       case BridgeMessage.QueueStatusResponse value -> {
         bounded(value.serverName(), limits.maxStringLength(), false);
-        if (value.backendQueueSize() < 0) throw new IllegalArgumentException("invalid queue size");
+        if (value.backendQueueSize() < 0) {
+          throw new IllegalArgumentException("invalid queue size");
+        }
       }
       case BridgeMessage.ConnectRequest value -> bounded(value.targetServer(), limits.maxStringLength(), false);
       case BridgeMessage.PartyWarp value -> {
@@ -394,7 +400,9 @@ public final class BridgeCodec {
 
   private static void exact(final JsonObject object, final String... fields) {
     final Set<String> expected = Set.of(fields);
-    if (!hasExactly(object, expected)) throw new IllegalArgumentException("unknown payload field");
+    if (!hasExactly(object, expected)) {
+      throw new IllegalArgumentException("unknown payload field");
+    }
   }
 
   private static boolean hasExactly(final JsonObject object, final Set<String> fields) {
@@ -419,7 +427,9 @@ public final class BridgeCodec {
   }
 
   private static void nullableBounded(@Nullable final String value, final int max) {
-    if (value != null) bounded(value, max, true);
+    if (value != null) {
+      bounded(value, max, true);
+    }
   }
 
   private static void bounded(final String value, final int max, final boolean allowBlank) {
@@ -430,7 +440,9 @@ public final class BridgeCodec {
 
   private static JsonElement required(final JsonObject object, final String key) {
     final JsonElement element = object.get(key);
-    if (element == null) throw new IllegalArgumentException("missing field: " + key);
+    if (element == null) {
+      throw new IllegalArgumentException("missing field: " + key);
+    }
     return element;
   }
 
@@ -448,13 +460,17 @@ public final class BridgeCodec {
 
   private static int nonNegativeInt(final JsonObject object, final String key) {
     final int value = integer(object, key);
-    if (value < 0) throw new IllegalArgumentException("negative integer");
+    if (value < 0) {
+      throw new IllegalArgumentException("negative integer");
+    }
     return value;
   }
 
   private static long nonNegativeLong(final JsonObject object, final String key) {
     final long value = longValue(object, key);
-    if (value < 0) throw new IllegalArgumentException("negative long");
+    if (value < 0) {
+      throw new IllegalArgumentException("negative long");
+    }
     return value;
   }
 
@@ -472,7 +488,9 @@ public final class BridgeCodec {
       throw new IllegalArgumentException("field is not a number");
     }
     final double result = value.getAsDouble();
-    if (!Double.isFinite(result) || result < 0) throw new IllegalArgumentException("invalid metric");
+    if (!Double.isFinite(result) || result < 0) {
+      throw new IllegalArgumentException("invalid metric");
+    }
     return result;
   }
 
@@ -518,8 +536,11 @@ public final class BridgeCodec {
 
   private static void addNullable(final JsonObject object, final String key,
                                   @Nullable final String value) {
-    if (value == null) object.add(key, com.google.gson.JsonNull.INSTANCE);
-    else object.addProperty(key, value);
+    if (value == null) {
+      object.add(key, com.google.gson.JsonNull.INSTANCE);
+    } else {
+      object.addProperty(key, value);
+    }
   }
 
   private static boolean lifetimeTooLong(final long issuedAt, final long expiresAt,
