@@ -1,20 +1,28 @@
 # Config version. Do not change this.
-config-version = "2.7"
+config-version = "2.8"
 
 # What port should the proxy be bound to? By default, we'll bind to all addresses on port 25565.
 bind = "0.0.0.0:25565"
 
 # --- MOTD Configuration ---
-# Configure your server's Message of the Day with per-line alignment.
-# Each line supports MiniMessage format and can be aligned left, center, or right.
+# Configure your server's Message of the Day. Each line supports MiniMessage format.
+#
+# Alignment is written inline with the <left>, <center> and <right> tags. A tag opens a
+# segment that runs until the next alignment tag or the end of the line, so a single line
+# can mix alignments — for example, a centered title with a version pinned to the right:
+#
+#   motd-line1 = "<center><gold>My Server<right><dark_gray>1.26"
+#
+# Text before the first tag is left-aligned, so a line without any tag renders as written.
+# Segments are positioned using real Minecraft font metrics (bold and unicode included),
+# not by counting characters, so the layout holds however long the text gets.
 # First line of the MOTD
-motd-line1 = "<gradient:gold:yellow><b>BTC Proxy Core</b></gradient>"
+motd-line1 = "<center><gradient:gold:yellow><b>BTC Proxy Core</b></gradient>"
 # Second line of the MOTD
-motd-line2 = "<gray>The Ultimate 26.2 Experience"
-# Alignment for line 1: "left", "center", or "right"
-line1-alignment = "center"
-# Alignment for line 2: "left", "center", or "right"
-line2-alignment = "center"
+motd-line2 = "<center><gray>The Ultimate 26.2 Experience"
+# Usable width of the MOTD area, in pixels. 270 matches the vanilla server list; lower it
+# if your MOTD looks shifted right, raise it if it looks shifted left.
+motd-width = 270
 # What should it look like when you hover over the player count? This is
 # displayed when hovering over the player count/max players' tooltip and
 # only supports the legacy colors due to Minecraft limitations.

@@ -34,9 +34,11 @@ import com.velocitypowered.proxy.config.migration.ConfigurationMigration;
 import com.velocitypowered.proxy.config.migration.ForwardingMigration;
 import com.velocitypowered.proxy.config.migration.KeyAuthenticationMigration;
 import com.velocitypowered.proxy.config.migration.MiniMessageTranslationsMigration;
+import com.velocitypowered.proxy.config.migration.MotdAlignmentMigration;
 import com.velocitypowered.proxy.config.migration.MotdMigration;
 import com.velocitypowered.proxy.config.migration.TransferIntegrationMigration;
 import com.velocitypowered.proxy.util.AddressUtil;
+import com.velocitypowered.proxy.util.MotdRenderer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -83,10 +85,7 @@ public final class VelocityConfiguration implements ProxyConfig {
   private String motdLine2 = "<yellow>Modern Minecraft 26.2 Only";
 
   @Expose
-  private String motdLine1Alignment = "center";
-
-  @Expose
-  private String motdLine2Alignment = "center";
+  private int motdWidth = MotdRenderer.DEFAULT_MOTD_WIDTH;
 
   private @MonotonicNonNull Component motdAsComponent;
 
@@ -270,8 +269,7 @@ public final class VelocityConfiguration implements ProxyConfig {
   private Map<String, Integer> playerCaps;
 
   private VelocityConfiguration(final String bind, final String motdLine1, final String motdLine2,
-                                final String motdLine1Alignment, final String motdLine2Alignment,
-                                final List<String> motdHover,
+                                final int motdWidth, final List<String> motdHover,
                                 final int showMaxPlayers, final boolean onlineMode,
                                 final boolean preventClientProxyConnections, final boolean announceForge,
                                 final PlayerInfoForwarding playerInfoForwardingMode, final byte[] forwardingSecret,
@@ -295,8 +293,7 @@ public final class VelocityConfiguration implements ProxyConfig {
     this.bind = bind;
     this.motdLine1 = motdLine1;
     this.motdLine2 = motdLine2;
-    this.motdLine1Alignment = motdLine1Alignment;
-    this.motdLine2Alignment = motdLine2Alignment;
+    this.motdWidth = motdWidth;
     this.motdHover = motdHover;
     this.showMaxPlayers = showMaxPlayers;
     this.onlineMode = onlineMode;
@@ -521,7 +518,23 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   @Override
   public Component getMotd() {
-    return buildAlignedMotd();
+    if (motdAsComponent == null) {
+      motdAsComponent = MotdRenderer.render(motdLine1, motdLine2, motdWidth);
+    }
+    return motdAsComponent;
+  }
+
+  /**
+   * Returns the MOTD as plain text, without the space padding used for alignment.
+   *
+   * @return the plain text MOTD
+   */
+  public String getPlainMotd() {
+    final String first = MotdRenderer.renderPlain(motdLine1);
+    if (motdLine2 == null || motdLine2.isEmpty()) {
+      return first;
+    }
+    return first + "\n" + MotdRenderer.renderPlain(motdLine2);
   }
 
   @Override
@@ -1111,7 +1124,9 @@ public final class VelocityConfiguration implements ProxyConfig {
           new KeyAuthenticationMigration(),
           new MotdMigration(),
           new MiniMessageTranslationsMigration(),
-          new TransferIntegrationMigration()
+          new TransferIntegrationMigration(),
+          // Must stay last: it bumps config-version past every migration above.
+          new MotdAlignmentMigration()
       ));
 
       migrations.addAll(BtcConfigMigrations.createBtcMigrations());
@@ -1145,35 +1160,32 @@ public final class VelocityConfiguration implements ProxyConfig {
 
       final byte[] forwardingSecret = forwardingSecretString.getBytes(StandardCharsets.UTF_8);
 
-      // Read MOTD from dedicated [motd] section, with fallback to legacy root-level keys
+      // Read MOTD from dedicated [motd] section, with fallback to legacy root-level keys.
+      // Alignment is expressed inline with the <left>/<center>/<right> tags, see MotdRenderer.
       final Object motdRaw = config.get("motd");
       final String motdLine1;
       final String motdLine2;
-      final String motdLine1Alignment;
-      final String motdLine2Alignment;
+      final int motdWidth;
       final List<String> motdHover;
 
       if (motdRaw instanceof CommentedConfig motdConfig && !motdConfig.valueMap().isEmpty()) {
         // New [motd] section format
         motdLine1 = motdConfig.getOrElse("motd-line1", "<aqua>BTC Proxy Core");
         motdLine2 = motdConfig.getOrElse("motd-line2", "<yellow>Modern Minecraft 26.2 Only");
-        motdLine1Alignment = motdConfig.getOrElse("line1-alignment", "center");
-        motdLine2Alignment = motdConfig.getOrElse("line2-alignment", "center");
+        motdWidth = motdConfig.getIntOrElse("motd-width", MotdRenderer.DEFAULT_MOTD_WIDTH);
         motdHover = motdConfig.getOrElse("motd-hover", new ArrayList<>());
       } else if (config.contains("motd-line1")) {
         // New root-level MOTD keys (backward compat with new default config)
         motdLine1 = config.getOrElse("motd-line1", "<aqua>BTC Proxy Core");
         motdLine2 = config.getOrElse("motd-line2", "<yellow>Modern Minecraft 26.2 Only");
-        motdLine1Alignment = config.getOrElse("line1-alignment", "center");
-        motdLine2Alignment = config.getOrElse("line2-alignment", "center");
+        motdWidth = config.getIntOrElse("motd-width", MotdRenderer.DEFAULT_MOTD_WIDTH);
         motdHover = config.getOrElse("motd-hover", new ArrayList<>());
       } else {
         // Legacy flat motd key for backward compatibility
         String legacyMotd = config.getOrElse("motd", "<aqua>BTC Proxy Core");
         motdLine1 = legacyMotd;
         motdLine2 = "";
-        motdLine1Alignment = "left";
-        motdLine2Alignment = "left";
+        motdWidth = config.getIntOrElse("motd-width", MotdRenderer.DEFAULT_MOTD_WIDTH);
         motdHover = config.getOrElse("motd-hover", new ArrayList<>());
       }
 
@@ -1306,8 +1318,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           bind,
           motdLine1,
           motdLine2,
-          motdLine1Alignment,
-          motdLine2Alignment,
+          motdWidth,
           motdHover,
           maxPlayers,
           onlineMode,
@@ -3323,55 +3334,5 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", ratioCheckMinDecompressedSize=" + ratioCheckMinDecompressedSize
           + '}';
     }
-  }
-
-
-  private net.kyori.adventure.text.Component buildAlignedMotd() {
-    net.kyori.adventure.text.minimessage.MiniMessage miniMessage =
-        net.kyori.adventure.text.minimessage.MiniMessage.miniMessage();
-
-    net.kyori.adventure.text.Component line1 = buildAlignedLine(motdLine1, motdLine1Alignment, miniMessage);
-    net.kyori.adventure.text.Component line2 = buildAlignedLine(motdLine2, motdLine2Alignment, miniMessage);
-
-    if (motdLine2.isEmpty()) {
-      return line1;
-    }
-    return line1.append(net.kyori.adventure.text.Component.newline()).append(line2);
-  }
-
-  private net.kyori.adventure.text.Component buildAlignedLine(
-      String rawText,
-      String alignment,
-      net.kyori.adventure.text.minimessage.MiniMessage miniMessage
-  ) {
-    if (rawText == null || rawText.isEmpty()) {
-      return net.kyori.adventure.text.Component.empty();
-    }
-
-    net.kyori.adventure.text.Component parsed = miniMessage.deserialize(rawText);
-    if (alignment == null || alignment.equalsIgnoreCase("left")) {
-      return parsed;
-    }
-
-    // Minecraft MOTD uses ~45 visible chars per line (pixel-width based, this is an approximation)
-    int targetLength = 45;
-    String plainText = miniMessage.stripTags(rawText);
-    int currentLength = plainText.length();
-
-    if (currentLength >= targetLength) {
-      return parsed;
-    }
-
-    int diff = targetLength - currentLength;
-    String spaces;
-    if (alignment.equalsIgnoreCase("center")) {
-      spaces = " ".repeat(diff / 2);
-    } else if (alignment.equalsIgnoreCase("right")) {
-      spaces = " ".repeat(diff);
-    } else {
-      return parsed;
-    }
-
-    return net.kyori.adventure.text.Component.text(spaces).append(parsed);
   }
 }

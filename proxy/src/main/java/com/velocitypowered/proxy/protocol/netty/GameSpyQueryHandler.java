@@ -45,7 +45,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.apache.logging.log4j.LogManager;
 
 /**
@@ -94,7 +93,8 @@ public class GameSpyQueryHandler extends SimpleChannelInboundHandler<DatagramPac
 
   private QueryResponse createInitialResponse() {
     return QueryResponse.builder()
-        .hostname(PlainTextComponentSerializer.plainText().serialize(server.getConfiguration().getMotd()))
+        // Plain MOTD: the alignment padding is layout for the server list, not part of the name.
+        .hostname(server.getConfiguration().getPlainMotd())
         .gameVersion(ProtocolVersion.SUPPORTED_VERSION_STRING)
         .map(server.getConfiguration().getQueryMap())
         .currentPlayers(server.getClusterPlayerService().getTotalPlayerCount())
