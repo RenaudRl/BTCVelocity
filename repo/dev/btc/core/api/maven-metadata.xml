@@ -1,14 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <metadata>
-    <groupId>dev.btc.core</groupId>
-    <artifactId>api</artifactId>
-    <versioning>
-        <latest>26.2.build.1-alpha</latest>
-        <release>26.2.build.1-alpha</release>
-        <versions>
-            <version>26.1.2.build.19-alpha</version>
-            <version>26.2.build.1-alpha</version>
-        </versions>
-        <lastUpdated>20260710212917</lastUpdated>
-    </versioning>
+  <groupId>dev.btc.core</groupId>
+  <artifactId>api</artifactId>
+  <versioning>
+    <latest>26.2.build.6-alpha</latest>
+    <release>26.2.build.6-alpha</release>
+    <versions>
+      <version>26.1.2.build.19-alpha</version>
+      <version>26.2.build.1-alpha</version>
+      <version>26.2.build.2-alpha</version>
+      <version>26.2.build.3-alpha</version>
+      <version>26.2.build.4-alpha</version>
+      <version>26.2.build.5-alpha</version>
+      <version>26.2.build.6-alpha</version>
+    </versions>
+    <lastUpdated>20260828120009</lastUpdated>
+  </versioning>
 </metadata>

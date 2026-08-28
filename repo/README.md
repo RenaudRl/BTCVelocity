@@ -4,8 +4,8 @@ Dépôt Maven **statique unifié** hébergeant les APIs publiques du réseau Bor
 
 | API | Coordonnées | Version |
 |-----|-------------|---------|
-| BTC Velocity (proxy) | `dev.btc.velocity:api` | `0.1` |
-| BTC-CORE (serveur) | `dev.btc.core:api` | `26.2.build.1-alpha` |
+| BTC Velocity (proxy) | `dev.btc.velocity:api` | `0.2` |
+| BTC-CORE (serveur) | `dev.btc.core:api` | `26.2.build.6-alpha` |
 
 ## Structure
 
@@ -14,10 +14,10 @@ repo/                                  ← upload tel quel sur borntocraftstudio
 ├── index.html                         ← page d'accueil
 ├── dev/btc/velocity/api/              ← API BTC Velocity
 │   ├── maven-metadata.xml
-│   └── 0.1/api-0.1[.jar|-sources.jar|-javadoc.jar|.pom|.module]
+│   └── 0.2/api-0.2[.jar|-sources.jar|-javadoc.jar|.pom|.module]
 ├── dev/btc/core/api/                  ← API BTC-CORE
 │   ├── maven-metadata.xml
-│   └── 26.2.build.1-alpha/api-26.2.build.1-alpha.*
+│   └── 26.2.build.6-alpha/api-26.2.build.6-alpha.*
 └── javadoc/
     ├── index.html                     ← landing
     ├── velocity/                       ← javadoc BTC Velocity
@@ -69,14 +69,14 @@ dependencies {
 
 ```kotlin
 dependencies {
-    compileOnly("dev.btc.core:api:26.2.build.1-alpha")
+    compileOnly("dev.btc.core:api:26.2.build.6-alpha")
 }
 ```
 ```xml
 <dependency>
     <groupId>dev.btc.core</groupId>
     <artifactId>api</artifactId>
-    <version>26.2.build.1-alpha</version>
+    <version>26.2.build.6-alpha</version>
     <scope>provided</scope>
 </dependency>
 ```
@@ -96,4 +96,7 @@ bash repo/publish.sh
 
 Puis commit + upload du dossier `repo/` sur `borntocraftstudio.net/repo/`.
 L'API BTC-CORE est fournie depuis le projet BTC-CORE-Fork (voir son propre `publish.sh`)
-et copiée dans `repo/dev/btc/core/` + `repo/javadoc/core/`.
+et publiée par `gradlew :api:publishBtcApiPublicationToBtcRepoRepository` depuis BTC-CORE-Fork,
+qui écrit directement dans `repo/dev/btc/core/`. Ne JAMAIS recopier un jar à la main dans une
+version déjà publiée : c'est ainsi que `26.2.build.5-alpha` a fini muté sur place — même
+coordonnée, jar différent, panne invisible des deux côtés. Une nouvelle version, toujours.
