@@ -1,0 +1,116 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.borntocraft.typewriter",
+    "module": "companion-server-core",
+    "version": "0.1.0-SNAPSHOT",
+    "attributes": {
+      "org.gradle.status": "integration"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.6.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "com.borntocraft.typewriter",
+          "module": "companion-protocol",
+          "version": {
+            "requires": "0.1.0-SNAPSHOT"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "companion-server-core-0.1.0-SNAPSHOT.jar",
+          "url": "companion-server-core-0.1.0-SNAPSHOT.jar",
+          "size": 51144,
+          "sha512": "a4117b827f6c5a17f8c971a86a1fb532e2a5ee0a6e392b87f3f3cc2a47d9416f0a3759702353980019e7e1a13e52bdca345da89290989aa7fc8d428a305dcd33",
+          "sha256": "8567670bbe6ec3b6e1aad9ad6080a0aece84d84c06f34aff11ee716792ae7a0f",
+          "sha1": "ca21215f25d2ab67719a43de8c80c27890d19472",
+          "md5": "f30a5b6421b9ea52c07ea0e0d6b57d9a"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "com.borntocraft.typewriter",
+          "module": "companion-protocol",
+          "version": {
+            "requires": "0.1.0-SNAPSHOT"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "companion-server-core-0.1.0-SNAPSHOT.jar",
+          "url": "companion-server-core-0.1.0-SNAPSHOT.jar",
+          "size": 51144,
+          "sha512": "a4117b827f6c5a17f8c971a86a1fb532e2a5ee0a6e392b87f3f3cc2a47d9416f0a3759702353980019e7e1a13e52bdca345da89290989aa7fc8d428a305dcd33",
+          "sha256": "8567670bbe6ec3b6e1aad9ad6080a0aece84d84c06f34aff11ee716792ae7a0f",
+          "sha1": "ca21215f25d2ab67719a43de8c80c27890d19472",
+          "md5": "f30a5b6421b9ea52c07ea0e0d6b57d9a"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "companion-server-core-0.1.0-SNAPSHOT-sources.jar",
+          "url": "companion-server-core-0.1.0-SNAPSHOT-sources.jar",
+          "size": 12118,
+          "sha512": "3468b268e5d3b153f171f38cd2baad3b3b86978d59990d0a85ce871d8346d6dae5b0053e76d551ade05ab4053dd3513f15780835008984e50d24f0f6dcfa8491",
+          "sha256": "2a18dbdae151652a237295c54682b449613f3ce3a81eb5b2fc7fae61621a03cf",
+          "sha1": "d6699dfb2b70e93135152ca35192ff357e241067",
+          "md5": "914e72a88f25e3e297e5d0a8514e5720"
+        }
+      ]
+    }
+  ]
+}

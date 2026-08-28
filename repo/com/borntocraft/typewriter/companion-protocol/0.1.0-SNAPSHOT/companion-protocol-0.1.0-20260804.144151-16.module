@@ -1,0 +1,99 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.borntocraft.typewriter",
+    "module": "companion-protocol",
+    "version": "0.1.0-SNAPSHOT",
+    "attributes": {
+      "org.gradle.status": "integration"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.6.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "files": [
+        {
+          "name": "companion-protocol-0.1.0-SNAPSHOT.jar",
+          "url": "companion-protocol-0.1.0-SNAPSHOT.jar",
+          "size": 104421,
+          "sha512": "56be04797215c551d4e2530a2bdfe8419ba9d22b2442d2fdd0bc26b59518361c430248f269e50c0659633922c063870b4d91d1ca04c3d1fe25deee29ded2426e",
+          "sha256": "12c21de566e7bb33ee63c3b52baa223bd2ca811fe992b49a07200fd79d9e771e",
+          "sha1": "21c39394f82e1d9e4db873d33ef2a9d19295a859",
+          "md5": "714bd1aa5a00da07cc649e8bb873b911"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib"
+        }
+      ],
+      "dependencyConstraints": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.3.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "companion-protocol-0.1.0-SNAPSHOT.jar",
+          "url": "companion-protocol-0.1.0-SNAPSHOT.jar",
+          "size": 104421,
+          "sha512": "56be04797215c551d4e2530a2bdfe8419ba9d22b2442d2fdd0bc26b59518361c430248f269e50c0659633922c063870b4d91d1ca04c3d1fe25deee29ded2426e",
+          "sha256": "12c21de566e7bb33ee63c3b52baa223bd2ca811fe992b49a07200fd79d9e771e",
+          "sha1": "21c39394f82e1d9e4db873d33ef2a9d19295a859",
+          "md5": "714bd1aa5a00da07cc649e8bb873b911"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "companion-protocol-0.1.0-SNAPSHOT-sources.jar",
+          "url": "companion-protocol-0.1.0-SNAPSHOT-sources.jar",
+          "size": 10666,
+          "sha512": "b7c70b4429ef1707874a5dde811288bf464c21d1749c5ec54553a28703129cb74a38068a6b2589021eeb4006c41570dfff55404411dfd9aa99f4595a4512d919",
+          "sha256": "42f67a552bf6ec4e41e0e6c25e3bb5d5da2e13ca1ca60479290050f1132ac64a",
+          "sha1": "bbd383f0cd060d07ad8c7bb8d6b71967720a8eed",
+          "md5": "002c33c5844a4678c2358e8c6a5abcf9"
+        }
+      ]
+    }
+  ]
+}

@@ -181,7 +181,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("dev.btc.velocity:api:0.1")
+    compileOnly("dev.btc.velocity:api:0.2")
 }
 ```
 
@@ -192,7 +192,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'dev.btc.velocity:api:0.1'
+    compileOnly 'dev.btc.velocity:api:0.2'
 }
 ```
 
@@ -209,7 +209,7 @@ dependencies {
     <dependency>
         <groupId>dev.btc.velocity</groupId>
         <artifactId>api</artifactId>
-        <version>0.1</version>
+        <version>0.2</version>
         <scope>provided</scope>
     </dependency>
 </dependencies>

@@ -1,0 +1,227 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "de.bluecolored",
+    "module": "bluemap-core",
+    "version": "5.22-25",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.4.0"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "de.bluecolored",
+          "module": "bluemap-api",
+          "version": {
+            "requires": "2.7.8-5"
+          }
+        },
+        {
+          "group": "io.airlift",
+          "module": "aircompressor",
+          "version": {
+            "requires": "0.27"
+          }
+        },
+        {
+          "group": "de.bluecolored",
+          "module": "bluenbt",
+          "version": {
+            "requires": "3.5.1"
+          }
+        },
+        {
+          "group": "com.github.ben-manes.caffeine",
+          "module": "caffeine",
+          "version": {
+            "requires": "3.1.8"
+          }
+        },
+        {
+          "group": "org.apache.commons",
+          "module": "commons-dbcp2",
+          "version": {
+            "requires": "2.9.0"
+          }
+        },
+        {
+          "group": "org.spongepowered",
+          "module": "configurate-hocon",
+          "version": {
+            "requires": "4.1.2"
+          }
+        },
+        {
+          "group": "org.spongepowered",
+          "module": "configurate-gson",
+          "version": {
+            "requires": "4.1.2"
+          }
+        },
+        {
+          "group": "org.spongepowered",
+          "module": "configurate-yaml",
+          "version": {
+            "requires": "4.1.2"
+          }
+        },
+        {
+          "group": "at.yawk.lz4",
+          "module": "lz4-java",
+          "version": {
+            "requires": "1.8.1"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "bluemap-core-5.22-25.jar",
+          "url": "bluemap-core-5.22-25.jar",
+          "size": 657614,
+          "sha512": "fa659bb65b64ee3cf39fcbb40271566755d784c6c363d1daf01d5de88f528ac83133d10f49f647009ab0e1c728eaa0fb374e7be54edcf01b2d9b981052a7d191",
+          "sha256": "11379ba4526151907285cb306de06888d19bb0dbb4b729e0a04ecca9d0a05525",
+          "sha1": "aafe793d97d9793a674ebc6389a63acf009317e7",
+          "md5": "3c411279ed72224b3844c18b18099c77"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "de.bluecolored",
+          "module": "bluemap-api"
+        },
+        {
+          "group": "io.airlift",
+          "module": "aircompressor",
+          "version": {
+            "requires": "0.27"
+          }
+        },
+        {
+          "group": "de.bluecolored",
+          "module": "bluenbt",
+          "version": {
+            "requires": "3.5.1"
+          }
+        },
+        {
+          "group": "com.github.ben-manes.caffeine",
+          "module": "caffeine",
+          "version": {
+            "requires": "3.1.8"
+          }
+        },
+        {
+          "group": "org.apache.commons",
+          "module": "commons-dbcp2",
+          "version": {
+            "requires": "2.9.0"
+          }
+        },
+        {
+          "group": "org.spongepowered",
+          "module": "configurate-hocon",
+          "version": {
+            "requires": "4.1.2"
+          }
+        },
+        {
+          "group": "org.spongepowered",
+          "module": "configurate-gson",
+          "version": {
+            "requires": "4.1.2"
+          }
+        },
+        {
+          "group": "org.spongepowered",
+          "module": "configurate-yaml",
+          "version": {
+            "requires": "4.1.2"
+          }
+        },
+        {
+          "group": "at.yawk.lz4",
+          "module": "lz4-java",
+          "version": {
+            "requires": "1.8.1"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "bluemap-core-5.22-25.jar",
+          "url": "bluemap-core-5.22-25.jar",
+          "size": 657614,
+          "sha512": "fa659bb65b64ee3cf39fcbb40271566755d784c6c363d1daf01d5de88f528ac83133d10f49f647009ab0e1c728eaa0fb374e7be54edcf01b2d9b981052a7d191",
+          "sha256": "11379ba4526151907285cb306de06888d19bb0dbb4b729e0a04ecca9d0a05525",
+          "sha1": "aafe793d97d9793a674ebc6389a63acf009317e7",
+          "md5": "3c411279ed72224b3844c18b18099c77"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bluemap-core-5.22-25-sources.jar",
+          "url": "bluemap-core-5.22-25-sources.jar",
+          "size": 480164,
+          "sha512": "f66dbc925fbf6cc31ec09c1564d8c3dd39e5929178a678811d45c9cc4918e1763556e10f6de89e6e2c80fd9b77832e7ce60f6fd292c39cbda0bdace57c480a3b",
+          "sha256": "b0bd6724c1aa1405883455ed4ed73b86832c6c26b6b02ace4036f5dc1c292c30",
+          "sha1": "a55bae9dbd0f467a4df0c883952cdc16568fb49c",
+          "md5": "e707fc516a5ba1e089406d42e8d464ad"
+        }
+      ]
+    },
+    {
+      "name": "javadocElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "javadoc",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bluemap-core-5.22-25-javadoc.jar",
+          "url": "bluemap-core-5.22-25-javadoc.jar",
+          "size": 5421341,
+          "sha512": "30c0700e062d0a6b9f62a56966dc6a0f5e70b784ae3a379e27a5bfd3af525169cc04616f8fa9539122492eb3c058aefc4e45d618b2d779505a306c1157a9c819",
+          "sha256": "f8db5fe265cd0b30aa8cf6e2a06e621cc8fe0935c63f71c6f1d3fe429b964540",
+          "sha1": "008be5ed8d796c40cd1d43d559830f75ee2d7e81",
+          "md5": "85414dbcaba236be47a4bbed3f2d4394"
+        }
+      ]
+    }
+  ]
+}
