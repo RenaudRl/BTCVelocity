@@ -21,6 +21,7 @@ import com.btcvelocity.api.bridge.BridgeMessage;
 import com.btcvelocity.api.bridge.BridgeMessageListener;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayer;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayerService;
+import com.velocitypowered.proxy.VelocityServer;
 import java.util.UUID;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -40,14 +41,17 @@ public final class SocialTransferHandler implements BridgeMessageListener {
   private static final Logger LOGGER = LogManager.getLogger(SocialTransferHandler.class);
 
   private final VelocityClusterPlayerService clusterPlayerService;
+  private final VelocityServer server;
 
   /**
    * Creates the handler.
    *
    * @param clusterPlayerService the cluster player registry used to resolve and move players
    */
-  public SocialTransferHandler(final VelocityClusterPlayerService clusterPlayerService) {
+  public SocialTransferHandler(final VelocityClusterPlayerService clusterPlayerService,
+                               final VelocityServer server) {
     this.clusterPlayerService = clusterPlayerService;
+    this.server = server;
   }
 
   @Override
@@ -75,6 +79,10 @@ public final class SocialTransferHandler implements BridgeMessageListener {
    */
   private void move(final UUID uuid, final String targetServer) {
     if (uuid == null || targetServer == null || targetServer.isBlank()) {
+      return;
+    }
+    if (server.getServer(targetServer).isEmpty()) {
+      LOGGER.warn("Rejected social transfer to unregistered server '{}'", targetServer);
       return;
     }
     clusterPlayerService.getPlayer(uuid).ifPresentOrElse(

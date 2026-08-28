@@ -8,164 +8,202 @@
 package com.btcvelocity.api.bridge;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import org.jetbrains.annotations.Nullable;
 
-/**
- * Base interface for all {@code btc:bridge} messages.
- *
- * <p>Messages are serialized as JSON with a {@code "type"} discriminator field. The
- * sealed-interface hierarchy below enumerates every message exchanged between the proxy
- * and its backend servers over the {@code btc:bridge} plugin messaging channel. Each
- * record is immutable and safe to share across threads.</p>
- */
-public sealed interface BridgeMessage {
+/** Versioned, typed messages exchanged by the BTCVelocity bridge. */
+public sealed interface BridgeMessage permits BridgeMessage.QueueJoin, BridgeMessage.QueueLeave,
+    BridgeMessage.RequestStatus, BridgeMessage.WorldPreload, BridgeMessage.Health,
+    BridgeMessage.WorldLoaded, BridgeMessage.WorldLoadFailed, BridgeMessage.WorldUnloaded,
+    BridgeMessage.QueueStatusResponse, BridgeMessage.ConnectRequest, BridgeMessage.PartyWarp,
+    BridgeMessage.Ack, BridgeMessage.Nack {
 
-  /**
-   * Returns the string discriminator used to route this message during (de)serialization.
-   *
-   * @return the message type identifier
-   */
-  String type();
+  int VERSION = 2;
 
-  /**
-   * Proxy -&gt; Backend: a player joined the queue for a server.
-   *
-   * @param uuid         the player's unique id
-   * @param username     the player's username
-   * @param targetServer the name of the server the player queued for
-   * @param targetWorld  an optional world the player intends to join, may be {@code null}
-   */
-  record QueueJoin(UUID uuid, String username, String targetServer,
+  Envelope envelope();
+
+  default int version() {
+    return envelope().version();
+  }
+
+  default UUID messageId() {
+    return envelope().messageId();
+  }
+
+  default String kind() {
+    return envelope().type();
+  }
+
+  /** Compatibility alias for callers that use the discriminator name. */
+  default String type() {
+    return envelope().type();
+  }
+
+  default String sourceBackend() {
+    return envelope().sourceBackend();
+  }
+
+  default String targetBackend() {
+    return envelope().targetBackend();
+  }
+
+  default long issuedAt() {
+    return envelope().issuedAt();
+  }
+
+  default long expiresAt() {
+    return envelope().expiresAt();
+  }
+
+  record Envelope(int version, UUID messageId, String type, String sourceBackend,
+                  String targetBackend, long issuedAt, long expiresAt) {
+    public Envelope {
+      Objects.requireNonNull(messageId, "messageId");
+      Objects.requireNonNull(type, "type");
+      Objects.requireNonNull(sourceBackend, "sourceBackend");
+      Objects.requireNonNull(targetBackend, "targetBackend");
+      if (version <= 0 || issuedAt < 0 || expiresAt < 0) {
+        throw new IllegalArgumentException("invalid bridge envelope");
+      }
+    }
+
+    public static Envelope now(final String type, final String sourceBackend,
+                               final String targetBackend, final long lifetimeMillis) {
+      final long issuedAt = System.currentTimeMillis();
+      return new Envelope(VERSION, UUID.randomUUID(), type, sourceBackend, targetBackend,
+          issuedAt, Math.addExact(issuedAt, lifetimeMillis));
+    }
+  }
+
+  record QueueJoin(Envelope envelope, UUID uuid, String username, String targetServer,
                    @Nullable String targetWorld) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "queue_join";
+    public QueueJoin {
+      requireKind(envelope, "queue_join");
+      Objects.requireNonNull(uuid, "uuid");
+      Objects.requireNonNull(username, "username");
+      Objects.requireNonNull(targetServer, "targetServer");
     }
   }
 
-  /**
-   * Proxy -&gt; Backend: a player left the queue.
-   *
-   * @param uuid the player's unique id
-   */
-  record QueueLeave(UUID uuid) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "queue_leave";
+  record QueueLeave(Envelope envelope, UUID uuid) implements BridgeMessage {
+    public QueueLeave {
+      requireKind(envelope, "queue_leave");
+      Objects.requireNonNull(uuid, "uuid");
     }
   }
 
-  /**
-   * Proxy -&gt; Backend: request that the backend report its current health status.
-   *
-   * @param serverName the name of the server being queried
-   */
-  record RequestStatus(String serverName) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "request_status";
+  record RequestStatus(Envelope envelope, String serverName) implements BridgeMessage {
+    public RequestStatus {
+      requireKind(envelope, "request_status");
+      Objects.requireNonNull(serverName, "serverName");
     }
   }
 
-  /**
-   * Proxy -&gt; Backend: a player is about to be transferred, preload the given world.
-   *
-   * @param serverName the name of the destination server
-   * @param worldName  the world to preload, or {@code null} if the default world should be used
-   */
-  record WorldPreload(String serverName, @Nullable String worldName) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "world_preload";
+  record WorldPreload(Envelope envelope, String serverName, @Nullable String worldName)
+      implements BridgeMessage {
+    public WorldPreload {
+      requireKind(envelope, "world_preload");
+      Objects.requireNonNull(serverName, "serverName");
     }
   }
 
-  /**
-   * Backend -&gt; Proxy: a periodic health report from a backend server.
-   *
-   * @param serverName   the name of the reporting server
-   * @param mspt         the milliseconds per tick the server is currently averaging
-   * @param tps          the ticks per second the server is currently averaging
-   * @param playerCount  the number of players connected to the backend
-   * @param loadedWorlds the list of worlds currently loaded on the backend
-   */
-  record Health(String serverName, double mspt, double tps, int playerCount,
+  record Health(Envelope envelope, String serverName, double mspt, double tps, int playerCount,
                 List<String> loadedWorlds) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "health";
+    public Health {
+      requireKind(envelope, "health");
+      Objects.requireNonNull(serverName, "serverName");
+      Objects.requireNonNull(loadedWorlds, "loadedWorlds");
+      loadedWorlds = List.copyOf(loadedWorlds);
     }
   }
 
-  /**
-   * Backend -&gt; Proxy: a world has been loaded and is ready to accept players.
-   *
-   * @param serverName  the name of the server that loaded the world
-   * @param worldName   the name of the world that was loaded
-   * @param loadTimeMs  the time in milliseconds it took to load the world
-   */
-  record WorldLoaded(String serverName, String worldName, long loadTimeMs) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "world_loaded";
+  record WorldLoaded(Envelope envelope, String serverName, String worldName, long loadTimeMs)
+      implements BridgeMessage {
+    public WorldLoaded {
+      requireKind(envelope, "world_loaded");
+      Objects.requireNonNull(serverName, "serverName");
+      Objects.requireNonNull(worldName, "worldName");
     }
   }
 
-  /**
-   * Backend -&gt; Proxy: a world has been unloaded.
-   *
-   * @param serverName the name of the server that unloaded the world
-   * @param worldName  the name of the world that was unloaded
-   */
-  record WorldUnloaded(String serverName, String worldName) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "world_unloaded";
+  record WorldLoadFailed(Envelope envelope, String serverName, String worldName, String reason,
+                         long loadTimeMs) implements BridgeMessage {
+    public WorldLoadFailed {
+      requireKind(envelope, "world_load_failed");
+      Objects.requireNonNull(serverName, "serverName");
+      Objects.requireNonNull(worldName, "worldName");
+      Objects.requireNonNull(reason, "reason");
     }
   }
 
-  /**
-   * Backend -&gt; Proxy: a response to a queue-status query, reporting the backend's
-   * own queue depth.
-   *
-   * @param serverName        the name of the responding server
-   * @param backendQueueSize  the number of players waiting in the backend's own queue
-   */
-  record QueueStatusResponse(String serverName, int backendQueueSize) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "queue_status_response";
+  record WorldUnloaded(Envelope envelope, String serverName, String worldName)
+      implements BridgeMessage {
+    public WorldUnloaded {
+      requireKind(envelope, "world_unloaded");
+      Objects.requireNonNull(serverName, "serverName");
+      Objects.requireNonNull(worldName, "worldName");
     }
   }
 
-  /**
-   * Backend -&gt; Proxy: move a single player (identified by UUID) to another backend
-   * server. The proxy resolves the player through its cluster registry and issues the
-   * move, so the player need not be connected to the requesting backend.
-   *
-   * @param uuid         the player's unique id
-   * @param targetServer the name of the destination server
-   */
-  record ConnectRequest(UUID uuid, String targetServer) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "connect_request";
+  record QueueStatusResponse(Envelope envelope, String serverName, int backendQueueSize)
+      implements BridgeMessage {
+    public QueueStatusResponse {
+      requireKind(envelope, "queue_status_response");
+      Objects.requireNonNull(serverName, "serverName");
     }
   }
 
-  /**
-   * Backend -&gt; Proxy: move a group of players (for example a whole party) to a
-   * destination server in a single request. Members may be spread across several
-   * backends; the proxy moves each one it can resolve.
-   *
-   * @param members      the unique ids of the players to move
-   * @param targetServer the name of the destination server
-   */
-  record PartyWarp(List<UUID> members, String targetServer) implements BridgeMessage {
-    @Override
-    public String type() {
-      return "party_warp";
+  record ConnectRequest(Envelope envelope, UUID uuid, String targetServer)
+      implements BridgeMessage {
+    public ConnectRequest {
+      requireKind(envelope, "connect_request");
+      Objects.requireNonNull(uuid, "uuid");
+      Objects.requireNonNull(targetServer, "targetServer");
+    }
+  }
+
+  record PartyWarp(Envelope envelope, List<UUID> members, String targetServer)
+      implements BridgeMessage {
+    public PartyWarp {
+      requireKind(envelope, "party_warp");
+      Objects.requireNonNull(members, "members");
+      Objects.requireNonNull(targetServer, "targetServer");
+      members = List.copyOf(members);
+    }
+  }
+
+  record Ack(Envelope envelope, boolean duplicate) implements BridgeMessage {
+    public Ack {
+      requireKind(envelope, "ack");
+    }
+  }
+
+  record Nack(Envelope envelope, ErrorCode error) implements BridgeMessage {
+    public Nack {
+      requireKind(envelope, "nack");
+      Objects.requireNonNull(error, "error");
+    }
+  }
+
+  enum ErrorCode {
+    INVALID_ENVELOPE,
+    PAYLOAD_TOO_LARGE,
+    EXPIRED,
+    DUPLICATE,
+    CLIENT_ORIGIN,
+    BACKEND_NOT_ALLOWED,
+    TARGET_NOT_ALLOWED,
+    WORLD_NOT_ALLOWED,
+    UNSUPPORTED,
+    WORLD_LOAD_FAILED,
+    INTERNAL_ERROR
+  }
+
+  private static void requireKind(final Envelope envelope, final String expected) {
+    Objects.requireNonNull(envelope, "envelope");
+    if (envelope.version() != VERSION || !expected.equals(envelope.type())) {
+      throw new IllegalArgumentException("envelope does not describe " + expected);
     }
   }
 }

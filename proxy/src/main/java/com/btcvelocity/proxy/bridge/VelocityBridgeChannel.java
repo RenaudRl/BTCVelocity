@@ -24,7 +24,6 @@ import com.btcvelocity.api.bridge.BridgeMessageListener;
 import com.velocitypowered.api.event.EventHandler;
 import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
-import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.proxy.VelocityServer;
@@ -166,14 +165,10 @@ public final class VelocityBridgeChannel implements BridgeChannel {
   private @Nullable String resolveSourceServer(final PluginMessageEvent event) {
     final Object source = event.getSource();
     if (source instanceof ServerConnection conn) {
-      return conn.getServerInfo().getName();
+      final String serverName = conn.getServerInfo().getName();
+      return server.getServer(serverName).isPresent() ? serverName : null;
     }
-    if (source instanceof Player player) {
-      final Optional<? extends ServerConnection> conn = player.getCurrentServer();
-      if (conn.isPresent()) {
-        return conn.get().getServerInfo().getName();
-      }
-    }
+    // A Player source is client-originated and is never an authenticated backend.
     return null;
   }
 
