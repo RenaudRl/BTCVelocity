@@ -68,7 +68,7 @@ class NativePermissionEvaluatorTest {
   }
 
   @Test
-  void breaksEqualConflictsByGroupWeightThenSource() {
+  void breaksEqualConflictsWithDenyBeforeAllow() {
     final NativePermissionSnapshot.Group low = group("low", 1, node("btc.rank", false, 0, Map.of()));
     final NativePermissionSnapshot.Group high = group("high", 20, node("btc.rank", true, 0, Map.of()));
     final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
@@ -76,7 +76,19 @@ class NativePermissionEvaluatorTest {
     snapshot.groups = Map.of("low", low, "high", high);
     snapshot.directGroups = Set.of("low", "high");
 
-    assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(snapshot, "btc.rank", Map.of(), 0L));
+    assertEquals(Tristate.FALSE, NativePermissionEvaluator.evaluate(snapshot, "btc.rank", Map.of(), 0L));
+  }
+
+  @Test
+  void directPlayerAllowPrecedesHigherWeightGroupAllow() {
+    final NativePermissionSnapshot.Group admin = group("admin", 100, node("btc.direct", true, 0, Map.of()));
+    final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
+    snapshot.subject = UUID.randomUUID();
+    snapshot.permissions = List.of(node("btc.direct", true, 0, Map.of()));
+    snapshot.groups = Map.of("admin", admin);
+    snapshot.directGroups = Set.of("admin");
+
+    assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(snapshot, "btc.direct", Map.of(), 0L));
   }
 
   private static NativePermissionSnapshot.Group group(

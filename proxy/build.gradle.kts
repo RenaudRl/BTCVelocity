@@ -148,7 +148,6 @@ dependencies {
     implementation(libs.fastutil)
     implementation(libs.postgresql)
     implementation(libs.hikari)
-    implementation(libs.mysql.connector)
     implementation(platform(libs.adventure.bom))
     implementation(libs.adventure.text.serializer.json.legacy.impl)
     implementation(libs.adventure.facet)

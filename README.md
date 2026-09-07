@@ -44,7 +44,7 @@ jar it embedded in the shadow JAR are gone.
 | Piece | What it does |
 |---|---|
 | `NativePermissionEvaluator` | Wildcard resolution and inheritance, evaluated against an immutable snapshot — safe to read from any Netty thread. |
-| `NativePermissionService` / `NativePermissionSnapshot` | Loads and swaps the snapshot; MySQL storage is optional. |
+| `NativePermissionService` / `NativePermissionSnapshot` | Loads and swaps the UUID snapshot from PostgreSQL; Valkey invalidates the local cache. |
 | `NativePermissionResolverProvider` | Discovered through `META-INF/services`. The shadow JAR now calls `mergeServiceFiles()` — without it the last service file wins and the resolver is never found. |
 
 ### MOTD
@@ -61,7 +61,7 @@ jar it embedded in the shadow JAR are gone.
 | Feature | Origin | Notes |
 |---|---|---|
 | Redis / Valkey / Dragonfly | BTC | Protocol-compatible, switched with one `backend` option. Valkey for open-source purity, Dragonfly for raw single-node speed. |
-| PostgreSQL | BTC | Native persistent backend on HikariCP, drop-in for MySQL setups. |
+| PostgreSQL | BTC | Native persistent backend on HikariCP for the native permissions snapshot. |
 | Cluster sync | BTC | Multi-proxy player tracking over Redis pub/sub. |
 | Queue system | BTC | Per-server connection queues with dynamic prioritisation. |
 
@@ -97,7 +97,7 @@ proxy-id = "proxy-1"
 
 ### PostgreSQL
 
-Native persistent storage backend. Drop-in replacement for MySQL setups:
+Native persistent storage backend for the native BTC services:
 
 ```toml
 [postgresql]
@@ -230,7 +230,7 @@ BTCVelocity/
 │   ├── com.btcvelocity.proxy/  → Custom code (cluster, commands, queue, redis, storage)
 │   └── com.velocitypowered.*   → Upstream Velocity code
 ├── native/                     → Netty native transports
-├── proxy/src/main/.../permission → Native BTC permissions resolver (optional MySQL/Redis)
+├── proxy/src/main/.../permission → Native BTC permissions resolver (optional PostgreSQL/Valkey)
 ├── config/checkstyle/          → Code style configuration
 └── Docs/                       → Reference documentation
 ```

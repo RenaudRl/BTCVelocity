@@ -49,7 +49,7 @@ final class NativePermissionConfig {
     final String networkId = value(properties, "network-id", "public");
     final String serverId = value(properties, "server-id", "proxy");
     final String tablePrefix = value(properties, "table-prefix", "btc_permissions_");
-    final String redisUri = properties.getProperty("redis-uri", "").trim();
+    final String valkeyUri = properties.getProperty("valkey-uri", "").trim();
 
     if (!ID_PATTERN.matcher(networkId).matches() || !ID_PATTERN.matcher(serverId).matches()) {
       throw new IllegalArgumentException("Invalid native permissions network or server id");
@@ -58,7 +58,11 @@ final class NativePermissionConfig {
       throw new IllegalArgumentException("Invalid native permissions table prefix");
     }
 
-    return new Config(jdbcUrl, username, password, networkId, serverId, tablePrefix, redisUri);
+    if (!jdbcUrl.startsWith("jdbc:postgresql://")) {
+      throw new IllegalArgumentException("Native permissions requires a PostgreSQL JDBC URL");
+    }
+
+    return new Config(jdbcUrl, username, password, networkId, serverId, tablePrefix, valkeyUri);
   }
 
   private static String required(final Properties properties, final String key) {
@@ -81,7 +85,7 @@ final class NativePermissionConfig {
       String networkId,
       String serverId,
       String tablePrefix,
-      String redisUri
+      String valkeyUri
   ) {
 
     String redisChannel() {

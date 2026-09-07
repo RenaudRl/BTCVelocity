@@ -31,6 +31,7 @@ import org.jetbrains.annotations.Unmodifiable;
 final class NativePermissionResolver implements PermissionResolver {
 
   private final UUID subject;
+  private final Player player;
   private final PermissionFunction delegate;
   private final NativePermissionService service;
 
@@ -39,6 +40,7 @@ final class NativePermissionResolver implements PermissionResolver {
       final PermissionFunction delegate,
       final NativePermissionService service
   ) {
+    this.player = player;
     this.subject = player.getUniqueId();
     this.delegate = delegate;
     this.service = service;
@@ -54,7 +56,7 @@ final class NativePermissionResolver implements PermissionResolver {
       return Tristate.FALSE;
     }
     final Tristate resolved = NativePermissionEvaluator.evaluate(
-        snapshot, permission, service.context(), System.currentTimeMillis());
+        snapshot, permission, service.context(player), System.currentTimeMillis());
     return resolved == Tristate.UNDEFINED ? fallback(permission) : resolved;
   }
 
@@ -63,10 +65,8 @@ final class NativePermissionResolver implements PermissionResolver {
     final NativePermissionSnapshot snapshot = service.snapshot(subject);
     if (snapshot == null) {
       service.load(subject);
-      if (delegate instanceof PermissionResolver resolver) {
-        return resolver.getPermissionMap();
-      }
-      return null;
+      // Native mode is authoritative while the asynchronous snapshot is loading.
+      return Map.of();
     }
     return NativePermissionEvaluator.permissionMap(snapshot);
   }

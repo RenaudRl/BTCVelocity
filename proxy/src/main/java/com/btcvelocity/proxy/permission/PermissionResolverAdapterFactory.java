@@ -31,7 +31,7 @@ import org.checkerframework.checker.nullness.qual.Nullable;
  * Factory for producing an {@link PermissionResolver} for a given {@link PermissionSubject}.
  *
  * <p>This factory supports an optional native BTC permissions provider. The provider is enabled
- * explicitly through the proxy's native permissions configuration and uses the same MySQL/Redis
+ * explicitly through the proxy's native permissions configuration and uses the same PostgreSQL/Valkey
  * protocol as the TypeWriter Permissions extension.
  *
  * <p>If no provider can be loaded (e.g., the embedded jar is missing, cannot be extracted, or the

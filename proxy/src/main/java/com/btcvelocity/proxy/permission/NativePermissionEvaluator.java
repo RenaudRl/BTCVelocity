@@ -99,7 +99,8 @@ public final class NativePermissionEvaluator {
       if (nodeSpecificity == null) {
         continue;
       }
-      final Candidate candidate = new Candidate(node, weighted.groupWeight, contextSpecificity, nodeSpecificity);
+      final Candidate candidate = new Candidate(
+          node, weighted.groupWeight, weighted.sourceRank, contextSpecificity, nodeSpecificity);
       if (winner == null || CANDIDATE_ORDER.compare(candidate, winner) < 0) {
         winner = candidate;
       }
@@ -113,11 +114,11 @@ public final class NativePermissionEvaluator {
       return nodes;
     }
     if (snapshot.permissions != null) {
-      snapshot.permissions.forEach(node -> nodes.add(new WeightedNode(node, 0)));
+      snapshot.permissions.forEach(node -> nodes.add(new WeightedNode(node, 0, 0)));
     }
     for (NativePermissionSnapshot.Group group : effectiveGroups(snapshot)) {
       if (group.permissions != null) {
-        group.permissions.forEach(node -> nodes.add(new WeightedNode(node, group.weight)));
+        group.permissions.forEach(node -> nodes.add(new WeightedNode(node, group.weight, 2)));
       }
     }
     return nodes;
@@ -195,7 +196,7 @@ public final class NativePermissionEvaluator {
       if (actualValue == null || !actualValue.equalsIgnoreCase(entry.getValue())) {
         return null;
       }
-      specificity += CONTEXT_WEIGHTS.getOrDefault(entry.getKey(), 0);
+      specificity += CONTEXT_WEIGHTS.getOrDefault(entry.getKey(), 1);
     }
     return specificity;
   }
@@ -237,12 +238,13 @@ public final class NativePermissionEvaluator {
     return (int) value.chars().filter(character -> character == '.').count();
   }
 
-  private record WeightedNode(NativePermissionSnapshot.Node node, int groupWeight) {
+  private record WeightedNode(NativePermissionSnapshot.Node node, int groupWeight, int sourceRank) {
   }
 
   private record Candidate(
       NativePermissionSnapshot.Node node,
       int groupWeight,
+      int sourceRank,
       int contextSpecificity,
       int nodeSpecificity
   ) {
@@ -252,7 +254,8 @@ public final class NativePermissionEvaluator {
       .comparingInt(Candidate::contextSpecificity).reversed()
       .thenComparing(Comparator.comparingInt(Candidate::nodeSpecificity).reversed())
       .thenComparing(Comparator.comparingInt((Candidate candidate) -> candidate.node.priority).reversed())
+      .thenComparingInt(candidate -> candidate.node.value ? 1 : 0)
+      .thenComparingInt(Candidate::sourceRank)
       .thenComparing(Comparator.comparingInt(Candidate::groupWeight).reversed())
-      .thenComparingInt(candidate -> candidate.node.value ? 0 : 1)
       .thenComparing(candidate -> sourceId(candidate.node));
 }

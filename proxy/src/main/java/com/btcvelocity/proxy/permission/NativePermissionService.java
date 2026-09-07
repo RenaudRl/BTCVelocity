@@ -39,8 +39,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import com.velocitypowered.api.proxy.Player;
 
-/** Async MySQL/Redis backend for proxy-side native permissions. */
+/** Async PostgreSQL/Valkey read-only backend for proxy-side native permissions. */
 final class NativePermissionService implements AutoCloseable {
 
   private static final Logger LOGGER = LogManager.getLogger(NativePermissionService.class);
@@ -64,7 +65,12 @@ final class NativePermissionService implements AutoCloseable {
       return CompletableFuture.completedFuture(cached);
     }
     return inFlight.computeIfAbsent(subject, key -> ensureInitialized()
-        .handle((ignored, error) -> null)
+        .handle((ignored, error) -> {
+          if (error != null) {
+            LOGGER.warn("Native BTC permissions initialization is unavailable; snapshot load will retry.", error);
+          }
+          return null;
+        })
         .thenComposeAsync(ignored -> readSnapshot(key), ioExecutor)
         .whenComplete((ignored, error) -> inFlight.remove(key)));
   }
@@ -74,11 +80,20 @@ final class NativePermissionService implements AutoCloseable {
   }
 
   Map<String, String> context() {
+    return context(null);
+  }
+
+  Map<String, String> context(final Player player) {
     final NativePermissionConfig.Config current = config;
     if (current == null) {
       return Map.of();
     }
-    return Map.of("network", current.networkId(), "server", current.serverId());
+    final String serverId = player == null
+        ? current.serverId()
+        : player.getCurrentServer()
+            .map(connection -> connection.getServerInfo().getName())
+            .orElse(current.serverId());
+    return Map.of("network", current.networkId(), "server", serverId);
   }
 
   private CompletableFuture<Void> ensureInitialized() {
@@ -88,7 +103,7 @@ final class NativePermissionService implements AutoCloseable {
     }
     synchronized (initializationLock) {
       current = initialization;
-      if (current == null) {
+      if (current == null || current.isCompletedExceptionally()) {
         current = CompletableFuture.runAsync(this::initializeBlocking, ioExecutor);
         initialization = current;
       }
@@ -119,19 +134,26 @@ final class NativePermissionService implements AutoCloseable {
         LOGGER.warn("Native BTC permissions group catalog is not available yet; retrying on demand.", error);
       }
 
-      if (!loaded.redisUri().isBlank()) {
+      if (!loaded.valkeyUri().isBlank()) {
         startRedis(loaded);
       }
       LOGGER.info("Native BTC permissions backend configured for network {} and server {}.",
           loaded.networkId(), loaded.serverId());
     } catch (Throwable error) {
       LOGGER.error("Native BTC permissions backend could not initialize; proxy permissions remain undefined until it recovers.", error);
+      final HikariDataSource source = dataSource;
+      dataSource = null;
+      config = null;
+      if (source != null) {
+        source.close();
+      }
+      throw new IllegalStateException("Native BTC permissions initialization failed", error);
     }
   }
 
   private void startRedis(final NativePermissionConfig.Config loaded) {
-    final RedisURI redisUri = RedisURI.create(loaded.redisUri());
-    final RedisClient client = RedisClient.create(redisUri);
+    final RedisURI valkeyUri = RedisURI.create(loaded.valkeyUri());
+    final RedisClient client = RedisClient.create(valkeyUri);
     final StatefulRedisPubSubConnection<String, String> connection = client.connectPubSub();
     connection.addListener(new RedisPubSubAdapter<>() {
       @Override
@@ -155,7 +177,8 @@ final class NativePermissionService implements AutoCloseable {
       }
       try (Connection connection = source.getConnection()) {
         try (var statement = connection.prepareStatement(
-            "SELECT revision, payload FROM " + current.tablePrefix() + "players WHERE subject_id = ?")) {
+            "SELECT revision, payload FROM " + current.tablePrefix() + "players "
+                + "WHERE player_uuid = ? AND profile_id IS NULL")) {
           statement.setString(1, subject.toString());
           try (ResultSet result = statement.executeQuery()) {
             if (!result.next()) {
@@ -227,15 +250,20 @@ final class NativePermissionService implements AutoCloseable {
             invalidation.revision > existing.revision ? null : existing);
       } else {
         final String group = invalidation.group.toLowerCase();
-        snapshots.entrySet().removeIf(entry -> NativePermissionEvaluator.usesGroup(entry.getValue(), group));
         CompletableFuture.supplyAsync(() -> {
           try {
             return readGroups();
           } catch (SQLException error) {
             LOGGER.warn("Native BTC permissions group refresh failed after Redis invalidation.", error);
-            return Map.<String, NativePermissionSnapshot.Group>of();
+            return null;
           }
-        }, ioExecutor).thenAccept(groups -> groupCatalog = groups);
+        }, ioExecutor).thenAccept(groups -> {
+          if (groups == null) {
+            return;
+          }
+          groupCatalog = groups;
+          snapshots.entrySet().removeIf(entry -> NativePermissionEvaluator.usesGroup(entry.getValue(), group));
+        });
       }
     } catch (RuntimeException error) {
       LOGGER.warn("Invalid native BTC permissions Redis payload ignored.", error);
