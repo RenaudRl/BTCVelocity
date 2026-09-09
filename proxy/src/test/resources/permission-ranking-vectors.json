@@ -1,0 +1,241 @@
+{
+  "contract": "btc-permission-ranking",
+  "version": 1,
+  "note": "Vecteurs de classement partages par l'extension Paper et le proxy Velocity. Ce fichier est duplique a l'identique dans BTCVelocity (proxy/src/test/resources) et les deux cotes verifient son empreinte SHA-256. Le perimetre commun exclut deliberement les profils : le snapshot du proxy n'en porte pas. Toute modification doit etre faite dans les deux depots, puis l'empreinte mise a jour dans les deux tests.",
+  "vectors": [
+    {
+      "name": "un node exact bat un wildcard de meme origine",
+      "query": "btc.chat.secret",
+      "context": {},
+      "now": 1000,
+      "expected": "DENY",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.chat.*", "value": true, "priority": 0, "sourceId": "wildcard" },
+          { "node": "btc.chat.secret", "value": false, "priority": 0, "sourceId": "exact" }
+        ]
+      }
+    },
+    {
+      "name": "un wildcard couvre un node non assigne",
+      "query": "btc.chat.other",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.chat.*", "value": true, "priority": 0, "sourceId": "wildcard" }
+        ]
+      }
+    },
+    {
+      "name": "aucune assignation ne repond rien",
+      "query": "btc.absent",
+      "context": {},
+      "now": 1000,
+      "expected": "UNDEFINED",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.autre", "value": true, "priority": 0, "sourceId": "autre" }
+        ]
+      }
+    },
+    {
+      "name": "l etoile seule est la moins specifique et reste applicable",
+      "query": "btc.quelconque",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "permissions": [
+          { "node": "*", "value": true, "priority": 0, "sourceId": "etoile" }
+        ]
+      }
+    },
+    {
+      "name": "le contexte exige doit correspondre sinon le node est ignore",
+      "query": "btc.survie",
+      "context": { "server": "lobby" },
+      "now": 1000,
+      "expected": "UNDEFINED",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.survie", "value": true, "priority": 0, "contexts": { "server": "survie" }, "sourceId": "survie" }
+        ]
+      }
+    },
+    {
+      "name": "un contexte plus specifique bat un node global de meme node",
+      "query": "btc.vol",
+      "context": { "server": "survie" },
+      "now": 1000,
+      "expected": "DENY",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.vol", "value": true, "priority": 0, "sourceId": "global" },
+          { "node": "btc.vol", "value": false, "priority": 0, "contexts": { "server": "survie" }, "sourceId": "cible" }
+        ]
+      }
+    },
+    {
+      "name": "la priorite explicite tranche a specificite egale",
+      "query": "btc.priorite",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.priorite", "value": false, "priority": 0, "sourceId": "basse" },
+          { "node": "btc.priorite", "value": true, "priority": 50, "sourceId": "haute" }
+        ]
+      }
+    },
+    {
+      "name": "a egalite complete le deny gagne, quel que soit le poids du groupe",
+      "query": "btc.rang",
+      "context": {},
+      "now": 1000,
+      "expected": "DENY",
+      "snapshot": {
+        "groups": {
+          "faible": { "name": "faible", "weight": 1, "permissions": [ { "node": "btc.rang", "value": false, "priority": 0, "sourceId": "faible" } ] },
+          "fort": { "name": "fort", "weight": 100, "permissions": [ { "node": "btc.rang", "value": true, "priority": 0, "sourceId": "fort" } ] }
+        },
+        "directGroups": [ "faible", "fort" ]
+      }
+    },
+    {
+      "name": "un allow direct du joueur bat un allow de groupe mieux pondere",
+      "query": "btc.direct",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.direct", "value": true, "priority": 0, "sourceId": "joueur" }
+        ],
+        "groups": {
+          "admin": { "name": "admin", "weight": 100, "permissions": [ { "node": "btc.direct", "value": true, "priority": 0, "sourceId": "admin" } ] }
+        },
+        "directGroups": [ "admin" ]
+      }
+    },
+    {
+      "name": "le poids du groupe tranche entre deux allow de groupes",
+      "query": "btc.poids",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "groups": {
+          "faible": { "name": "faible", "weight": 1, "permissions": [ { "node": "btc.poids", "value": true, "priority": 0, "sourceId": "faible" } ] },
+          "fort": { "name": "fort", "weight": 100, "permissions": [ { "node": "btc.poids", "value": true, "priority": 0, "sourceId": "fort" } ] }
+        },
+        "directGroups": [ "faible", "fort" ]
+      }
+    },
+    {
+      "name": "l heritage de groupe apporte ses nodes",
+      "query": "btc.herite",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "groups": {
+          "base": { "name": "base", "weight": 5, "permissions": [ { "node": "btc.herite", "value": true, "priority": 0, "sourceId": "base" } ] },
+          "chef": { "name": "chef", "weight": 50, "inherits": [ "base" ] }
+        },
+        "directGroups": [ "chef" ]
+      }
+    },
+    {
+      "name": "un cycle d heritage ne boucle pas et reste resolu",
+      "query": "btc.cycle",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "groups": {
+          "a": { "name": "a", "weight": 1, "inherits": [ "b" ], "permissions": [ { "node": "btc.cycle", "value": true, "priority": 0, "sourceId": "a" } ] },
+          "b": { "name": "b", "weight": 1, "inherits": [ "a" ] }
+        },
+        "directGroups": [ "a" ]
+      }
+    },
+    {
+      "name": "un node expire ne compte plus",
+      "query": "btc.temporaire",
+      "context": {},
+      "now": 2000,
+      "expected": "UNDEFINED",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.temporaire", "value": true, "priority": 0, "expiresAtEpochMillis": 2000, "sourceId": "temporaire" }
+        ]
+      }
+    },
+    {
+      "name": "un node encore dans sa fenetre compte",
+      "query": "btc.temporaire",
+      "context": {},
+      "now": 1999,
+      "expected": "ALLOW",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.temporaire", "value": true, "priority": 0, "expiresAtEpochMillis": 2000, "sourceId": "temporaire" }
+        ]
+      }
+    },
+    {
+      "name": "le groupe principal apporte ses nodes comme un groupe direct",
+      "query": "btc.principal",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "groups": {
+          "principal": { "name": "principal", "weight": 10, "permissions": [ { "node": "btc.principal", "value": true, "priority": 0, "sourceId": "principal" } ] }
+        },
+        "primaryGroup": "principal"
+      }
+    },
+    {
+      "name": "un groupe inconnu est ignore sans faire echouer la resolution",
+      "query": "btc.connu",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "groups": {
+          "connu": { "name": "connu", "weight": 1, "permissions": [ { "node": "btc.connu", "value": true, "priority": 0, "sourceId": "connu" } ] }
+        },
+        "directGroups": [ "connu", "fantome" ]
+      }
+    },
+    {
+      "name": "un deny wildcard de contexte plus specifique bat un allow exact global",
+      "query": "btc.zone.entrer",
+      "context": { "world": "arene" },
+      "now": 1000,
+      "expected": "DENY",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.zone.entrer", "value": true, "priority": 0, "sourceId": "global" },
+          { "node": "btc.zone.*", "value": false, "priority": 0, "contexts": { "world": "arene" }, "sourceId": "arene" }
+        ]
+      }
+    },
+    {
+      "name": "la casse du node interroge n influe pas sur la decision",
+      "query": "BTC.Casse",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "snapshot": {
+        "permissions": [
+          { "node": "btc.casse", "value": true, "priority": 0, "sourceId": "casse" }
+        ]
+      }
+    }
+  ]
+}

@@ -55,14 +55,47 @@ public final class NativePermissionEvaluator {
     return winner.node.value ? Tristate.TRUE : Tristate.FALSE;
   }
 
-  /** Returns explicit effective nodes for Velocity's numeric permission-map fast path. */
-  public static Map<String, Boolean> permissionMap(final NativePermissionSnapshot snapshot) {
-    final List<WeightedNode> nodes = effectiveNodes(snapshot);
-    nodes.sort(Comparator.comparing((WeightedNode weighted) -> normalize(weighted.node.node))
-        .thenComparing(weighted -> sourceId(weighted.node)));
+  /**
+   * Returns explicit effective nodes for Velocity's numeric permission-map fast path.
+   *
+   * <p>The map must answer exactly like {@link #evaluate}, because Velocity treats it as the
+   * subject's permission view and stops calling {@code hasPermission} once it is present. It
+   * therefore takes the same context and clock: a node whose window has passed, or whose contexts
+   * do not match the current one, is not part of the view. Duplicated nodes are resolved with the
+   * business comparator — the one where a deny outranks an allow — never by source id order, which
+   * would silently turn a deny into an allow depending on how the sources happen to be named.
+   */
+  public static Map<String, Boolean> permissionMap(
+      final NativePermissionSnapshot snapshot,
+      final Map<String, String> context,
+      final long nowEpochMillis
+  ) {
+    final Map<String, Candidate> winners = new LinkedHashMap<>();
+    for (WeightedNode weighted : effectiveNodes(snapshot)) {
+      final NativePermissionSnapshot.Node node = weighted.node;
+      if (!isActive(node.expiresAtEpochMillis, nowEpochMillis)) {
+        continue;
+      }
+      final Integer contextSpecificity = contextSpecificity(node.contexts, context);
+      if (contextSpecificity == null) {
+        continue;
+      }
+      final String key = normalize(node.node);
+      // nodeSpecificity is not part of this ranking: entries are grouped by literal node, so the
+      // wildcard-versus-exact comparison evaluate() performs has no counterpart here.
+      final Candidate candidate = new Candidate(
+          node, weighted.groupWeight, weighted.sourceRank, contextSpecificity, 0);
+      final Candidate previous = winners.get(key);
+      if (previous == null || CANDIDATE_ORDER.compare(candidate, previous) < 0) {
+        winners.put(key, candidate);
+      }
+    }
+
+    final List<Map.Entry<String, Candidate>> ordered = new ArrayList<>(winners.entrySet());
+    ordered.sort(Map.Entry.comparingByKey());
     final Map<String, Boolean> result = new LinkedHashMap<>();
-    for (WeightedNode weighted : nodes) {
-      result.put(normalize(weighted.node.node), weighted.node.value);
+    for (Map.Entry<String, Candidate> entry : ordered) {
+      result.put(entry.getKey(), entry.getValue().node.value);
     }
     return Collections.unmodifiableMap(result);
   }

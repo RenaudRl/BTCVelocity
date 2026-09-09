@@ -64,7 +64,75 @@ class NativePermissionEvaluatorTest {
         snapshot, "btc.test.expiring", Map.of(), 1_999L));
     assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(
         snapshot, "btc.test.expiring", Map.of(), 2_000L));
-    assertTrue(NativePermissionEvaluator.permissionMap(snapshot).containsKey("btc.test.*"));
+    assertTrue(NativePermissionEvaluator.permissionMap(snapshot, Map.of(), 1_999L)
+        .containsKey("btc.test.*"));
+  }
+
+  /**
+   * The permission map is Velocity's view of the subject: once it is present, Velocity stops asking
+   * {@code hasPermission}. It must therefore hide what {@code evaluate} would refuse — an expired
+   * node — otherwise a temporary permission outlives its own window on the fast path only.
+   */
+  @Test
+  void permissionMapDropsExpiredNodes() {
+    final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
+    snapshot.subject = UUID.randomUUID();
+    snapshot.permissions = List.of(node("btc.temporary", true, 0, Map.of(), 2_000L));
+
+    assertTrue(NativePermissionEvaluator.permissionMap(snapshot, Map.of(), 1_999L)
+        .containsKey("btc.temporary"));
+    assertEquals(Map.of(), NativePermissionEvaluator.permissionMap(snapshot, Map.of(), 2_000L));
+  }
+
+  /** A node restricted to another server must not enter the current subject's view. */
+  @Test
+  void permissionMapDropsNodesOutOfContext() {
+    final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
+    snapshot.subject = UUID.randomUUID();
+    snapshot.permissions = List.of(
+        node("btc.survival.only", true, 0, Map.of("server", "survival")),
+        node("btc.everywhere", true, 0, Map.of()));
+
+    assertEquals(
+        Map.of("btc.everywhere", true),
+        NativePermissionEvaluator.permissionMap(snapshot, Map.of("server", "lobby"), 0L));
+    assertEquals(
+        Map.of("btc.everywhere", true, "btc.survival.only", true),
+        NativePermissionEvaluator.permissionMap(snapshot, Map.of("server", "survival"), 0L));
+  }
+
+  /**
+   * Two sources assigning the same node must be resolved by the business comparator, exactly as
+   * {@code evaluate} does. Resolving by source id would make the winner depend on how the groups
+   * happen to be named — here `zzz` would beat `aaa` and turn the deny into an allow.
+   */
+  @Test
+  void permissionMapResolvesDuplicatesLikeEvaluate() {
+    final NativePermissionSnapshot.Group allowing =
+        group("zzz-high", 100, namedNode("btc.rank", true, "zzz-source"));
+    final NativePermissionSnapshot.Group denying =
+        group("aaa-low", 1, namedNode("btc.rank", false, "aaa-source"));
+    final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
+    snapshot.subject = UUID.randomUUID();
+    snapshot.groups = Map.of("zzz-high", allowing, "aaa-low", denying);
+    snapshot.directGroups = Set.of("zzz-high", "aaa-low");
+
+    assertEquals(
+        Tristate.FALSE, NativePermissionEvaluator.evaluate(snapshot, "btc.rank", Map.of(), 0L));
+    assertEquals(
+        Map.of("btc.rank", false),
+        NativePermissionEvaluator.permissionMap(snapshot, Map.of(), 0L),
+        "la map doit trancher comme evaluate : le deny gagne");
+  }
+
+  private static NativePermissionSnapshot.Node namedNode(
+      final String node,
+      final boolean value,
+      final String sourceId
+  ) {
+    final NativePermissionSnapshot.Node permission = node(node, value, 0, Map.of());
+    permission.sourceId = sourceId;
+    return permission;
   }
 
   @Test

@@ -68,7 +68,8 @@ final class NativePermissionResolver implements PermissionResolver {
       // Native mode is authoritative while the asynchronous snapshot is loading.
       return Map.of();
     }
-    return NativePermissionEvaluator.permissionMap(snapshot);
+    return NativePermissionEvaluator.permissionMap(
+        snapshot, service.context(player), System.currentTimeMillis());
   }
 
   private Tristate fallback(final String permission) {
