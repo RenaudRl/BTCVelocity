@@ -58,6 +58,9 @@ final class NativePermissionService implements AutoCloseable {
   private volatile RedisClient redisClient;
   private volatile StatefulRedisPubSubConnection<String, String> redisConnection;
   private volatile Map<String, NativePermissionSnapshot.Group> groupCatalog = Map.of();
+  private volatile String lastFailureReason;
+  private volatile boolean groupCatalogStale;
+  private volatile long groupCatalogStaleSince;
 
   CompletableFuture<NativePermissionSnapshot> load(final UUID subject) {
     final NativePermissionSnapshot cached = snapshots.get(subject);
@@ -96,9 +99,88 @@ final class NativePermissionService implements AutoCloseable {
     return Map.of("network", current.networkId(), "server", serverId);
   }
 
+  /** État observable du backend : voir {@link NativePermissionHealth} pour le pourquoi. */
+  NativePermissionHealth health() {
+    return new NativePermissionHealth(
+        dataSource != null && config != null && !closed.get(),
+        lastFailureReason,
+        groupCatalog.size(),
+        groupCatalogStale,
+        groupCatalogStaleSince);
+  }
+
+  /**
+   * Relit le catalogue de groupes ; rend {@code true} si le catalogue détenu a été remplacé.
+   *
+   * <p>Extraite du corps de {@link #handleInvalidation(String)} pour que la politique de
+   * remplacement du catalogue soit une unité nommée, observable et testable indépendamment du
+   * transport Valkey qui la déclenche en production.
+   */
+  CompletableFuture<Boolean> refreshGroupCatalog() {
+    return CompletableFuture.supplyAsync(() -> {
+      try {
+        groupCatalog = readGroups();
+        markGroupCatalogFresh();
+        return true;
+      } catch (SQLException | RuntimeException error) {
+        LOGGER.warn("Native BTC permissions group refresh failed; keeping the last valid catalog.", error);
+        markGroupCatalogStale(error);
+        return false;
+      }
+    }, ioExecutor);
+  }
+
+  private void markGroupCatalogFresh() {
+    groupCatalogStale = false;
+    groupCatalogStaleSince = 0L;
+  }
+
+  /**
+   * Marque le catalogue détenu comme périmé, en datant le début de la péremption.
+   *
+   * <p>La date n'est posée qu'au premier échec : une suite d'échecs est un seul incident, et
+   * réécrire l'horodatage à chaque tentative ferait paraître neuve une péremption vieille d'un jour.
+   */
+  private void markGroupCatalogStale(final Throwable error) {
+    lastFailureReason = describeFailure(error);
+    if (!groupCatalogStale) {
+      groupCatalogStaleSince = System.currentTimeMillis();
+      groupCatalogStale = true;
+    }
+  }
+
+  /**
+   * Décrit un échec pour affichage : type de la cause racine et message, sans chaîne de connexion.
+   *
+   * <p>Un état de santé est destiné à être affiché — journal, healthcheck, commande d'exploitation.
+   * Les messages de pilotes JDBC et de pools citent volontiers l'URL et parfois l'utilisateur ; tout
+   * lexème portant {@code ://} ou {@code @} est donc retiré plutôt que relayé.
+   */
+  private static String describeFailure(final Throwable error) {
+    Throwable root = error;
+    for (int depth = 0; root.getCause() != null && root.getCause() != root && depth < 16; depth++) {
+      root = root.getCause();
+    }
+    final String message = root.getMessage();
+    final String detail = message == null || message.isBlank() ? "aucun message" : redact(message);
+    return root.getClass().getSimpleName() + ": " + detail;
+  }
+
+  private static String redact(final String message) {
+    final StringBuilder redacted = new StringBuilder(message.length());
+    for (final String token : message.split(" ")) {
+      redacted.append(token.contains("://") || token.indexOf('@') >= 0 ? "<retiré>" : token).append(' ');
+    }
+    return redacted.toString().strip();
+  }
+
   private CompletableFuture<Void> ensureInitialized() {
     CompletableFuture<Void> current = initialization;
-    if (current != null) {
+    // Le court-circuit doit exclure une tentative échouée. Sans cette condition, la première
+    // initialisation ratée était rendue indéfiniment à tous les appelants suivants : le bloc
+    // synchronisé ci-dessous, qui porte pourtant la relance, n'était plus jamais atteint, et une
+    // panne de base d'une seconde condamnait le backend pour la durée de vie du proxy.
+    if (current != null && !current.isCompletedExceptionally()) {
       return current;
     }
     synchronized (initializationLock) {
@@ -130,17 +212,21 @@ final class NativePermissionService implements AutoCloseable {
 
       try {
         groupCatalog = readGroups();
+        markGroupCatalogFresh();
       } catch (Throwable error) {
         LOGGER.warn("Native BTC permissions group catalog is not available yet; retrying on demand.", error);
+        markGroupCatalogStale(error);
       }
 
       if (!loaded.valkeyUri().isBlank()) {
         startRedis(loaded);
       }
+      lastFailureReason = null;
       LOGGER.info("Native BTC permissions backend configured for network {} and server {}.",
           loaded.networkId(), loaded.serverId());
     } catch (Throwable error) {
       LOGGER.error("Native BTC permissions backend could not initialize; proxy permissions remain undefined until it recovers.", error);
+      lastFailureReason = describeFailure(error);
       final HikariDataSource source = dataSource;
       dataSource = null;
       config = null;
@@ -193,6 +279,7 @@ final class NativePermissionService implements AutoCloseable {
         }
       } catch (SQLException | RuntimeException error) {
         LOGGER.warn("Native BTC permissions snapshot load failed for subject {}; will retry asynchronously.", subject, error);
+        lastFailureReason = describeFailure(error);
         return null;
       }
     }, ioExecutor);
@@ -202,7 +289,11 @@ final class NativePermissionService implements AutoCloseable {
     final HikariDataSource source = dataSource;
     final NativePermissionConfig.Config current = config;
     if (source == null || current == null) {
-      return Map.of();
+      // Ne jamais rendre une map vide ici : l'appelant remplace le catalogue détenu par ce qu'il
+      // reçoit, et « aucun groupe en base » aurait alors la même forme que « backend indisponible ».
+      // Les deux se soldent par le retrait de toutes les permissions de groupe du réseau, mais le
+      // second est un incident à signaler, pas un état à propager.
+      throw new IllegalStateException("Native BTC permissions backend is not available");
     }
     final Map<String, NativePermissionSnapshot.Group> groups = new HashMap<>();
     try (Connection connection = source.getConnection();
@@ -250,19 +341,12 @@ final class NativePermissionService implements AutoCloseable {
             invalidation.revision > existing.revision ? null : existing);
       } else {
         final String group = invalidation.group.toLowerCase();
-        CompletableFuture.supplyAsync(() -> {
-          try {
-            return readGroups();
-          } catch (SQLException error) {
-            LOGGER.warn("Native BTC permissions group refresh failed after Redis invalidation.", error);
-            return null;
+        // L'éviction n'a lieu que si le catalogue a réellement été rafraîchi : évincer les snapshots
+        // après un rafraîchissement échoué les ferait recharger contre le catalogue périmé.
+        refreshGroupCatalog().thenAccept(refreshed -> {
+          if (refreshed) {
+            snapshots.entrySet().removeIf(entry -> NativePermissionEvaluator.usesGroup(entry.getValue(), group));
           }
-        }, ioExecutor).thenAccept(groups -> {
-          if (groups == null) {
-            return;
-          }
-          groupCatalog = groups;
-          snapshots.entrySet().removeIf(entry -> NativePermissionEvaluator.usesGroup(entry.getValue(), group));
         });
       }
     } catch (RuntimeException error) {
