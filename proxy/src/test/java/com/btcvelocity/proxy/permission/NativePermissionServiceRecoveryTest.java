@@ -144,7 +144,7 @@ class NativePermissionServiceRecoveryTest {
   }
 
   @Test
-  void aGroupCatalogSurvivesAFailedRefreshAndSaysItIsStale() throws Exception {
+  void groupCatalogSurvivesFailedRefreshAndSaysItIsStale() throws Exception {
     writeConfig(PG_URL);
     try (NativePermissionService service = new NativePermissionService()) {
       assertNotNull(service.load(SUBJECT).join(), "l'amorçage doit réussir avec la base réelle");
