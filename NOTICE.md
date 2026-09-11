@@ -43,7 +43,7 @@ Required by GPLv3 §5(a). A summary; the authoritative record is the git history
 | Area | Modification |
 |---|---|
 | Protocol | Support for Minecraft 26.2 (protocol 776). |
-| Permissions | LuckPerms integration removed; replaced by a native BTC permission resolver with an immutable snapshot model and optional MySQL storage. |
+| Permissions | LuckPerms integration removed; replaced by a native BTC permission resolver with an immutable UUID snapshot model and PostgreSQL/Valkey storage. |
 | `btc:bridge` protocol | Versioned typed message protocol between proxy and backends (v2: envelope carrying version, message id and source backend; `Ack`/`Nack`; sealed hierarchy with an explicit `permits` list). |
 | MOTD | Inline `<left>`/`<center>`/`<right>` alignment with pixel-accurate glyph widths, configurable width, and a config migration from the old alignment keys. |
 | Storage | Native PostgreSQL backend (HikariCP); Redis / Valkey / Dragonfly selectable through one option. |
@@ -93,7 +93,7 @@ endorsed by Born To Craft Studio.
 ## 6. Third-party components
 
 Dependencies retain their own licences (Netty, Adventure, Lettuce, HikariCP, PostgreSQL JDBC,
-MySQL Connector/J, Log4j, jline, and the others declared in `gradle/libs.versions.toml`). Nothing
+Log4j, jline, and the others declared in `gradle/libs.versions.toml`). Nothing
 in this NOTICE alters them.
 
 The static Maven repository under `repo/` also hosts BTC forks of third-party projects

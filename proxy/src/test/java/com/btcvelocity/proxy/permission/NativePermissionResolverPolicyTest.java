@@ -62,6 +62,13 @@ import org.junit.jupiter.api.Test;
 class NativePermissionResolverPolicyTest {
 
   private static final UUID SUBJECT = UUID.fromString("2a3b4c5d-6e7f-4081-9203-a4b5c6d7e8f0");
+  /**
+   * Identité hors espace Mojang, de la forme qu'un joueur Bedrock reçoit : les huit premiers octets
+   * sont nuls et le XUID occupe les huit derniers, si bien que sa version d'UUID est 0 et non 4.
+   * Elle est ici pour que le resolver soit tenu de rester agnostique de l'espace d'UUID — un
+   * refactor qui déciderait quoi que ce soit à partir de la forme d'une identité doit rougir.
+   */
+  private static final UUID BEDROCK_SUBJECT = UUID.fromString("00000000-0000-0000-0009-1e4b7c2a5d63");
   private static final Map<String, String> CONTEXT = Map.of("network", "btc", "server", "proxy");
 
   private NativePermissionService service;
@@ -170,11 +177,50 @@ class NativePermissionResolverPolicyTest {
         "l'absence de repli ne change rien aux nodes réellement assignés");
   }
 
+  @Test
+  void aUuidOutsideTheMojangSpaceIsResolvedLikeAnyOther() {
+    final Player bedrockPlayer = mock(Player.class);
+    when(bedrockPlayer.getUniqueId()).thenReturn(BEDROCK_SUBJECT);
+    when(service.context(bedrockPlayer)).thenReturn(CONTEXT);
+    when(service.snapshot(BEDROCK_SUBJECT))
+        .thenReturn(snapshotFor(BEDROCK_SUBJECT, node("btc.proxy.join", true)));
+    final NativePermissionResolver resolver =
+        new NativePermissionResolver(bedrockPlayer, null, service);
+
+    assertTrue(resolver.getPermissionValue("btc.proxy.join").asBoolean(),
+        "l'espace d'UUID n'est pas un critère d'autorisation : une identité Floodgate dont le"
+            + " snapshot accorde un node l'obtient comme n'importe quelle autre");
+    assertEquals(Tristate.UNDEFINED, resolver.getPermissionValue("un.autre.plugin.node"),
+        "et un node non couvert reste indéfini pour elle aussi, sans traitement particulier");
+  }
+
+  @Test
+  void aMissingSnapshotRefusesTheSameWayWhateverTheUuidSpace() {
+    final Player bedrockPlayer = mock(Player.class);
+    when(bedrockPlayer.getUniqueId()).thenReturn(BEDROCK_SUBJECT);
+    when(service.snapshot(BEDROCK_SUBJECT)).thenReturn(null);
+    final NativePermissionResolver resolver =
+        new NativePermissionResolver(bedrockPlayer, permission -> Tristate.TRUE, service);
+
+    assertEquals(Tristate.FALSE, resolver.getPermissionValue("btc.proxy.join"),
+        "le refus pendant le chargement vaut pour toute identité : le traiter à part pour une"
+            + " plateforme ferait de l'origine un critère de décision");
+    verify(service).load(BEDROCK_SUBJECT);
+    verify(service, never()).load(SUBJECT);
+  }
+
   // --- fixtures ------------------------------------------------------------------------------
 
   private static NativePermissionSnapshot snapshotWith(final NativePermissionSnapshot.Node... nodes) {
+    return snapshotFor(SUBJECT, nodes);
+  }
+
+  private static NativePermissionSnapshot snapshotFor(
+      final UUID subject,
+      final NativePermissionSnapshot.Node... nodes
+  ) {
     final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
-    snapshot.subject = SUBJECT;
+    snapshot.subject = subject;
     snapshot.permissions = List.of(nodes);
     snapshot.revision = 1L;
     return snapshot;

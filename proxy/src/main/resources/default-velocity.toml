@@ -448,7 +448,7 @@ proxy-id = ""
 [postgresql]
 # Should PostgreSQL be used as a persistent storage backend?
 # When enabled, BTC Velocity will use PostgreSQL for player data, proxy state,
-# and cross-server synchronization. This replaces or complements MySQL setups.
+# and cross-server synchronization for the native BTC permission snapshot.
 # Recommended for production: PostgreSQL offers better concurrency and JSON support.
 enabled = false
 

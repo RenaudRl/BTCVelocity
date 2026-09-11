@@ -1,0 +1,132 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "dev.btc.core",
+    "module": "api",
+    "version": "26.2.build.7-alpha",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.4.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "org.jspecify",
+          "module": "jspecify",
+          "version": {
+            "requires": "1.0.0"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-nbt",
+          "version": {
+            "requires": "5.2.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "api-26.2.build.7-alpha.jar",
+          "url": "api-26.2.build.7-alpha.jar",
+          "size": 75478,
+          "sha512": "d82daad54f8fe364c0fcccb9a4f51f192ad0314015ebface8b5d732b0b817e06b451c494ad5e0352b51e6059df037ee79123827b673b53492f6b17566f0301d4",
+          "sha256": "2402d93e5aa8e77ea8998c2a9d2526c10601128aed839b50add8c1388c3b1f0c",
+          "sha1": "8beb96e36f47af1d9dd1244433289a9d9af51f25",
+          "md5": "2b2810090128909f2eac983d7fb526e4"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "org.jspecify",
+          "module": "jspecify",
+          "version": {
+            "requires": "1.0.0"
+          }
+        },
+        {
+          "group": "net.kyori",
+          "module": "adventure-nbt",
+          "version": {
+            "requires": "5.2.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "api-26.2.build.7-alpha.jar",
+          "url": "api-26.2.build.7-alpha.jar",
+          "size": 75478,
+          "sha512": "d82daad54f8fe364c0fcccb9a4f51f192ad0314015ebface8b5d732b0b817e06b451c494ad5e0352b51e6059df037ee79123827b673b53492f6b17566f0301d4",
+          "sha256": "2402d93e5aa8e77ea8998c2a9d2526c10601128aed839b50add8c1388c3b1f0c",
+          "sha1": "8beb96e36f47af1d9dd1244433289a9d9af51f25",
+          "md5": "2b2810090128909f2eac983d7fb526e4"
+        }
+      ]
+    },
+    {
+      "name": "javadocElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "javadoc",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "api-26.2.build.7-alpha-javadoc.jar",
+          "url": "api-26.2.build.7-alpha-javadoc.jar",
+          "size": 4479303,
+          "sha512": "8cff1ac88e09d6743cbb75091c4770a2208ed7edb59dd0e54ba350c57fd199a6164208faefc79158211204e12a993c5702644cc0598950077a183e6c03553742",
+          "sha256": "20ce5dcdb7f0e1e488dad5e1540c3cf09439eb6f6235de2ae5c2c46e71365b64",
+          "sha1": "90c469832b5f78ee833a9385eeef959d5883cd8f",
+          "md5": "ae1992c1e7eb3b32d2e2c3ae7f5365ab"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "api-26.2.build.7-alpha-sources.jar",
+          "url": "api-26.2.build.7-alpha-sources.jar",
+          "size": 64830,
+          "sha512": "217bb1fbd415d2da71cb3337f16d37ede79bca7a2cd7b41a6c444d727cfca7caa532fda41382d3bfa273928379e99cf46373dc2bb903fbf69ae9166b076cb6d1",
+          "sha256": "40d48757885cbe4bb941d09faaf6a7ce70f76a95359b87b66e40c7c8eda62818",
+          "sha1": "5a4581daa6cd492f8e5f0fb8015cfba399a38aeb",
+          "md5": "4e9d3333d62467eb2d82aac6f41b92d8"
+        }
+      ]
+    }
+  ]
+}
