@@ -35,33 +35,24 @@ public class RespawnPacket implements MinecraftPacket {
   private long partialHashedSeed;
 
   private short difficulty;
-
-  private short gamemode;
-
+  private int gamemode;
   private String levelType = "";
-
-  private byte dataToKeep;
-
-  private DimensionInfo dimensionInfo;
-
-  private short previousGamemode;
-
-  private CompoundBinaryTag currentDimensionData;
-
-  private @Nullable Pair<String, Long> lastDeathPosition;
-
-  private int portalCooldown;
-
-  private int seaLevel;
+  private byte dataToKeep; // 1.16+
+  private DimensionInfo dimensionInfo; // 1.16-1.16.1
+  private int previousGamemode; // 1.16+
+  private CompoundBinaryTag currentDimensionData; // 1.16.2+
+  private @Nullable Pair<String, Long> lastDeathPosition; // 1.19+
+  private int portalCooldown; // 1.20+
+  private int seaLevel; // 1.21.2+
 
   public RespawnPacket() {
   }
 
-  public RespawnPacket(final int dimension, final long partialHashedSeed, final short difficulty, final short gamemode,
-                       final String levelType, final byte dataToKeep, final DimensionInfo dimensionInfo,
-                       final short previousGamemode, final CompoundBinaryTag currentDimensionData,
-                       final @Nullable Pair<String, Long> lastDeathPosition, final int portalCooldown,
-                       final int seaLevel) {
+  public RespawnPacket(int dimension, long partialHashedSeed, short difficulty, int gamemode,
+                       String levelType, byte dataToKeep, DimensionInfo dimensionInfo,
+                       int previousGamemode, CompoundBinaryTag currentDimensionData,
+                       @Nullable Pair<String, Long> lastDeathPosition, int portalCooldown,
+                       int seaLevel) {
     this.dimension = dimension;
     this.partialHashedSeed = partialHashedSeed;
     this.difficulty = difficulty;
@@ -116,11 +107,11 @@ public class RespawnPacket implements MinecraftPacket {
     this.difficulty = difficulty;
   }
 
-  public short getGamemode() {
+  public int getGamemode() {
     return gamemode;
   }
 
-  public void setGamemode(final short gamemode) {
+  public void setGamemode(int gamemode) {
     this.gamemode = gamemode;
   }
 
@@ -140,11 +131,11 @@ public class RespawnPacket implements MinecraftPacket {
     this.dataToKeep = dataToKeep;
   }
 
-  public short getPreviousGamemode() {
+  public int getPreviousGamemode() {
     return previousGamemode;
   }
 
-  public void setPreviousGamemode(final short previousGamemode) {
+  public void setPreviousGamemode(int previousGamemode) {
     this.previousGamemode = previousGamemode;
   }
 
@@ -219,10 +210,17 @@ public class RespawnPacket implements MinecraftPacket {
     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_15)) {
       this.partialHashedSeed = buf.readLong();
     }
-
-    this.gamemode = buf.readByte();
+    if (version.noLessThan(ProtocolVersion.MINECRAFT_26_3)) {
+      this.gamemode = ProtocolUtils.readVarInt(buf);
+    } else {
+      this.gamemode = buf.readByte();
+    }
     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_16)) {
-      this.previousGamemode = buf.readByte();
+      if (version.noLessThan(ProtocolVersion.MINECRAFT_26_3)) {
+        this.previousGamemode = ProtocolUtils.readVarInt(buf);
+      } else {
+        this.previousGamemode = buf.readByte();
+      }
       boolean isDebug = buf.readBoolean();
       boolean isFlat = buf.readBoolean();
       this.dimensionInfo = new DimensionInfo(dimensionKey, levelName, isFlat, isDebug, version);
@@ -278,10 +276,17 @@ public class RespawnPacket implements MinecraftPacket {
     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_15)) {
       buf.writeLong(partialHashedSeed);
     }
-
-    buf.writeByte(gamemode);
+    if (version.noLessThan(ProtocolVersion.MINECRAFT_26_3)) {
+      ProtocolUtils.writeVarInt(buf, this.gamemode);
+    } else {
+      buf.writeByte(this.gamemode);
+    }
     if (version.noLessThan(ProtocolVersion.MINECRAFT_1_16)) {
-      buf.writeByte(previousGamemode);
+      if (version.noLessThan(ProtocolVersion.MINECRAFT_26_3)) {
+        ProtocolUtils.writeVarInt(buf, this.previousGamemode);
+      } else {
+        buf.writeByte(this.previousGamemode);
+      }
       buf.writeBoolean(dimensionInfo.isDebugType());
       buf.writeBoolean(dimensionInfo.isFlat());
       if (version.lessThan(ProtocolVersion.MINECRAFT_1_19_3)) {
