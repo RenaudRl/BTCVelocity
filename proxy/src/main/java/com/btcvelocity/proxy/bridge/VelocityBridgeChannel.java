@@ -26,6 +26,7 @@ import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.util.Optional;
@@ -117,22 +118,45 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     // Mark the message handled so the proxy does not forward it to another sink.
     event.setResult(PluginMessageEvent.ForwardResult.handled());
 
-    final String sourceServer = resolveSourceServer(event);
-    if (sourceServer == null) {
-      LOGGER.debug("Received btc:bridge message from an unknown source; ignoring");
+    // 1. Who is talking? Identity is the backend connection the proxy opened, confronted with
+    //    the registered server of the same name (name AND address), never the name alone.
+    final BridgeIngressPolicy.SourceDecision source = BridgeIngressPolicy.authenticateSource(
+        connectionInfo(event.getSource()),
+        name -> server.getServer(name).map(RegisteredServer::getServerInfo));
+    if (!source.accepted()) {
+      // Player sources are the common case here and are not an incident: keep them at debug.
+      if (source.rejection() == BridgeIngressPolicy.Rejection.NOT_A_BACKEND) {
+        LOGGER.debug("Dropped btc:bridge message: {}", source.rejection());
+      } else {
+        LOGGER.warn("Dropped btc:bridge message: {}", source.rejection());
+      }
       return;
     }
+    final String sourceServer = source.sourceServer();
 
-    final BridgeMessage message;
+    // 2. Is the payload well-formed, current and bounded? The codec reports a category; the
+    //    raw payload is never logged.
+    final BridgeCodec.DecodeResult decoded;
     try {
-      message = BridgeCodec.decode(event.getData());
+      decoded = BridgeCodec.decodeResult(event.getData(), System.currentTimeMillis(),
+          BridgeCodec.Limits.defaults());
     } catch (Exception e) {
       LOGGER.warn("Failed to decode btc:bridge message from '{}'", sourceServer, e);
       return;
     }
+    if (!decoded.accepted()) {
+      LOGGER.warn("Rejected btc:bridge message from '{}': {} (messageId {})", sourceServer,
+          decoded.error(), decoded.messageId());
+      return;
+    }
+    final BridgeMessage message = decoded.message();
 
-    if (message == null) {
-      LOGGER.debug("Received unrecognized btc:bridge payload from '{}'", sourceServer);
+    // 3. Does the message speak in someone else's name? A backend may only report about itself.
+    final Optional<BridgeIngressPolicy.Rejection> claim =
+        BridgeIngressPolicy.verifyDeclaredIdentity(sourceServer, message);
+    if (claim.isPresent()) {
+      LOGGER.warn("Rejected btc:bridge {} from '{}': {} (messageId {})", message.type(),
+          sourceServer, claim.get(), message.envelope().messageId());
       return;
     }
 
@@ -157,19 +181,14 @@ public final class VelocityBridgeChannel implements BridgeChannel {
   }
 
   /**
-   * Resolves the name of the backend server that originated a plugin message.
+   * Extracts the {@link ServerInfo} of a backend connection source.
    *
-   * @param event the plugin message event
-   * @return the source server name, or {@code null} if it could not be determined
+   * @param source the plugin message source
+   * @return the connection's server info, or {@code null} when the source is a player (client
+   *         originated, never an authenticated backend) or anything else
    */
-  private @Nullable String resolveSourceServer(final PluginMessageEvent event) {
-    final Object source = event.getSource();
-    if (source instanceof ServerConnection conn) {
-      final String serverName = conn.getServerInfo().getName();
-      return server.getServer(serverName).isPresent() ? serverName : null;
-    }
-    // A Player source is client-originated and is never an authenticated backend.
-    return null;
+  private static @Nullable ServerInfo connectionInfo(final Object source) {
+    return source instanceof ServerConnection conn ? conn.getServerInfo() : null;
   }
 
   /**
