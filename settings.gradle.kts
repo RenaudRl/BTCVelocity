@@ -26,6 +26,7 @@ sequenceOf(
     "api",
     "native",
     "proxy",
+    "cloudnet-registry",
 ).forEach {
     val project = ":velocity-$it"
     include(project)
