@@ -45,6 +45,8 @@ public final class BridgeMetrics {
     REJECTED_PAYLOAD,
     /** The message spoke in another backend's name. */
     REJECTED_IDENTITY,
+    /** The frame was unsigned or its signature did not verify: origin not proven. */
+    REJECTED_SIGNATURE,
     /** The sender or the destination was not allowed by the declared policy. */
     REJECTED_AUTHORIZATION,
     /**

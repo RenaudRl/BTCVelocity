@@ -19,6 +19,7 @@ package com.btcvelocity.proxy.bridge;
 
 import com.btcvelocity.api.bridge.BridgeChannel;
 import com.btcvelocity.api.bridge.BridgeCodec;
+import com.btcvelocity.api.bridge.BridgeFrame;
 import com.btcvelocity.api.bridge.BridgeMessage;
 import com.btcvelocity.api.bridge.BridgeMessageListener;
 import com.velocitypowered.api.event.EventHandler;
@@ -67,6 +68,14 @@ public final class VelocityBridgeChannel implements BridgeChannel {
   private final BridgeMetrics metrics = new BridgeMetrics();
 
   /**
+   * Signs what the proxy sends and authenticates what it receives, or {@code null} when there is no
+   * forwarding secret to derive a key from — in which case nothing is sent and everything received
+   * is refused, loudly. Keyed once at startup: rotating the forwarding secret needs a restart, a
+   * config reload alone would leave the bridge on the old key.
+   */
+  private final @Nullable BridgeFrame frame;
+
+  /**
    * The event handler subscribed to {@link PluginMessageEvent}, retained so it can be
    * unregistered cleanly during shutdown.
    */
@@ -95,6 +104,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     this.server = server;
     this.proxyId = proxyId == null || proxyId.isBlank() ? DEFAULT_PROXY_ID : proxyId.trim();
     this.authorization = authorization;
+    this.frame = keyFrom(server.getConfiguration().getForwardingSecret());
     this.server.getChannelRegistrar().register(CHANNEL_ID);
     this.server.getEventManager()
         .register(VelocityVirtualPlugin.INSTANCE, PluginMessageEvent.class, PostOrder.LAST,
@@ -128,12 +138,33 @@ public final class VelocityBridgeChannel implements BridgeChannel {
 
   @Override
   public void sendToServer(final RegisteredServer serverObj, final BridgeMessage message) {
-    final byte[] data = BridgeCodec.encode(message);
+    final BridgeFrame signer = frame;
+    if (signer == null) {
+      LOGGER.warn("Not sending bridge message {}: no key to sign it with", message.type());
+      return;
+    }
+    final byte[] data = signer.seal(BridgeCodec.encode(message));
     final boolean sent = serverObj.sendPluginMessage(CHANNEL_ID, data);
     if (!sent && LOGGER.isDebugEnabled()) {
       LOGGER.debug("Failed to send bridge message {} to server '{}' (no players connected?)",
           message.type(), serverObj.getServerInfo().getName());
     }
+  }
+
+  /**
+   * Derives the frame key, or reports why the bridge cannot sign.
+   *
+   * @param secret the modern-forwarding secret
+   * @return the frame codec, or {@code null} when there is no secret
+   */
+  private static @Nullable BridgeFrame keyFrom(final byte[] secret) {
+    if (secret.length == 0) {
+      LOGGER.error("btc:bridge has no forwarding secret to sign with: every bridge message will be "
+          + "refused and none sent until modern forwarding is configured");
+      return null;
+    }
+    LOGGER.info("btc:bridge frames are signed (HMAC-SHA256, key derived from the forwarding secret)");
+    return BridgeFrame.fromSharedSecret(secret);
   }
 
   @Override
@@ -181,11 +212,23 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     }
     final String sourceServer = source.sourceServer();
 
-    // 2. Is the payload well-formed, current and bounded? The codec reports a category; the
+    // 2. Was it signed with the shared key? Nothing is answered to an unauthenticated frame: a
+    //    signed refusal would only confirm to the sender that the channel is live.
+    final BridgeFrame verifier = frame;
+    final BridgeFrame.Opened opened = verifier == null
+        ? new BridgeFrame.Opened(null, BridgeFrame.Rejection.BAD_MAC)
+        : verifier.open(event.getData());
+    if (!opened.accepted()) {
+      metrics.record(BridgeMetrics.Event.REJECTED_SIGNATURE);
+      LOGGER.warn("Dropped btc:bridge message from '{}': {}", sourceServer, opened.rejection());
+      return;
+    }
+
+    // 3. Is the payload well-formed, current and bounded? The codec reports a category; the
     //    raw payload is never logged.
     final BridgeCodec.DecodeResult decoded;
     try {
-      decoded = BridgeCodec.decodeResult(event.getData(), System.currentTimeMillis(),
+      decoded = BridgeCodec.decodeResult(opened.payload(), System.currentTimeMillis(),
           BridgeCodec.Limits.defaults());
     } catch (Exception e) {
       metrics.record(BridgeMetrics.Event.REJECTED_PAYLOAD);
@@ -315,11 +358,12 @@ public final class VelocityBridgeChannel implements BridgeChannel {
    */
   private void respond(final @Nullable ServerConnection connection, final BridgeMessage response,
                        final String about) {
-    if (connection == null) {
+    final BridgeFrame signer = frame;
+    if (connection == null || signer == null) {
       return;
     }
     try {
-      connection.sendPluginMessage(CHANNEL_ID, BridgeCodec.encode(response));
+      connection.sendPluginMessage(CHANNEL_ID, signer.seal(BridgeCodec.encode(response)));
     } catch (Exception e) {
       // Never let a failed response break the handling of the request it answers.
       metrics.record(BridgeMetrics.Event.RESPONSE_FAILED);
