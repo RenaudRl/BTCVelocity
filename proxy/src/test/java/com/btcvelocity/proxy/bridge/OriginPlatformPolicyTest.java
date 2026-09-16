@@ -22,11 +22,13 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.btcvelocity.api.bridge.BridgeMessage;
+import com.btcvelocity.api.bridge.PlatformSource;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /** A platform a backend states is a claim, and a claim is either confirmed or refused. */
@@ -209,41 +211,23 @@ class OriginPlatformPolicyTest {
   }
 
   /**
-   * The bench defect of 17/09, in a test: the bridge channel is built before the proxy loads its
-   * plugins, so a source resolved once at construction reported "no Floodgate" on a proxy that had
-   * it. "Absent" and "not yet" must not be remembered alike.
+   * The bench defect of 17/09, in a test: the bridge channel is built before the proxy loads any
+   * plugin, so the source is installed long after the policy exists. A policy holding its source
+   * would freeze "nothing installed" for the life of the proxy.
    */
   @Test
-  void aSourceThatIsNotReadyYetIsAskedAgainLater() {
-    final AtomicInteger attempts = new AtomicInteger();
-    final PlatformSource deferred = new DeferredPlatformSource(() -> {
-      // Not ready the first two times, as a plugin that has not finished starting.
-      if (attempts.incrementAndGet() <= 2) {
-        return DeferredPlatformSource.Attempt.notYet();
-      }
-      return DeferredPlatformSource.Attempt.found(
-          new KnownSessions(Map.of(ALICE, BridgeMessage.Platform.JAVA)));
-    });
+  void aSourceInstalledAfterTheFactIsUsed() {
+    final AtomicReference<PlatformSource> installed =
+        new AtomicReference<>(PlatformSource.UNAVAILABLE);
+    final OriginPlatformPolicy policy = new OriginPlatformPolicy(installed::get);
 
-    assertFalse(deferred.canResolve(), "not ready yet: it says so rather than guessing");
-    assertFalse(deferred.canResolve());
-    assertTrue(deferred.canResolve(), "and once the plugin is up, it resolves");
-    assertEquals(3, attempts.get());
-  }
+    assertTrue(policy.judge(connect(ALICE, null)).accepted(), "nothing installed: nothing required");
+    assertTrue(policy.announce().contains("cannot resolve"));
 
-  /** A definitive absence is settled once: it is a fact about the deployment, not about now. */
-  @Test
-  void aSourceThatWillNeverExistIsNotAskedTwice() {
-    final AtomicInteger attempts = new AtomicInteger();
-    final PlatformSource deferred = new DeferredPlatformSource(() -> {
-      attempts.incrementAndGet();
-      return DeferredPlatformSource.Attempt.absentForGood();
-    });
+    installed.set(new KnownSessions(Map.of(ALICE, BridgeMessage.Platform.JAVA)));
 
-    assertFalse(deferred.canResolve());
-    assertFalse(deferred.canResolve());
-    assertFalse(deferred.canResolve());
-    assertEquals(1, attempts.get());
+    assertTrue(policy.announce().contains("validates"), "the plugin came up; the policy sees it");
+    assertFalse(policy.judge(connect(ALICE, BridgeMessage.Platform.BEDROCK)).accepted());
   }
 
   /** An inert policy that stays silent reads exactly like an enforced one. */

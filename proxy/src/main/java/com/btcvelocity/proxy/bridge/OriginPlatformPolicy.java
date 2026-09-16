@@ -18,10 +18,12 @@
 package com.btcvelocity.proxy.bridge;
 
 import com.btcvelocity.api.bridge.BridgeMessage;
+import com.btcvelocity.api.bridge.PlatformSource;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -55,10 +57,28 @@ import org.jetbrains.annotations.Nullable;
  */
 public final class OriginPlatformPolicy {
 
-  private final PlatformSource source;
+  private final Supplier<PlatformSource> source;
 
-  public OriginPlatformPolicy(final PlatformSource source) {
+  /**
+   * Reads its source through a supplier, asked afresh on every judgement.
+   *
+   * <p>Not an indirection for its own sake: the source is installed by a plugin, long after this
+   * object is built — the bridge channel is constructed before the proxy loads its plugins at all
+   * (measured on the bench, 17/09). Holding the source itself would freeze "nothing installed" for
+   * the life of the proxy.
+   */
+  public OriginPlatformPolicy(final Supplier<PlatformSource> source) {
     this.source = Objects.requireNonNull(source, "source");
+  }
+
+  /** Convenience for tests and for a source that is already known. */
+  public OriginPlatformPolicy(final PlatformSource fixed) {
+    this(() -> fixed);
+    Objects.requireNonNull(fixed, "fixed");
+  }
+
+  private PlatformSource source() {
+    return Objects.requireNonNull(source.get(), "source");
   }
 
   /** Why a message was accepted or refused. Journalled; never put on the wire as such. */
@@ -113,6 +133,7 @@ public final class OriginPlatformPolicy {
    */
   private Verdict judgeParty(final BridgeMessage.PartyWarp warp) {
     final Map<UUID, BridgeMessage.Platform> stated = warp.memberPlatforms();
+    final PlatformSource source = source();
     if (!source.canResolve()) {
       return stated == null
           ? ACCEPTED_NOT_REQUIRED
@@ -140,6 +161,7 @@ public final class OriginPlatformPolicy {
   }
 
   private Verdict judgeClaim(final UUID player, final BridgeMessage.@Nullable Platform claimed) {
+    final PlatformSource source = source();
     if (!source.canResolve()) {
       // This proxy measures nothing. It may not require a platform, and it may not believe one.
       return claimed == null
@@ -161,6 +183,7 @@ public final class OriginPlatformPolicy {
 
   /** What to announce at startup, so an inert policy never reads like an enforced one. */
   public String announce() {
+    final PlatformSource source = source();
     return source.canResolve()
         ? "btc:bridge validates originPlatform against live sessions via " + source.describe()
         : "btc:bridge cannot resolve player platforms (" + source.describe()

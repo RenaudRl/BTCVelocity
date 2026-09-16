@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2026 Velocity Contributors
+ * Copyright (C) 2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,9 +15,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package com.btcvelocity.proxy.bridge;
+package com.btcvelocity.platform;
 
 import com.btcvelocity.api.bridge.BridgeMessage;
+import com.btcvelocity.api.bridge.PlatformSource;
 import com.velocitypowered.api.proxy.ProxyServer;
 import java.util.Objects;
 import java.util.Optional;
@@ -29,16 +30,16 @@ import org.geysermc.floodgate.api.FloodgateApi;
  *
  * <p>Two sources, because neither answers the question alone. Velocity knows who is <em>here</em>;
  * Floodgate knows which of them came through Bedrock. Asking Floodgate alone would make an offline
- * player indistinguishable from a Java one — both simply "not a Floodgate player" — and that
- * mistake would hand any backend a free way to have claims confirmed about players who are not
- * connected at all.
+ * player indistinguishable from a Java one — both are simply "not a Floodgate player" — and that
+ * would hand any backend a free way to have claims confirmed about players who are not connected.
  *
  * <p>{@code FloodgateApi.isFloodgateId(UUID)} is deliberately not used: it reads the shape of a
  * UUID, which is the inference this contract forbids.
  *
- * <p>Compiled against the real Floodgate type, never against reflection; the class is only ever
- * instantiated after {@link #createIfPresent(ProxyServer)} has established that Floodgate is
- * actually loaded, so a proxy without it never links this class.
+ * <p>This class lives in a plugin rather than in the proxy core for a reason that is structural,
+ * not stylistic: the core's classloader is the parent of every plugin's, so the core cannot see
+ * Floodgate's classes at all. A plugin sees both the API and Floodgate, which is what makes
+ * compiling against the real type possible here — and impossible there.
  */
 public final class FloodgatePlatformSource implements PlatformSource {
 
@@ -53,32 +54,28 @@ public final class FloodgatePlatformSource implements PlatformSource {
   }
 
   /**
-   * A source that resolves Floodgate the first time it is actually needed, never in a constructor.
+   * Returns a Floodgate-backed source, or {@link PlatformSource#UNAVAILABLE} when Floodgate is not
+   * installed here — the production case today.
    *
-   * <p>The bridge channel is built before the proxy loads its plugins, so asking at construction
-   * time answers "no Floodgate" on a proxy that has it — measured on the bench, 17/09. See
-   * {@link DeferredPlatformSource} for why "absent" and "not yet" must not be remembered alike.
-   *
-   * <p>Absence is not an error and is not logged as one: it is a fact about this deployment.
+   * <p>Called from this plugin's own startup, so there is nothing to defer: by then Velocity has
+   * loaded every plugin, and the declared dependency guarantees Floodgate came up first. Absence is
+   * not an error and is not logged as one: it is a fact about this deployment, which the bridge
+   * announces.
    */
-  public static PlatformSource deferred(final ProxyServer proxy) {
+  public static PlatformSource createIfPresent(final ProxyServer proxy) {
     Objects.requireNonNull(proxy, "proxy");
-    return new DeferredPlatformSource(() -> attempt(proxy));
-  }
-
-  private static DeferredPlatformSource.Attempt attempt(final ProxyServer proxy) {
     try {
       Class.forName(FLOODGATE_API, false, FloodgatePlatformSource.class.getClassLoader());
+      final FloodgateApi api = FloodgateApi.getInstance();
+      if (api == null) {
+        // On the classpath but not started, or failed to start. Claiming we can resolve would be
+        // worse than admitting we cannot.
+        return PlatformSource.UNAVAILABLE;
+      }
+      return new FloodgatePlatformSource(proxy, api);
     } catch (ClassNotFoundException | LinkageError absent) {
-      // Nothing will put the class there later: this is settled for the life of the proxy.
-      return DeferredPlatformSource.Attempt.absentForGood();
+      return PlatformSource.UNAVAILABLE;
     }
-    final FloodgateApi api = FloodgateApi.getInstance();
-    if (api == null) {
-      // On the path, not started yet. Asking again later is the whole point.
-      return DeferredPlatformSource.Attempt.notYet();
-    }
-    return DeferredPlatformSource.Attempt.found(new FloodgatePlatformSource(proxy, api));
   }
 
   @Override

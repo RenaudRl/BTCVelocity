@@ -22,6 +22,7 @@ import com.btcvelocity.api.bridge.BridgeCodec;
 import com.btcvelocity.api.bridge.BridgeFrame;
 import com.btcvelocity.api.bridge.BridgeMessage;
 import com.btcvelocity.api.bridge.BridgeMessageListener;
+import com.btcvelocity.api.bridge.BridgePlatformSources;
 import com.velocitypowered.api.event.EventHandler;
 import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
@@ -106,7 +107,9 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     this.proxyId = proxyId == null || proxyId.isBlank() ? DEFAULT_PROXY_ID : proxyId.trim();
     this.authorization = authorization;
     this.frame = keyFrom(server.getConfiguration().getForwardingSecret());
-    this.originPlatform = new OriginPlatformPolicy(FloodgatePlatformSource.deferred(server));
+    // Read through the registry, never captured: the source is installed by a plugin, and this
+    // constructor runs before the proxy loads any plugin at all.
+    this.originPlatform = new OriginPlatformPolicy(BridgePlatformSources::current);
     this.server.getChannelRegistrar().register(CHANNEL_ID);
     this.server.getEventManager()
         .register(VelocityVirtualPlugin.INSTANCE, PluginMessageEvent.class, PostOrder.LAST,
