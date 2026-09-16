@@ -619,6 +619,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     bridgeChannel.registerListener(backendHealthRegistry::onHealth);
     bridgeChannel.registerListener(worldRegistry::onWorldLoaded);
     bridgeChannel.registerListener(worldRegistry::onWorldUnloaded);
+    // The periodic health report lists every loaded world: it reconciles the world view of a
+    // backend, and it is what keeps that view from expiring while the backend is alive and quiet.
+    bridgeChannel.registerListener(worldRegistry::onHealth);
     // Proxy-driven social transport (connect / party warp) from the social extensions.
     bridgeChannel.registerListener(
         new com.btcvelocity.proxy.bridge.SocialTransferHandler(clusterPlayerService, this));

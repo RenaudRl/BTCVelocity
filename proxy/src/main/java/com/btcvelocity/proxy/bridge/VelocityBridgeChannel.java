@@ -63,6 +63,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
   private final CopyOnWriteArrayList<BridgeMessageListener> listeners = new CopyOnWriteArrayList<>();
   private final BridgeDeduplication deduplication = BridgeDeduplication.defaults();
   private final String proxyId;
+  private final BridgeAuthorization authorization;
 
   /**
    * The event handler subscribed to {@link PluginMessageEvent}, retained so it can be
@@ -77,23 +78,40 @@ public final class VelocityBridgeChannel implements BridgeChannel {
    * @param server the owning proxy server
    */
   public VelocityBridgeChannel(final VelocityServer server) {
-    this(server, System.getenv(PROXY_ID_ENV));
+    this(server, System.getenv(PROXY_ID_ENV), BridgeAuthorization.fromEnvironment());
   }
 
   /**
-   * Creates the bridge channel with an explicit identity.
+   * Creates the bridge channel with an explicit identity and authorization policy.
    *
-   * @param server  the owning proxy server
-   * @param proxyId the proxy's declared bridge identity, or {@code null} / blank to use the default
+   * @param server        the owning proxy server
+   * @param proxyId       the proxy's declared bridge identity, or {@code null} / blank for the
+   *                      default
+   * @param authorization who may command the proxy, and where players may be sent
    */
-  public VelocityBridgeChannel(final VelocityServer server, final @Nullable String proxyId) {
+  public VelocityBridgeChannel(final VelocityServer server, final @Nullable String proxyId,
+                               final BridgeAuthorization authorization) {
     this.server = server;
     this.proxyId = proxyId == null || proxyId.isBlank() ? DEFAULT_PROXY_ID : proxyId.trim();
+    this.authorization = authorization;
     this.server.getChannelRegistrar().register(CHANNEL_ID);
     this.server.getEventManager()
         .register(VelocityVirtualPlugin.INSTANCE, PluginMessageEvent.class, PostOrder.LAST,
             pluginMessageHandler);
     LOGGER.info("Registered btc:bridge channel as '{}'", this.proxyId);
+    // An undeclared policy is inert, and saying so is the point: a silent inert policy reads
+    // exactly like an enforced one until the day someone counts on it.
+    if (this.authorization.filtersSources()) {
+      LOGGER.info("btc:bridge commands are restricted to {} backend(s)",
+          this.authorization.allowedSources().size());
+    } else {
+      LOGGER.info("btc:bridge accepts commands from any authenticated backend (no {} declared)",
+          BridgeAuthorization.SOURCES_ENV);
+    }
+    if (this.authorization.filtersTargets()) {
+      LOGGER.info("btc:bridge destinations are restricted to {} server(s)",
+          this.authorization.allowedTargets().size());
+    }
   }
 
   @Override
@@ -196,9 +214,21 @@ public final class VelocityBridgeChannel implements BridgeChannel {
       return;
     }
 
-    // 4. Has this exact command already been executed? A redelivery is acknowledged again with
-    //    duplicate = true, and is never executed a second time.
+    // 4. Authenticated, and speaking for itself. Is it allowed to ask this? Authorization is a
+    //    separate question from identity, and it is asked before anything is executed.
     final boolean acknowledgeable = BridgeResponses.isAcknowledgeable(message);
+    final BridgeMessage.ErrorCode refusal = authorization.refuse(sourceServer, message);
+    if (refusal != null) {
+      LOGGER.warn("Refused btc:bridge {} from '{}': {} (messageId {})", message.type(),
+          sourceServer, refusal, message.messageId());
+      if (acknowledgeable) {
+        refuse(connection, message.messageId(), sourceServer, refusal);
+      }
+      return;
+    }
+
+    // 5. Has this exact command already been executed? A redelivery is acknowledged again with
+    //    duplicate = true, and is never executed a second time.
     if (acknowledgeable
         && deduplication.alreadySeen(message.messageId(), System.currentTimeMillis())) {
       LOGGER.debug("Duplicate btc:bridge {} from '{}' (messageId {})", message.type(),
