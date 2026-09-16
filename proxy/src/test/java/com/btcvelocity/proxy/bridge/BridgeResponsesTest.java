@@ -139,7 +139,7 @@ class BridgeResponsesTest {
 
     assertTrue(BridgeResponses.isAcknowledgeable(connectRequest()));
     assertTrue(BridgeResponses.isAcknowledgeable(
-        new BridgeMessage.PartyWarp(warp, List.of(UUID.randomUUID()), "sky")));
+        new BridgeMessage.PartyWarp(warp, List.of(UUID.randomUUID()), "sky", null)));
 
     // A self-report is not a command: acknowledging it would double the health task's traffic.
     assertFalse(BridgeResponses.isAcknowledgeable(

@@ -43,7 +43,7 @@ class BridgeDispatchPreconditionsTest {
   }
 
   private static BridgeMessage.PartyWarp warp(final List<UUID> members, final String target) {
-    return new BridgeMessage.PartyWarp(envelope("party_warp"), members, target);
+    return new BridgeMessage.PartyWarp(envelope("party_warp"), members, target, null);
   }
 
   @Test

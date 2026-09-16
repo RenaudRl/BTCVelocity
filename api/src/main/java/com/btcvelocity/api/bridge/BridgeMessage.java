@@ -8,6 +8,7 @@
 package com.btcvelocity.api.bridge;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import org.jetbrains.annotations.Nullable;
@@ -179,17 +180,24 @@ public sealed interface BridgeMessage permits BridgeMessage.QueueJoin, BridgeMes
   }
 
   /**
-   * A group move. It carries no {@code originPlatform} on purpose: a party is not one player, so a
-   * single platform would describe nobody, and one per member would only restate what the proxy
-   * already holds for each live session. The proxy resolves each member itself when it needs to.
+   * A group move.
+   *
+   * <p>A party has no single platform, so it states one <em>per member</em> rather than one for
+   * the group — a single value would describe nobody. The map is optional, like the scalar field
+   * on player-scoped messages, and is keyed by member.
+   *
+   * <p>It is not redundant with what the proxy already knows: the point of a stated platform has
+   * never been to inform the proxy, it is to catch a backend that is wrong about who is who. That
+   * is worth as much for sixty-four players as for one.
    */
-  record PartyWarp(Envelope envelope, List<UUID> members, String targetServer)
-      implements BridgeMessage {
+  record PartyWarp(Envelope envelope, List<UUID> members, String targetServer,
+                   @Nullable Map<UUID, Platform> memberPlatforms) implements BridgeMessage {
     public PartyWarp {
       requireKind(envelope, "party_warp");
       Objects.requireNonNull(members, "members");
       Objects.requireNonNull(targetServer, "targetServer");
       members = List.copyOf(members);
+      memberPlatforms = memberPlatforms == null ? null : Map.copyOf(memberPlatforms);
     }
   }
 

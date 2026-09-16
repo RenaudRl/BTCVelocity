@@ -41,7 +41,7 @@ class BridgeAuthorizationTest {
   private static BridgeMessage.PartyWarp warp(final String source, final String target) {
     final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
         UUID.randomUUID(), "party_warp", source, "proxy", NOW, NOW + 10_000L);
-    return new BridgeMessage.PartyWarp(envelope, List.of(UUID.randomUUID()), target);
+    return new BridgeMessage.PartyWarp(envelope, List.of(UUID.randomUUID()), target, null);
   }
 
   @Test

@@ -53,7 +53,7 @@ class SocialTransferHandlerTest {
   private static BridgeMessage.PartyWarp warp(final List<UUID> members, final String target) {
     final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
         UUID.randomUUID(), "party_warp", "survie", "proxy", NOW, NOW + 10_000L);
-    return new BridgeMessage.PartyWarp(envelope, members, target);
+    return new BridgeMessage.PartyWarp(envelope, members, target, null);
   }
 
   private void targetIsRegistered() {

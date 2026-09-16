@@ -18,6 +18,7 @@
 package com.btcvelocity.proxy.bridge;
 
 import com.btcvelocity.api.bridge.BridgeMessage;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -47,6 +48,10 @@ import org.jetbrains.annotations.Nullable;
  *   <tr><td>present</td><td>differs</td><td>refused {@code PLATFORM_MISMATCH}</td></tr>
  *   <tr><td>present</td><td>matches</td><td>accepted</td></tr>
  * </table>
+ *
+ * <p>A party warp follows the same table, applied member by member, with one deliberate
+ * difference: a member with no live session is skipped rather than refused. See
+ * {@link #judgeParty}.
  */
 public final class OriginPlatformPolicy {
 
@@ -84,18 +89,54 @@ public final class OriginPlatformPolicy {
       new Verdict(true, Reason.NOT_REQUIRED_HERE, null);
   private static final Verdict ACCEPTED_CONFIRMED = new Verdict(true, Reason.CONFIRMED, null);
 
-  /**
-   * Judges a message. Messages that concern no single player are outside this rule and pass
-   * untouched — including a party warp, which describes a group and states no platform.
-   */
+  /** Judges a message. Messages that concern nobody in particular pass untouched. */
   public Verdict judge(final BridgeMessage message) {
     Objects.requireNonNull(message, "message");
     return switch (message) {
       case BridgeMessage.QueueJoin value -> judgeClaim(value.uuid(), value.originPlatform());
       case BridgeMessage.QueueLeave value -> judgeClaim(value.uuid(), value.originPlatform());
       case BridgeMessage.ConnectRequest value -> judgeClaim(value.uuid(), value.originPlatform());
+      case BridgeMessage.PartyWarp value -> judgeParty(value);
       default -> ACCEPTED_NOT_PLAYER_SCOPED;
     };
+  }
+
+  /**
+   * Judges a party warp member by member, and refuses the <em>whole</em> group if a single stated
+   * platform is contradicted — the same arbitration as {@code PartyWarpValidation}: a group that
+   * arrives cut in half is worse than a group that did not move.
+   *
+   * <p>A member with no live session is not a fault of the message (0.6b): nothing can be
+   * contradicted about somebody who is not here, and they were not going to be moved anyway. This
+   * is the one place where the conduct differs from a player-scoped message, and it differs on
+   * purpose.
+   */
+  private Verdict judgeParty(final BridgeMessage.PartyWarp warp) {
+    final Map<UUID, BridgeMessage.Platform> stated = warp.memberPlatforms();
+    if (!source.canResolve()) {
+      return stated == null
+          ? ACCEPTED_NOT_REQUIRED
+          : new Verdict(false, Reason.CLAIM_UNVERIFIABLE_HERE,
+              BridgeMessage.ErrorCode.PLATFORM_UNRESOLVABLE);
+    }
+    if (stated == null) {
+      return new Verdict(false, Reason.CLAIM_MISSING, BridgeMessage.ErrorCode.PLATFORM_MISMATCH);
+    }
+    for (final UUID member : warp.members()) {
+      final Optional<BridgeMessage.Platform> live = source.platformOf(member);
+      if (live.isEmpty()) {
+        continue;
+      }
+      final BridgeMessage.Platform claimed = stated.get(member);
+      if (claimed == null) {
+        return new Verdict(false, Reason.CLAIM_MISSING, BridgeMessage.ErrorCode.PLATFORM_MISMATCH);
+      }
+      if (claimed != live.get()) {
+        return new Verdict(false, Reason.CLAIM_CONTRADICTED,
+            BridgeMessage.ErrorCode.PLATFORM_MISMATCH);
+      }
+    }
+    return ACCEPTED_CONFIRMED;
   }
 
   private Verdict judgeClaim(final UUID player, final BridgeMessage.@Nullable Platform claimed) {

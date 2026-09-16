@@ -18,7 +18,9 @@ import java.nio.CharBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.jetbrains.annotations.Nullable;
@@ -32,6 +34,8 @@ public final class BridgeCodec {
       "expiresAt", "payload");
   private static final String PLATFORM_FIELD = "originPlatform";
   private static final Set<String> OPTIONAL_PLATFORM = Set.of(PLATFORM_FIELD);
+  private static final String PLATFORMS_FIELD = "originPlatforms";
+  private static final Set<String> OPTIONAL_PLATFORMS = Set.of(PLATFORMS_FIELD);
   private static final int PLATFORM_FIELD_MAX_LENGTH = 16;
   private static final Set<String> KINDS = Set.of(
       "queue_join", "queue_leave", "request_status", "world_preload", "health",
@@ -245,6 +249,13 @@ public final class BridgeCodec {
         value.members().forEach(member -> members.add(member.toString()));
         payload.add("members", members);
         payload.addProperty("targetServer", value.targetServer());
+        final Map<UUID, BridgeMessage.Platform> platforms = value.memberPlatforms();
+        if (platforms != null) {
+          final JsonObject stated = new JsonObject();
+          platforms.forEach((member, platform) -> stated.addProperty(member.toString(),
+              platform.name()));
+          payload.add(PLATFORMS_FIELD, stated);
+        }
       }
       case BridgeMessage.Ack value -> payload.addProperty("duplicate", value.duplicate());
       case BridgeMessage.Nack value -> payload.addProperty("error", value.error().name());
@@ -322,10 +333,11 @@ public final class BridgeCodec {
             platform(payload));
       }
       case "party_warp" -> {
-        exact(payload, "members", "targetServer");
+        exactWithOptional(payload, Set.of("members", "targetServer"), OPTIONAL_PLATFORMS);
         yield new BridgeMessage.PartyWarp(envelope,
             uuids(payload, "members", limits.maxPartyMembers()),
-            string(payload, "targetServer", limits.maxStringLength(), false));
+            string(payload, "targetServer", limits.maxStringLength(), false),
+            platforms(payload, limits.maxPartyMembers()));
       }
       case "ack" -> {
         exact(payload, "duplicate");
@@ -400,7 +412,10 @@ public final class BridgeCodec {
       case BridgeMessage.ConnectRequest value -> bounded(value.targetServer(), limits.maxStringLength(), false);
       case BridgeMessage.PartyWarp value -> {
         bounded(value.targetServer(), limits.maxStringLength(), false);
-        if (value.members().size() > limits.maxPartyMembers() || value.members().stream().anyMatch(v -> v == null)) {
+        final Map<UUID, BridgeMessage.Platform> stated = value.memberPlatforms();
+        if (value.members().size() > limits.maxPartyMembers()
+            || value.members().stream().anyMatch(v -> v == null)
+            || (stated != null && stated.size() > limits.maxPartyMembers())) {
           throw new IllegalArgumentException("invalid party payload");
         }
       }
@@ -452,6 +467,38 @@ public final class BridgeCodec {
     }
     final String value = string(object, PLATFORM_FIELD, PLATFORM_FIELD_MAX_LENGTH, false);
     return BridgeMessage.Platform.valueOf(value);
+  }
+
+  /**
+   * Reads the per-member platforms of a party warp, bounded by the same member cap as the party
+   * itself — a map read without a bound would be a second, unguarded way to make a message big.
+   */
+  private static @Nullable Map<UUID, BridgeMessage.Platform> platforms(final JsonObject object,
+                                                                       final int maxMembers) {
+    final JsonElement element = object.get(PLATFORMS_FIELD);
+    if (element == null) {
+      return null;
+    }
+    if (!element.isJsonObject()) {
+      throw new IllegalArgumentException("originPlatforms is not an object");
+    }
+    final JsonObject stated = element.getAsJsonObject();
+    if (stated.size() > maxMembers) {
+      throw new IllegalArgumentException("too many stated platforms");
+    }
+    final Map<UUID, BridgeMessage.Platform> result = new LinkedHashMap<>();
+    for (final String key : stated.keySet()) {
+      final JsonElement value = stated.get(key);
+      if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
+        throw new IllegalArgumentException("stated platform is not a string");
+      }
+      final String name = value.getAsString();
+      bounded(name, PLATFORM_FIELD_MAX_LENGTH, false);
+      if (result.put(UUID.fromString(key), BridgeMessage.Platform.valueOf(name)) != null) {
+        throw new IllegalArgumentException("duplicate member in originPlatforms");
+      }
+    }
+    return Map.copyOf(result);
   }
 
   private static void addPlatform(final JsonObject object,

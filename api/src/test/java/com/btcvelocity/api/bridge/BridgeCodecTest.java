@@ -13,6 +13,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -71,6 +73,39 @@ class BridgeCodecTest {
     assertTrue(result.accepted());
     assertNull(assertInstanceOf(BridgeMessage.ConnectRequest.class, result.message())
         .originPlatform());
+  }
+
+  @Test
+  void aPartyCarriesOnePlatformPerMemberThroughTheRoundTrip() {
+    final long now = System.currentTimeMillis();
+    final UUID alice = UUID.randomUUID();
+    final UUID bob = UUID.randomUUID();
+    final BridgeMessage.PartyWarp warp = new BridgeMessage.PartyWarp(envelope("party_warp", now),
+        List.of(alice, bob), "btc",
+        Map.of(alice, BridgeMessage.Platform.JAVA, bob, BridgeMessage.Platform.BEDROCK));
+
+    final BridgeCodec.DecodeResult result = BridgeCodec.decodeResult(
+        BridgeCodec.encode(warp), now, BridgeCodec.Limits.defaults());
+
+    assertTrue(result.accepted());
+    final BridgeMessage.PartyWarp decoded =
+        assertInstanceOf(BridgeMessage.PartyWarp.class, result.message());
+    assertEquals(BridgeMessage.Platform.JAVA, decoded.memberPlatforms().get(alice));
+    assertEquals(BridgeMessage.Platform.BEDROCK, decoded.memberPlatforms().get(bob));
+  }
+
+  /** A party from a sender that predates the field keeps being understood. */
+  @Test
+  void aPartyWithoutStatedPlatformsIsStillAccepted() {
+    final long now = System.currentTimeMillis();
+    final BridgeMessage.PartyWarp warp = new BridgeMessage.PartyWarp(envelope("party_warp", now),
+        List.of(UUID.randomUUID()), "btc", null);
+
+    final BridgeCodec.DecodeResult result = BridgeCodec.decodeResult(
+        BridgeCodec.encode(warp), now, BridgeCodec.Limits.defaults());
+
+    assertTrue(result.accepted());
+    assertNull(assertInstanceOf(BridgeMessage.PartyWarp.class, result.message()).memberPlatforms());
   }
 
   /** A platform outside the closed set is refused, never mapped onto a default. */

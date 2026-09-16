@@ -146,18 +146,66 @@ class OriginPlatformPolicyTest {
     assertEquals(BridgeMessage.ErrorCode.PLATFORM_UNRESOLVABLE, verdict.error());
   }
 
-  /** A party is a group: the rule does not apply, and the source is not even asked. */
-  @Test
-  void aPartyWarpIsOutsideThisRuleAndAsksTheSourceNothing() {
-    final KnownSessions sessions = new KnownSessions(Map.of(ALICE, BridgeMessage.Platform.JAVA));
-    final BridgeMessage warp = new BridgeMessage.PartyWarp(envelope("party_warp"),
-        List.of(ALICE, OFFLINE), "btc");
+  private static final UUID BOB = UUID.randomUUID();
 
-    final OriginPlatformPolicy.Verdict verdict = new OriginPlatformPolicy(sessions).judge(warp);
+  private static BridgeMessage warp(final List<UUID> members,
+                                    final Map<UUID, BridgeMessage.Platform> stated) {
+    return new BridgeMessage.PartyWarp(envelope("party_warp"), members, "btc", stated);
+  }
+
+  private static OriginPlatformPolicy twoLiveSessions() {
+    return new OriginPlatformPolicy(new KnownSessions(Map.of(
+        ALICE, BridgeMessage.Platform.JAVA, BOB, BridgeMessage.Platform.BEDROCK)));
+  }
+
+  @Test
+  void aPartyWhoseStatedPlatformsAllHoldIsAccepted() {
+    final OriginPlatformPolicy.Verdict verdict = twoLiveSessions().judge(warp(List.of(ALICE, BOB),
+        Map.of(ALICE, BridgeMessage.Platform.JAVA, BOB, BridgeMessage.Platform.BEDROCK)));
 
     assertTrue(verdict.accepted());
-    assertEquals(OriginPlatformPolicy.Reason.NOT_PLAYER_SCOPED, verdict.reason());
-    assertEquals(0, sessions.questions.get());
+    assertEquals(OriginPlatformPolicy.Reason.CONFIRMED, verdict.reason());
+  }
+
+  /**
+   * One contradicted member sinks the whole group — the same arbitration as PartyWarpValidation:
+   * a group that arrives cut in half is worse than a group that did not move.
+   */
+  @Test
+  void oneContradictedMemberRefusesTheWholeParty() {
+    final OriginPlatformPolicy.Verdict verdict = twoLiveSessions().judge(warp(List.of(ALICE, BOB),
+        Map.of(ALICE, BridgeMessage.Platform.JAVA, BOB, BridgeMessage.Platform.JAVA)));
+
+    assertFalse(verdict.accepted());
+    assertEquals(OriginPlatformPolicy.Reason.CLAIM_CONTRADICTED, verdict.reason());
+    assertEquals(BridgeMessage.ErrorCode.PLATFORM_MISMATCH, verdict.error());
+  }
+
+  /** A member who is not connected is not a fault of the message (0.6b): nothing contradicts. */
+  @Test
+  void aMemberWithNoLiveSessionDoesNotSinkTheParty() {
+    final OriginPlatformPolicy.Verdict verdict = twoLiveSessions().judge(warp(
+        List.of(ALICE, OFFLINE), Map.of(ALICE, BridgeMessage.Platform.JAVA)));
+
+    assertTrue(verdict.accepted());
+  }
+
+  @Test
+  void aPartyThatOmitsAConnectedMemberIsRefused() {
+    final OriginPlatformPolicy.Verdict verdict = twoLiveSessions().judge(warp(List.of(ALICE, BOB),
+        Map.of(ALICE, BridgeMessage.Platform.JAVA)));
+
+    assertFalse(verdict.accepted());
+    assertEquals(OriginPlatformPolicy.Reason.CLAIM_MISSING, verdict.reason());
+  }
+
+  @Test
+  void aProxyThatCannotResolveRefusesAPartyThatStatesPlatforms() {
+    final OriginPlatformPolicy.Verdict verdict = blind().judge(warp(List.of(ALICE),
+        Map.of(ALICE, BridgeMessage.Platform.JAVA)));
+
+    assertFalse(verdict.accepted());
+    assertEquals(BridgeMessage.ErrorCode.PLATFORM_UNRESOLVABLE, verdict.error());
   }
 
   /** An inert policy that stays silent reads exactly like an enforced one. */
