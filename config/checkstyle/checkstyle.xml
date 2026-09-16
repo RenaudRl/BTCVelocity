@@ -257,7 +257,12 @@
     </module>
     <module name="AbbreviationAsWordInName">
       <property name="ignoreFinal" value="false"/>
-      <property name="allowedAbbreviationLength" value="0"/>
+      <!--
+        Meme raison que methodNamePattern : dans une phrase de test, « IsNotABackend » n'est pas
+        une abreviation, c'est un article. Les sources de test recoivent une tolerance de 1 ;
+        la production reste a 0.
+      -->
+      <property name="allowedAbbreviationLength" value="${allowedAbbreviationLength}"/>
       <property name="tokens"
         value="CLASS_DEF, INTERFACE_DEF, ENUM_DEF, ANNOTATION_DEF, ANNOTATION_FIELD_DEF,
                     PARAMETER_DEF, VARIABLE_DEF, METHOD_DEF, PATTERN_VARIABLE_DEF, RECORD_DEF,
@@ -338,8 +343,14 @@
 <!--                      RECORD_DEF, ANNOTATION_DEF"/>-->
 <!--      <property name="excludeScope" value="nothing"/>-->
 <!--    </module>-->
+    <!--
+      Le motif est une propriete pour que les sources de test puissent en recevoir un autre
+      (voir velocity-checkstyle.gradle.kts). Un nom de test est une phrase — « aClaimIsRefused » —
+      et le motif de production, qui exige une deuxieme lettre minuscule, condamne tout nom
+      commencant par un article. La regle reste appliquee des deux cotes, avec deux motifs.
+    -->
     <module name="MethodName">
-      <property name="format" value="^[a-z][a-z0-9]\w*$"/>
+      <property name="format" value="${methodNamePattern}"/>
       <message key="name.invalidPattern"
         value="Method name ''{0}'' must match pattern ''{1}''."/>
     </module>
