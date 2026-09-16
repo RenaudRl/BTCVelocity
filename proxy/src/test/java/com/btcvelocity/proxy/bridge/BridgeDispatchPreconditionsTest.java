@@ -39,7 +39,7 @@ class BridgeDispatchPreconditionsTest {
   }
 
   private static BridgeMessage.ConnectRequest connect(final String target) {
-    return new BridgeMessage.ConnectRequest(envelope("connect_request"), UUID.randomUUID(), target);
+    return new BridgeMessage.ConnectRequest(envelope("connect_request"), UUID.randomUUID(), target, null);
   }
 
   private static BridgeMessage.PartyWarp warp(final List<UUID> members, final String target) {

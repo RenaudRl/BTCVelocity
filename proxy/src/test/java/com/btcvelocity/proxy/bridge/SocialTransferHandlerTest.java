@@ -143,7 +143,7 @@ class SocialTransferHandlerTest {
     final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
         UUID.randomUUID(), "connect_request", "survie", "proxy", NOW, NOW + 10_000L);
 
-    handler.onMessage("survie", new BridgeMessage.ConnectRequest(envelope, alice, TARGET));
+    handler.onMessage("survie", new BridgeMessage.ConnectRequest(envelope, alice, TARGET, null));
 
     verify(alicePlayer, times(1)).move(TARGET);
   }

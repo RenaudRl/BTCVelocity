@@ -35,7 +35,7 @@ class BridgeAuthorizationTest {
   private static BridgeMessage.ConnectRequest connect(final String source, final String target) {
     final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
         UUID.randomUUID(), "connect_request", source, "proxy", NOW, NOW + 10_000L);
-    return new BridgeMessage.ConnectRequest(envelope, UUID.randomUUID(), target);
+    return new BridgeMessage.ConnectRequest(envelope, UUID.randomUUID(), target, null);
   }
 
   private static BridgeMessage.PartyWarp warp(final String source, final String target) {

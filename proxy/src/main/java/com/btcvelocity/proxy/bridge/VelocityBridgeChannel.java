@@ -66,6 +66,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
   private final String proxyId;
   private final BridgeAuthorization authorization;
   private final BridgeMetrics metrics = new BridgeMetrics();
+  private final OriginPlatformPolicy originPlatform;
 
   /**
    * Signs what the proxy sends and authenticates what it receives, or {@code null} when there is no
@@ -105,6 +106,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     this.proxyId = proxyId == null || proxyId.isBlank() ? DEFAULT_PROXY_ID : proxyId.trim();
     this.authorization = authorization;
     this.frame = keyFrom(server.getConfiguration().getForwardingSecret());
+    this.originPlatform = new OriginPlatformPolicy(FloodgatePlatformSource.createIfPresent(server));
     this.server.getChannelRegistrar().register(CHANNEL_ID);
     this.server.getEventManager()
         .register(VelocityVirtualPlugin.INSTANCE, PluginMessageEvent.class, PostOrder.LAST,
@@ -123,6 +125,9 @@ public final class VelocityBridgeChannel implements BridgeChannel {
       LOGGER.info("btc:bridge destinations are restricted to {} server(s)",
           this.authorization.allowedTargets().size());
     }
+    // Same reason as above, for the platform: "I cannot resolve" is said out loud rather than
+    // inferred away. Never "no Floodgate, so everyone is Java" — that would be a guess on the wire.
+    LOGGER.info(this.originPlatform.announce());
   }
 
   @Override
@@ -286,6 +291,18 @@ public final class VelocityBridgeChannel implements BridgeChannel {
       LOGGER.warn("Refused btc:bridge {} from '{}': {} before dispatch (messageId {})",
           message.type(), sourceServer, unexecutable, message.messageId());
       refuse(connection, message.messageId(), sourceServer, unexecutable);
+      return;
+    }
+
+    // 5b. Does the platform it claims survive confrontation with the live session? A claim is
+    //     never evidence: it is confirmed against what this proxy measures, or the message is
+    //     refused. Before deduplication, so a refused claim is never remembered as executed.
+    final OriginPlatformPolicy.Verdict platform = originPlatform.judge(message);
+    if (!platform.accepted()) {
+      metrics.record(BridgeMetrics.Event.REJECTED_PLATFORM);
+      LOGGER.warn("Refused btc:bridge {} from '{}': {} ({}) before dispatch (messageId {})",
+          message.type(), sourceServer, platform.error(), platform.reason(), message.messageId());
+      refuse(connection, message.messageId(), sourceServer, platform.error());
       return;
     }
 

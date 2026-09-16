@@ -54,6 +54,13 @@ public final class BridgeMetrics {
      * Kept apart from authorization: "you may not" and "it cannot be done" call for different fixes.
      */
     REJECTED_UNEXECUTABLE,
+    /**
+     * The origin platform it stated did not survive confrontation with the live session — absent
+     * where it is required, contradicted, about nobody connected, or stated to a proxy that cannot
+     * check it. Counted apart because it is the only refusal that accuses the sender of describing
+     * a player wrongly, rather than of asking for something impossible.
+     */
+    REJECTED_PLATFORM,
     /** The message was handed to the listeners. */
     DISPATCHED,
     /** A command already executed inside the deduplication window arrived again. */

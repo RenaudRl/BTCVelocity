@@ -30,6 +30,9 @@ public final class BridgeCodec {
   private static final Set<String> ENVELOPE_FIELDS = Set.of(
       "version", "messageId", "type", "sourceBackend", "targetBackend", "issuedAt",
       "expiresAt", "payload");
+  private static final String PLATFORM_FIELD = "originPlatform";
+  private static final Set<String> OPTIONAL_PLATFORM = Set.of(PLATFORM_FIELD);
+  private static final int PLATFORM_FIELD_MAX_LENGTH = 16;
   private static final Set<String> KINDS = Set.of(
       "queue_join", "queue_leave", "request_status", "world_preload", "health",
       "world_loaded", "world_load_failed", "world_unloaded", "queue_status_response",
@@ -193,8 +196,12 @@ public final class BridgeCodec {
         payload.addProperty("username", value.username());
         payload.addProperty("targetServer", value.targetServer());
         addNullable(payload, "targetWorld", value.targetWorld());
+        addPlatform(payload, value.originPlatform());
       }
-      case BridgeMessage.QueueLeave value -> payload.addProperty("uuid", value.uuid().toString());
+      case BridgeMessage.QueueLeave value -> {
+        payload.addProperty("uuid", value.uuid().toString());
+        addPlatform(payload, value.originPlatform());
+      }
       case BridgeMessage.RequestStatus value -> payload.addProperty("serverName", value.serverName());
       case BridgeMessage.WorldPreload value -> {
         payload.addProperty("serverName", value.serverName());
@@ -231,6 +238,7 @@ public final class BridgeCodec {
       case BridgeMessage.ConnectRequest value -> {
         payload.addProperty("uuid", value.uuid().toString());
         payload.addProperty("targetServer", value.targetServer());
+        addPlatform(payload, value.originPlatform());
       }
       case BridgeMessage.PartyWarp value -> {
         final JsonArray members = new JsonArray();
@@ -249,15 +257,17 @@ public final class BridgeCodec {
                                              final JsonObject payload, final Limits limits) {
     return switch (kind) {
       case "queue_join" -> {
-        exact(payload, "uuid", "username", "targetServer", "targetWorld");
+        exactWithOptional(payload, Set.of("uuid", "username", "targetServer", "targetWorld"),
+            OPTIONAL_PLATFORM);
         yield new BridgeMessage.QueueJoin(envelope, uuid(payload, "uuid"),
             string(payload, "username", limits.maxUsernameLength(), false),
             string(payload, "targetServer", limits.maxStringLength(), false),
-            nullableString(payload, "targetWorld", limits.maxWorldNameLength()));
+            nullableString(payload, "targetWorld", limits.maxWorldNameLength()),
+            platform(payload));
       }
       case "queue_leave" -> {
-        exact(payload, "uuid");
-        yield new BridgeMessage.QueueLeave(envelope, uuid(payload, "uuid"));
+        exactWithOptional(payload, Set.of("uuid"), OPTIONAL_PLATFORM);
+        yield new BridgeMessage.QueueLeave(envelope, uuid(payload, "uuid"), platform(payload));
       }
       case "request_status" -> {
         exact(payload, "serverName");
@@ -306,9 +316,10 @@ public final class BridgeCodec {
             nonNegativeInt(payload, "backendQueueSize"));
       }
       case "connect_request" -> {
-        exact(payload, "uuid", "targetServer");
+        exactWithOptional(payload, Set.of("uuid", "targetServer"), OPTIONAL_PLATFORM);
         yield new BridgeMessage.ConnectRequest(envelope, uuid(payload, "uuid"),
-            string(payload, "targetServer", limits.maxStringLength(), false));
+            string(payload, "targetServer", limits.maxStringLength(), false),
+            platform(payload));
       }
       case "party_warp" -> {
         exact(payload, "members", "targetServer");
@@ -402,6 +413,51 @@ public final class BridgeCodec {
     final Set<String> expected = Set.of(fields);
     if (!hasExactly(object, expected)) {
       throw new IllegalArgumentException("unknown payload field");
+    }
+  }
+
+  /**
+   * Accepts a payload whose optional fields may be absent, while every required field must be
+   * present and no unknown field is tolerated.
+   *
+   * <p>This is what lets a sender that does not yet know about {@code originPlatform} keep talking
+   * to a reader that does. The reverse direction is not symmetric: a reader that predates the field
+   * rejects it as an unknown field, which is why both codecs ship together.
+   */
+  private static void exactWithOptional(final JsonObject object, final Set<String> required,
+                                        final Set<String> optional) {
+    final Set<String> present = object.keySet();
+    if (!present.containsAll(required)) {
+      throw new IllegalArgumentException("missing payload field");
+    }
+    for (final String key : present) {
+      if (!required.contains(key) && !optional.contains(key)) {
+        throw new IllegalArgumentException("unknown payload field");
+      }
+    }
+  }
+
+  /**
+   * Reads the origin platform when the sender stated one.
+   *
+   * <p>Absent means "not stated" and yields {@code null}; an explicit JSON null is refused, because
+   * a sender that writes the field is claiming to know, and "I wrote the field but it means
+   * nothing" is the silent unknown this contract forbids. A value outside the closed set is
+   * refused rather than mapped to a default.
+   */
+  private static BridgeMessage.@Nullable Platform platform(final JsonObject object) {
+    final JsonElement element = object.get(PLATFORM_FIELD);
+    if (element == null) {
+      return null;
+    }
+    final String value = string(object, PLATFORM_FIELD, PLATFORM_FIELD_MAX_LENGTH, false);
+    return BridgeMessage.Platform.valueOf(value);
+  }
+
+  private static void addPlatform(final JsonObject object,
+                                  final BridgeMessage.@Nullable Platform platform) {
+    if (platform != null) {
+      object.addProperty(PLATFORM_FIELD, platform.name());
     }
   }
 

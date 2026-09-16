@@ -159,6 +159,10 @@ dependencies {
     implementation(libs.bundles.flare)
     compileOnly(libs.spotbugs.annotations)
     compileOnly(libs.auto.service.annotations)
+    // Floodgate resout la plateforme d'une session. compileOnly : le proxy fonctionne sans,
+    // et le dit au demarrage plutot que de deviner. Sans transitives : un seul jar tiers sur
+    // le classpath de compilation, et rien de Geyser n'entre dans le build.
+    compileOnly(libs.floodgate.api) { isTransitive = false }
     testImplementation(libs.mockito)
 
     annotationProcessor(libs.auto.service)

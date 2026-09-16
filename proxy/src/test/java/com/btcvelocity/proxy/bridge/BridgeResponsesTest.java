@@ -42,7 +42,7 @@ class BridgeResponsesTest {
   private static BridgeMessage.ConnectRequest connectRequest() {
     final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
         UUID.randomUUID(), "connect_request", BACKEND, PROXY, NOW - 100L, NOW + 10_000L);
-    return new BridgeMessage.ConnectRequest(envelope, UUID.randomUUID(), "sky");
+    return new BridgeMessage.ConnectRequest(envelope, UUID.randomUUID(), "sky", null);
   }
 
   @Test

@@ -76,8 +76,22 @@ public sealed interface BridgeMessage permits BridgeMessage.QueueJoin, BridgeMes
     }
   }
 
+  /**
+   * The client platform a player-scoped message is about.
+   *
+   * <p>Closed on purpose, and deliberately without an {@code UNKNOWN} member: a message either
+   * states a platform it can be held to, or states nothing at all. An {@code UNKNOWN} would be a
+   * third answer that reads like a measurement while being an admission of ignorance, and it would
+   * travel on the wire as if someone had established it.
+   */
+  enum Platform {
+    JAVA,
+    BEDROCK
+  }
+
   record QueueJoin(Envelope envelope, UUID uuid, String username, String targetServer,
-                   @Nullable String targetWorld) implements BridgeMessage {
+                   @Nullable String targetWorld, @Nullable Platform originPlatform)
+      implements BridgeMessage {
     public QueueJoin {
       requireKind(envelope, "queue_join");
       Objects.requireNonNull(uuid, "uuid");
@@ -86,7 +100,8 @@ public sealed interface BridgeMessage permits BridgeMessage.QueueJoin, BridgeMes
     }
   }
 
-  record QueueLeave(Envelope envelope, UUID uuid) implements BridgeMessage {
+  record QueueLeave(Envelope envelope, UUID uuid, @Nullable Platform originPlatform)
+      implements BridgeMessage {
     public QueueLeave {
       requireKind(envelope, "queue_leave");
       Objects.requireNonNull(uuid, "uuid");
@@ -154,8 +169,8 @@ public sealed interface BridgeMessage permits BridgeMessage.QueueJoin, BridgeMes
     }
   }
 
-  record ConnectRequest(Envelope envelope, UUID uuid, String targetServer)
-      implements BridgeMessage {
+  record ConnectRequest(Envelope envelope, UUID uuid, String targetServer,
+                        @Nullable Platform originPlatform) implements BridgeMessage {
     public ConnectRequest {
       requireKind(envelope, "connect_request");
       Objects.requireNonNull(uuid, "uuid");
@@ -163,6 +178,11 @@ public sealed interface BridgeMessage permits BridgeMessage.QueueJoin, BridgeMes
     }
   }
 
+  /**
+   * A group move. It carries no {@code originPlatform} on purpose: a party is not one player, so a
+   * single platform would describe nobody, and one per member would only restate what the proxy
+   * already holds for each live session. The proxy resolves each member itself when it needs to.
+   */
   record PartyWarp(Envelope envelope, List<UUID> members, String targetServer)
       implements BridgeMessage {
     public PartyWarp {
@@ -195,6 +215,8 @@ public sealed interface BridgeMessage permits BridgeMessage.QueueJoin, BridgeMes
     BACKEND_NOT_ALLOWED,
     TARGET_NOT_ALLOWED,
     WORLD_NOT_ALLOWED,
+    PLATFORM_MISMATCH,
+    PLATFORM_UNRESOLVABLE,
     UNSUPPORTED,
     WORLD_LOAD_FAILED,
     INTERNAL_ERROR

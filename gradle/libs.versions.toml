@@ -7,6 +7,9 @@ netty = "4.2.15.Final"
 lettuce = "7.6.0.RELEASE"
 jline = "4.2.0"
 postgresql = "42.7.11"
+# Floodgate ne publie que des SNAPSHOT. L'horodatage est epingle pour que le build reste
+# reproductible : sans lui, la surface d'API compilee changerait sous nos pieds.
+floodgate = "2.2.5-20260809.110940-20"
 
 [plugins]
 shadow = "com.gradleup.shadow:9.4.1"
@@ -33,6 +36,7 @@ configurate4-yaml = { module = "org.spongepowered:configurate-yaml", version.ref
 configurate4-gson = { module = "org.spongepowered:configurate-gson", version.ref = "configurate4" }
 disruptor = "com.lmax:disruptor:4.0.0"
 fastutil = "it.unimi.dsi:fastutil:8.5.18"
+floodgate-api = { module = "org.geysermc.floodgate:api", version.ref = "floodgate" }
 flare-core = { module = "space.vectrix.flare:flare", version.ref = "flare" }
 flare-fastutil = { module = "space.vectrix.flare:flare-fastutil", version.ref = "flare" }
 jline-terminal = { module = "org.jline:jline-terminal", version.ref = "jline" }

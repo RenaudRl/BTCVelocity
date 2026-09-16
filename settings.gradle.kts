@@ -5,6 +5,14 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         maven("https://repo.papermc.io/repository/maven-public/")
+        // API Floodgate, en compileOnly seulement : rien n'en est embarque dans le jar.
+        // Restreint a ce groupe pour qu'un incident sur ce depot ne puisse pas fournir
+        // une dependance du coeur du proxy.
+        maven("https://repo.opencollab.dev/main/") {
+            content {
+                includeGroup("org.geysermc.floodgate")
+            }
+        }
     }
 }
 
