@@ -64,6 +64,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
   private final BridgeDeduplication deduplication = BridgeDeduplication.defaults();
   private final String proxyId;
   private final BridgeAuthorization authorization;
+  private final BridgeMetrics metrics = new BridgeMetrics();
 
   /**
    * The event handler subscribed to {@link PluginMessageEvent}, retained so it can be
@@ -158,6 +159,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
 
     // Mark the message handled so the proxy does not forward it to another sink.
     event.setResult(PluginMessageEvent.ForwardResult.handled());
+    metrics.record(BridgeMetrics.Event.RECEIVED);
 
     final ServerConnection connection =
         event.getSource() instanceof ServerConnection conn ? conn : null;
@@ -168,6 +170,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
         connection == null ? null : connection.getServerInfo(),
         name -> server.getServer(name).map(RegisteredServer::getServerInfo));
     if (!source.accepted()) {
+      metrics.record(BridgeMetrics.Event.REJECTED_SOURCE);
       // Player sources are the common case here and are not an incident: keep them at debug.
       if (source.rejection() == BridgeIngressPolicy.Rejection.NOT_A_BACKEND) {
         LOGGER.debug("Dropped btc:bridge message: {}", source.rejection());
@@ -185,10 +188,12 @@ public final class VelocityBridgeChannel implements BridgeChannel {
       decoded = BridgeCodec.decodeResult(event.getData(), System.currentTimeMillis(),
           BridgeCodec.Limits.defaults());
     } catch (Exception e) {
+      metrics.record(BridgeMetrics.Event.REJECTED_PAYLOAD);
       LOGGER.warn("Failed to decode btc:bridge message from '{}'", sourceServer, e);
       return;
     }
     if (!decoded.accepted()) {
+      metrics.record(BridgeMetrics.Event.REJECTED_PAYLOAD);
       LOGGER.warn("Rejected btc:bridge message from '{}': {} (messageId {})", sourceServer,
           decoded.error(), decoded.messageId());
       // A payload whose id could not even be read cannot be answered: a refusal has to name the
@@ -205,6 +210,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     final Optional<BridgeIngressPolicy.Rejection> claim =
         BridgeIngressPolicy.verifyDeclaredIdentity(sourceServer, message);
     if (claim.isPresent()) {
+      metrics.record(BridgeMetrics.Event.REJECTED_IDENTITY);
       LOGGER.warn("Rejected btc:bridge {} from '{}': {} (messageId {})", message.type(),
           sourceServer, claim.get(), message.envelope().messageId());
       final BridgeMessage.ErrorCode category = BridgeResponses.categoryOf(claim.get());
@@ -219,6 +225,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     final boolean acknowledgeable = BridgeResponses.isAcknowledgeable(message);
     final BridgeMessage.ErrorCode refusal = authorization.refuse(sourceServer, message);
     if (refusal != null) {
+      metrics.record(BridgeMetrics.Event.REJECTED_AUTHORIZATION);
       LOGGER.warn("Refused btc:bridge {} from '{}': {} (messageId {})", message.type(),
           sourceServer, refusal, message.messageId());
       if (acknowledgeable) {
@@ -231,16 +238,19 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     //    duplicate = true, and is never executed a second time.
     if (acknowledgeable
         && deduplication.alreadySeen(message.messageId(), System.currentTimeMillis())) {
+      metrics.record(BridgeMetrics.Event.DUPLICATE);
       LOGGER.debug("Duplicate btc:bridge {} from '{}' (messageId {})", message.type(),
           sourceServer, message.messageId());
       acknowledge(connection, message, true);
       return;
     }
 
+    metrics.record(BridgeMetrics.Event.DISPATCHED);
     for (final BridgeMessageListener listener : listeners) {
       try {
         listener.onMessage(sourceServer, message);
       } catch (Exception e) {
+        metrics.record(BridgeMetrics.Event.LISTENER_FAILED);
         LOGGER.error("A btc:bridge listener threw while handling {} from '{}'",
             message.type(), sourceServer, e);
       }
@@ -260,6 +270,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
    */
   private void acknowledge(final @Nullable ServerConnection connection,
                            final BridgeMessage request, final boolean duplicate) {
+    metrics.record(BridgeMetrics.Event.ACKNOWLEDGED);
     respond(connection, BridgeResponses.ack(request, proxyId, duplicate,
         System.currentTimeMillis()), request.type());
   }
@@ -274,6 +285,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
    */
   private void refuse(final @Nullable ServerConnection connection, final java.util.UUID messageId,
                       final String sourceServer, final BridgeMessage.ErrorCode error) {
+    metrics.record(BridgeMetrics.Event.REFUSED);
     respond(connection, BridgeResponses.nack(messageId, sourceServer, proxyId, error,
         System.currentTimeMillis()), "nack");
   }
@@ -298,9 +310,19 @@ public final class VelocityBridgeChannel implements BridgeChannel {
       connection.sendPluginMessage(CHANNEL_ID, BridgeCodec.encode(response));
     } catch (Exception e) {
       // Never let a failed response break the handling of the request it answers.
+      metrics.record(BridgeMetrics.Event.RESPONSE_FAILED);
       LOGGER.warn("Could not answer btc:bridge {} on '{}'", about,
           connection.getServerInfo().getName(), e);
     }
+  }
+
+  /**
+   * The bridge counters, for an operator surface.
+   *
+   * @return the live metrics of this channel
+   */
+  public BridgeMetrics metrics() {
+    return metrics;
   }
 
   /**
