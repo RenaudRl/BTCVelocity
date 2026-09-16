@@ -49,8 +49,20 @@ public final class VelocityBridgeChannel implements BridgeChannel {
 
   private static final Logger LOGGER = LogManager.getLogger(VelocityBridgeChannel.class);
 
+  /**
+   * Environment variable holding the proxy's declared bridge identity. A variable, not a file:
+   * the working directory of a CloudNet service is recreated from its template at every start,
+   * so a file written there is as volatile as memory.
+   */
+  private static final String PROXY_ID_ENV = "BTC_BRIDGE_PROXY_ID";
+
+  /** The identity used when the environment declares none. Backends allowlist this name. */
+  private static final String DEFAULT_PROXY_ID = "btc-proxy";
+
   private final VelocityServer server;
   private final CopyOnWriteArrayList<BridgeMessageListener> listeners = new CopyOnWriteArrayList<>();
+  private final BridgeDeduplication deduplication = BridgeDeduplication.defaults();
+  private final String proxyId;
 
   /**
    * The event handler subscribed to {@link PluginMessageEvent}, retained so it can be
@@ -65,12 +77,23 @@ public final class VelocityBridgeChannel implements BridgeChannel {
    * @param server the owning proxy server
    */
   public VelocityBridgeChannel(final VelocityServer server) {
+    this(server, System.getenv(PROXY_ID_ENV));
+  }
+
+  /**
+   * Creates the bridge channel with an explicit identity.
+   *
+   * @param server  the owning proxy server
+   * @param proxyId the proxy's declared bridge identity, or {@code null} / blank to use the default
+   */
+  public VelocityBridgeChannel(final VelocityServer server, final @Nullable String proxyId) {
     this.server = server;
+    this.proxyId = proxyId == null || proxyId.isBlank() ? DEFAULT_PROXY_ID : proxyId.trim();
     this.server.getChannelRegistrar().register(CHANNEL_ID);
     this.server.getEventManager()
         .register(VelocityVirtualPlugin.INSTANCE, PluginMessageEvent.class, PostOrder.LAST,
             pluginMessageHandler);
-    LOGGER.info("Registered btc:bridge channel");
+    LOGGER.info("Registered btc:bridge channel as '{}'", this.proxyId);
   }
 
   @Override
@@ -118,10 +141,13 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     // Mark the message handled so the proxy does not forward it to another sink.
     event.setResult(PluginMessageEvent.ForwardResult.handled());
 
+    final ServerConnection connection =
+        event.getSource() instanceof ServerConnection conn ? conn : null;
+
     // 1. Who is talking? Identity is the backend connection the proxy opened, confronted with
     //    the registered server of the same name (name AND address), never the name alone.
     final BridgeIngressPolicy.SourceDecision source = BridgeIngressPolicy.authenticateSource(
-        connectionInfo(event.getSource()),
+        connection == null ? null : connection.getServerInfo(),
         name -> server.getServer(name).map(RegisteredServer::getServerInfo));
     if (!source.accepted()) {
       // Player sources are the common case here and are not an incident: keep them at debug.
@@ -147,6 +173,12 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     if (!decoded.accepted()) {
       LOGGER.warn("Rejected btc:bridge message from '{}': {} (messageId {})", sourceServer,
           decoded.error(), decoded.messageId());
+      // A payload whose id could not even be read cannot be answered: a refusal has to name the
+      // message it refuses, and the backend has nothing to tie a fresh id to.
+      if (decoded.messageId() != null) {
+        refuse(connection, decoded.messageId(), sourceServer,
+            BridgeResponses.categoryOf(decoded.error()));
+      }
       return;
     }
     final BridgeMessage message = decoded.message();
@@ -157,6 +189,21 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     if (claim.isPresent()) {
       LOGGER.warn("Rejected btc:bridge {} from '{}': {} (messageId {})", message.type(),
           sourceServer, claim.get(), message.envelope().messageId());
+      final BridgeMessage.ErrorCode category = BridgeResponses.categoryOf(claim.get());
+      if (category != null) {
+        refuse(connection, message.messageId(), sourceServer, category);
+      }
+      return;
+    }
+
+    // 4. Has this exact command already been executed? A redelivery is acknowledged again with
+    //    duplicate = true, and is never executed a second time.
+    final boolean acknowledgeable = BridgeResponses.isAcknowledgeable(message);
+    if (acknowledgeable
+        && deduplication.alreadySeen(message.messageId(), System.currentTimeMillis())) {
+      LOGGER.debug("Duplicate btc:bridge {} from '{}' (messageId {})", message.type(),
+          sourceServer, message.messageId());
+      acknowledge(connection, message, true);
       return;
     }
 
@@ -168,6 +215,62 @@ public final class VelocityBridgeChannel implements BridgeChannel {
             message.type(), sourceServer, e);
       }
     }
+
+    if (acknowledgeable) {
+      acknowledge(connection, message, false);
+    }
+  }
+
+  /**
+   * Sends an acknowledgement back on the very connection the command arrived on.
+   *
+   * @param connection the source backend connection
+   * @param request    the command being acknowledged
+   * @param duplicate  whether the command had already been executed
+   */
+  private void acknowledge(final @Nullable ServerConnection connection,
+                           final BridgeMessage request, final boolean duplicate) {
+    respond(connection, BridgeResponses.ack(request, proxyId, duplicate,
+        System.currentTimeMillis()), request.type());
+  }
+
+  /**
+   * Sends a categorized refusal back on the source connection.
+   *
+   * @param connection   the source backend connection
+   * @param messageId    the id of the refused message
+   * @param sourceServer the authenticated source, which is the addressee of the refusal
+   * @param error        the refusal category
+   */
+  private void refuse(final @Nullable ServerConnection connection, final java.util.UUID messageId,
+                      final String sourceServer, final BridgeMessage.ErrorCode error) {
+    respond(connection, BridgeResponses.nack(messageId, sourceServer, proxyId, error,
+        System.currentTimeMillis()), "nack");
+  }
+
+  /**
+   * Writes a response on the source connection.
+   *
+   * <p>The response goes back on the connection that carried the request, never through a lookup
+   * by name: the name has already been confronted with this connection at ingress, and resolving
+   * it a second time would open the door the identity check just closed.</p>
+   *
+   * @param connection the source backend connection
+   * @param response   the response to write
+   * @param about      the type of the message being answered, for the log line only
+   */
+  private void respond(final @Nullable ServerConnection connection, final BridgeMessage response,
+                       final String about) {
+    if (connection == null) {
+      return;
+    }
+    try {
+      connection.sendPluginMessage(CHANNEL_ID, BridgeCodec.encode(response));
+    } catch (Exception e) {
+      // Never let a failed response break the handling of the request it answers.
+      LOGGER.warn("Could not answer btc:bridge {} on '{}'", about,
+          connection.getServerInfo().getName(), e);
+    }
   }
 
   /**
@@ -178,17 +281,6 @@ public final class VelocityBridgeChannel implements BridgeChannel {
    */
   private boolean matchesChannel(final com.velocitypowered.api.proxy.messages.ChannelIdentifier identifier) {
     return CHANNEL_ID.equals(identifier);
-  }
-
-  /**
-   * Extracts the {@link ServerInfo} of a backend connection source.
-   *
-   * @param source the plugin message source
-   * @return the connection's server info, or {@code null} when the source is a player (client
-   *         originated, never an authenticated backend) or anything else
-   */
-  private static @Nullable ServerInfo connectionInfo(final Object source) {
-    return source instanceof ServerConnection conn ? conn.getServerInfo() : null;
   }
 
   /**
