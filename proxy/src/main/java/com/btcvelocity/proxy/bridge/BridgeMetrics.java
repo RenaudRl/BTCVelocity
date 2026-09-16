@@ -47,6 +47,11 @@ public final class BridgeMetrics {
     REJECTED_IDENTITY,
     /** The sender or the destination was not allowed by the declared policy. */
     REJECTED_AUTHORIZATION,
+    /**
+     * The command was allowed but cannot be carried out (unknown destination, malformed party).
+     * Kept apart from authorization: "you may not" and "it cannot be done" call for different fixes.
+     */
+    REJECTED_UNEXECUTABLE,
     /** The message was handed to the listeners. */
     DISPATCHED,
     /** A command already executed inside the deduplication window arrived again. */

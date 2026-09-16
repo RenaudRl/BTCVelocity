@@ -234,7 +234,19 @@ public final class VelocityBridgeChannel implements BridgeChannel {
       return;
     }
 
-    // 5. Has this exact command already been executed? A redelivery is acknowledged again with
+    // 5. Can it be carried out at all? A command the proxy knows it will not execute is refused
+    //    now, so that an acknowledgement only ever follows a command that was actually attempted.
+    final BridgeMessage.ErrorCode unexecutable = BridgeDispatchPreconditions.refuse(message,
+        name -> server.getServer(name).isPresent());
+    if (unexecutable != null) {
+      metrics.record(BridgeMetrics.Event.REJECTED_UNEXECUTABLE);
+      LOGGER.warn("Refused btc:bridge {} from '{}': {} before dispatch (messageId {})",
+          message.type(), sourceServer, unexecutable, message.messageId());
+      refuse(connection, message.messageId(), sourceServer, unexecutable);
+      return;
+    }
+
+    // 6. Has this exact command already been executed? A redelivery is acknowledged again with
     //    duplicate = true, and is never executed a second time.
     if (acknowledgeable
         && deduplication.alreadySeen(message.messageId(), System.currentTimeMillis())) {
