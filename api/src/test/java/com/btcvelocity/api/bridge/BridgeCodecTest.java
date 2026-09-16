@@ -40,6 +40,22 @@ class BridgeCodecTest {
     assertEquals("btc-copy", decoded.targetServer());
   }
 
+  /**
+   * The literals here are pinned identically in BTC-CORE's {@code BridgeCodecPlatformCheck}. What
+   * this guards is not a wrong verdict but <em>divergence</em>: two codecs that disagree on the
+   * field name or on the spelling of a value produce a pair that compiles, starts, and then refuses
+   * every message on a live server. Either build must fail first.
+   */
+  @Test
+  void theWireNameAndSpellingMatchTheBackendCopy() {
+    final long now = System.currentTimeMillis();
+    final String encoded = new String(BridgeCodec.encode(new BridgeMessage.ConnectRequest(
+        envelope("connect_request", now), UUID.randomUUID(), "btc",
+        BridgeMessage.Platform.BEDROCK)), StandardCharsets.UTF_8);
+
+    assertTrue(encoded.contains("\"originPlatform\":\"BEDROCK\""));
+  }
+
   @Test
   void aStatedPlatformSurvivesTheRoundTrip() {
     final long now = System.currentTimeMillis();

@@ -208,6 +208,44 @@ class OriginPlatformPolicyTest {
     assertEquals(BridgeMessage.ErrorCode.PLATFORM_UNRESOLVABLE, verdict.error());
   }
 
+  /**
+   * The bench defect of 17/09, in a test: the bridge channel is built before the proxy loads its
+   * plugins, so a source resolved once at construction reported "no Floodgate" on a proxy that had
+   * it. "Absent" and "not yet" must not be remembered alike.
+   */
+  @Test
+  void aSourceThatIsNotReadyYetIsAskedAgainLater() {
+    final AtomicInteger attempts = new AtomicInteger();
+    final PlatformSource deferred = new DeferredPlatformSource(() -> {
+      // Not ready the first two times, as a plugin that has not finished starting.
+      if (attempts.incrementAndGet() <= 2) {
+        return DeferredPlatformSource.Attempt.notYet();
+      }
+      return DeferredPlatformSource.Attempt.found(
+          new KnownSessions(Map.of(ALICE, BridgeMessage.Platform.JAVA)));
+    });
+
+    assertFalse(deferred.canResolve(), "not ready yet: it says so rather than guessing");
+    assertFalse(deferred.canResolve());
+    assertTrue(deferred.canResolve(), "and once the plugin is up, it resolves");
+    assertEquals(3, attempts.get());
+  }
+
+  /** A definitive absence is settled once: it is a fact about the deployment, not about now. */
+  @Test
+  void aSourceThatWillNeverExistIsNotAskedTwice() {
+    final AtomicInteger attempts = new AtomicInteger();
+    final PlatformSource deferred = new DeferredPlatformSource(() -> {
+      attempts.incrementAndGet();
+      return DeferredPlatformSource.Attempt.absentForGood();
+    });
+
+    assertFalse(deferred.canResolve());
+    assertFalse(deferred.canResolve());
+    assertFalse(deferred.canResolve());
+    assertEquals(1, attempts.get());
+  }
+
   /** An inert policy that stays silent reads exactly like an enforced one. */
   @Test
   void aProxyThatCannotResolveSaysSoAtStartup() {

@@ -25,6 +25,7 @@ import com.btcvelocity.api.bridge.BridgeMessageListener;
 import com.velocitypowered.api.event.EventHandler;
 import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
+import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.proxy.VelocityServer;
@@ -105,7 +106,7 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     this.proxyId = proxyId == null || proxyId.isBlank() ? DEFAULT_PROXY_ID : proxyId.trim();
     this.authorization = authorization;
     this.frame = keyFrom(server.getConfiguration().getForwardingSecret());
-    this.originPlatform = new OriginPlatformPolicy(FloodgatePlatformSource.createIfPresent(server));
+    this.originPlatform = new OriginPlatformPolicy(FloodgatePlatformSource.deferred(server));
     this.server.getChannelRegistrar().register(CHANNEL_ID);
     this.server.getEventManager()
         .register(VelocityVirtualPlugin.INSTANCE, PluginMessageEvent.class, PostOrder.LAST,
@@ -126,7 +127,14 @@ public final class VelocityBridgeChannel implements BridgeChannel {
     }
     // Same reason as above, for the platform: "I cannot resolve" is said out loud rather than
     // inferred away. Never "no Floodgate, so everyone is Java" — that would be a guess on the wire.
-    LOGGER.info(this.originPlatform.announce());
+    //
+    // Announced on ProxyInitializeEvent, not here: this constructor runs before the proxy loads
+    // its plugins, so announcing now would report "no platform source" on a proxy that has one.
+    // Measured on the bench, 17/09 — the announcement was right about what it could see and wrong
+    // about the machine.
+    this.server.getEventManager()
+        .register(VelocityVirtualPlugin.INSTANCE, ProxyInitializeEvent.class, PostOrder.LAST,
+            event -> LOGGER.info(this.originPlatform.announce()));
   }
 
   @Override

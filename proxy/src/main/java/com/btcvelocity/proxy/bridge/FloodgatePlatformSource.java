@@ -53,26 +53,32 @@ public final class FloodgatePlatformSource implements PlatformSource {
   }
 
   /**
-   * Returns a Floodgate-backed source, or {@link PlatformSource#UNAVAILABLE} when Floodgate is not
-   * installed here — the production case today.
+   * A source that resolves Floodgate the first time it is actually needed, never in a constructor.
    *
-   * <p>Absence is not an error and is not logged as one: it is a fact about this deployment, and
-   * the caller announces it at startup.
+   * <p>The bridge channel is built before the proxy loads its plugins, so asking at construction
+   * time answers "no Floodgate" on a proxy that has it — measured on the bench, 17/09. See
+   * {@link DeferredPlatformSource} for why "absent" and "not yet" must not be remembered alike.
+   *
+   * <p>Absence is not an error and is not logged as one: it is a fact about this deployment.
    */
-  public static PlatformSource createIfPresent(final ProxyServer proxy) {
+  public static PlatformSource deferred(final ProxyServer proxy) {
     Objects.requireNonNull(proxy, "proxy");
+    return new DeferredPlatformSource(() -> attempt(proxy));
+  }
+
+  private static DeferredPlatformSource.Attempt attempt(final ProxyServer proxy) {
     try {
       Class.forName(FLOODGATE_API, false, FloodgatePlatformSource.class.getClassLoader());
-      final FloodgateApi api = FloodgateApi.getInstance();
-      if (api == null) {
-        // The class is on the path but the plugin has not finished starting, or failed to.
-        // Claiming we can resolve would be worse than admitting we cannot.
-        return PlatformSource.UNAVAILABLE;
-      }
-      return new FloodgatePlatformSource(proxy, api);
     } catch (ClassNotFoundException | LinkageError absent) {
-      return PlatformSource.UNAVAILABLE;
+      // Nothing will put the class there later: this is settled for the life of the proxy.
+      return DeferredPlatformSource.Attempt.absentForGood();
     }
+    final FloodgateApi api = FloodgateApi.getInstance();
+    if (api == null) {
+      // On the path, not started yet. Asking again later is the whole point.
+      return DeferredPlatformSource.Attempt.notYet();
+    }
+    return DeferredPlatformSource.Attempt.found(new FloodgatePlatformSource(proxy, api));
   }
 
   @Override
