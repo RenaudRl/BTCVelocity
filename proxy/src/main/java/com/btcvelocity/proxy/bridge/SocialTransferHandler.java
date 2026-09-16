@@ -17,11 +17,13 @@
 
 package com.btcvelocity.proxy.bridge;
 
+import com.btcvelocity.api.bridge.BridgeCodec;
 import com.btcvelocity.api.bridge.BridgeMessage;
 import com.btcvelocity.api.bridge.BridgeMessageListener;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayer;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayerService;
 import com.velocitypowered.proxy.VelocityServer;
+import java.util.Optional;
 import java.util.UUID;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -39,6 +41,15 @@ import org.apache.logging.log4j.Logger;
 public final class SocialTransferHandler implements BridgeMessageListener {
 
   private static final Logger LOGGER = LogManager.getLogger(SocialTransferHandler.class);
+
+  /**
+   * The party size ceiling, read from the codec rather than restated.
+   *
+   * <p>The decoder already enforces it, so this is defence in depth — but a copied number is a
+   * number that drifts, and the two checks disagreeing would let a warp through the door the codec
+   * believes it closed.
+   */
+  private static final int MAX_PARTY_MEMBERS = BridgeCodec.Limits.defaults().maxPartyMembers();
 
   private final VelocityClusterPlayerService clusterPlayerService;
   private final VelocityServer server;
@@ -58,16 +69,53 @@ public final class SocialTransferHandler implements BridgeMessageListener {
   public void onMessage(final String sourceServer, final BridgeMessage message) {
     switch (message) {
       case BridgeMessage.ConnectRequest req -> move(req.uuid(), req.targetServer());
-      case BridgeMessage.PartyWarp warp -> {
-        if (warp.members() != null) {
-          for (final UUID member : warp.members()) {
-            move(member, warp.targetServer());
-          }
-        }
-      }
+      case BridgeMessage.PartyWarp warp -> warp(warp);
       default -> {
         // Not a social transport message; ignore.
       }
+    }
+  }
+
+  /**
+   * Applies a party warp, or refuses it whole.
+   *
+   * <p>Validated once, before anybody moves. Previously each member was validated inside its own
+   * move, so a single malformed message was rediscovered up to {@code maxPartyMembers} times — one
+   * log line per member, from a list the sender controls — and a warp the proxy should have refused
+   * could still move whoever happened to pass. A party that arrives split is worse than a party
+   * that did not move.
+   *
+   * <p>Members the cluster does not know are not a defect of the message: they are counted and
+   * reported, and the rest of the party still moves. A warp where nobody is known says so, instead
+   * of passing for a success.
+   */
+  private void warp(final BridgeMessage.PartyWarp warp) {
+    final PartyWarpValidation.Verdict verdict = PartyWarpValidation.validate(
+        warp.members(), warp.targetServer(), MAX_PARTY_MEMBERS);
+    if (!verdict.accepted()) {
+      LOGGER.warn("Refused party warp of {} member(s): {}",
+          warp.members().size(), verdict.rejection());
+      return;
+    }
+    if (server.getServer(warp.targetServer()).isEmpty()) {
+      LOGGER.warn("Refused party warp to unregistered server '{}'", warp.targetServer());
+      return;
+    }
+
+    int unknown = 0;
+    for (final UUID member : verdict.members()) {
+      final Optional<VelocityClusterPlayer> player = clusterPlayerService.getPlayer(member);
+      if (player.isEmpty()) {
+        unknown++;
+        continue;
+      }
+      player.get().move(warp.targetServer());
+    }
+    if (unknown > 0) {
+      // Reported as a count, never as a list: the UUIDs come from the other end of the wire and
+      // have no business growing the log by the sender's choosing.
+      LOGGER.info("Party warp to '{}': {} of {} member(s) were not in the cluster",
+          warp.targetServer(), unknown, verdict.members().size());
     }
   }
 

@@ -85,6 +85,20 @@ public final class WorldRegistry {
   }
 
   /**
+   * Bridge-message listener entry point suitable for registration with
+   * {@link com.btcvelocity.api.bridge.BridgeChannel#registerListener}. It ignores every
+   * message type other than {@link BridgeMessage.WorldLoaded}.
+   *
+   * @param sourceServer the name of the server that sent the message
+   * @param message      the decoded bridge message
+   */
+  public void onWorldLoaded(final String sourceServer, final BridgeMessage message) {
+    if (message instanceof BridgeMessage.WorldLoaded loaded) {
+      onWorldLoaded(loaded);
+    }
+  }
+
+  /**
    * Reconciles a server's world view from its periodic health report.
    *
    * <p>The health report lists every loaded world, so it is a full statement, not an increment:
@@ -120,20 +134,6 @@ public final class WorldRegistry {
    */
   public void forget(final String serverName) {
     worldsByServer.remove(serverName);
-  }
-
-  /**
-   * Bridge-message listener entry point suitable for registration with
-   * {@link com.btcvelocity.api.bridge.BridgeChannel#registerListener}. It ignores every
-   * message type other than {@link BridgeMessage.WorldLoaded}.
-   *
-   * @param sourceServer the name of the server that sent the message
-   * @param message      the decoded bridge message
-   */
-  public void onWorldLoaded(final String sourceServer, final BridgeMessage message) {
-    if (message instanceof BridgeMessage.WorldLoaded loaded) {
-      onWorldLoaded(loaded);
-    }
   }
 
   /**
