@@ -33,6 +33,7 @@ import com.btcvelocity.proxy.cluster.redis.RedisClusterPlayerService;
 import com.btcvelocity.proxy.cluster.redis.RedisClusterProxyService;
 import com.btcvelocity.proxy.command.builtin.AlertCommand;
 import com.btcvelocity.proxy.command.builtin.AlertRawCommand;
+import com.btcvelocity.proxy.command.builtin.BridgeStatusCommand;
 import com.btcvelocity.proxy.command.builtin.FindCommand;
 import com.btcvelocity.proxy.command.builtin.GipCommand;
 import com.btcvelocity.proxy.command.builtin.GkickCommand;
@@ -922,6 +923,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     registerCommand(VelocityCommand::new);
     registerCommand(CallbackCommand::new);
     registerCommand(ShutdownCommand::new);
+    registerCommand(BridgeStatusCommand::new);
     registerCommand(configuration.isAlertEnabled(), AlertCommand::new);
     registerCommand(configuration.isAlertRawEnabled(), AlertRawCommand::new);
     registerCommand(configuration.isFindEnabled(), FindCommand::new);
