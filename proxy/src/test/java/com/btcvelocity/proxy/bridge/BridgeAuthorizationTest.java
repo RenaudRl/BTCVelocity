@@ -120,6 +120,21 @@ class BridgeAuthorizationTest {
   }
 
   @Test
+  void aDeclarationNamingATaskAuthorizesTheServicesOfThatTask() {
+    // Under CloudNet the source is registered as Lobby-1, and only the task Lobby can be written
+    // in the proxy's environment before the node starts anything.
+    final BridgeAuthorization policy = BridgeAuthorization.parse("Lobby", "Lobby, skyadventure-1");
+
+    assertNull(policy.refuse("Lobby-1", connect("Lobby-1", "skyadventure-1-2")));
+    assertEquals(BridgeMessage.ErrorCode.BACKEND_NOT_ALLOWED,
+        policy.refuse("skyadventure-1-1", connect("skyadventure-1-1", "Lobby-1")),
+        "une tâche non déclarée reste refusée");
+    assertEquals(BridgeMessage.ErrorCode.TARGET_NOT_ALLOWED,
+        policy.refuse("Lobby-1", connect("Lobby-1", "skyadventure-2-1")),
+        "une tâche voisine n'est pas une destination");
+  }
+
+  @Test
   void theDeclarationIsTrimmedAndOrderPreserved() {
     final BridgeAuthorization policy = BridgeAuthorization.parse(" lobby , sky ", null);
 

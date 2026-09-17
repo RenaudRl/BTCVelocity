@@ -87,11 +87,14 @@ public record BridgeAuthorization(Set<String> allowedSources, Set<String> allowe
    */
   public BridgeMessage.@Nullable ErrorCode refuse(final String sourceServer,
                                                   final BridgeMessage message) {
-    if (filtersSources() && !allowedSources.contains(sourceServer)) {
+    // An entry names a server or a TASK (see ServiceNames): under CloudNet the service name is
+    // only known once the node has started it, so a declaration can only ever name the task.
+    if (filtersSources() && !ServiceNames.covers(allowedSources, sourceServer)) {
       return BridgeMessage.ErrorCode.BACKEND_NOT_ALLOWED;
     }
     final String destination = destinationOf(message);
-    if (destination != null && filtersTargets() && !allowedTargets.contains(destination)) {
+    if (destination != null && filtersTargets()
+        && !ServiceNames.covers(allowedTargets, destination)) {
       return BridgeMessage.ErrorCode.TARGET_NOT_ALLOWED;
     }
     return null;
