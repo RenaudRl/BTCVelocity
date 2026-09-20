@@ -336,7 +336,7 @@ public enum ProtocolVersion implements Ordered<@NotNull ProtocolVersion> {
   /**
    * Represents the lowest supported version.
    */
-  public static final ProtocolVersion MINIMUM_VERSION = MINECRAFT_26_2;
+  public static final ProtocolVersion MINIMUM_VERSION = MINECRAFT_26_3;
   /**
    * Represents the highest supported version.
    */
@@ -457,7 +457,7 @@ public enum ProtocolVersion implements Ordered<@NotNull ProtocolVersion> {
    * @return if the protocol supported
    */
   public boolean isSupported() {
-    return this.protocol >= MINECRAFT_26_2.protocol;
+    return this.protocol >= MINECRAFT_26_3.protocol;
   }
 
   /**
