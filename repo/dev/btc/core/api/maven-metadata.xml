@@ -3,8 +3,8 @@
   <groupId>dev.btc.core</groupId>
   <artifactId>api</artifactId>
   <versioning>
-    <latest>26.2.build.10-alpha</latest>
-    <release>26.2.build.10-alpha</release>
+    <latest>26.3.build.1-alpha</latest>
+    <release>26.3.build.1-alpha</release>
     <versions>
       <version>26.1.2.build.19-alpha</version>
       <version>26.2.build.1-alpha</version>
@@ -17,7 +17,8 @@
       <version>26.2.build.8-alpha</version>
       <version>26.2.build.9-alpha</version>
       <version>26.2.build.10-alpha</version>
+      <version>26.3.build.1-alpha</version>
     </versions>
-    <lastUpdated>20260915070445</lastUpdated>
+    <lastUpdated>20260920164125</lastUpdated>
   </versioning>
 </metadata>
