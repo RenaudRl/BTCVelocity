@@ -1,0 +1,118 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.github.retrooper",
+    "module": "packetevents-netty-common",
+    "version": "2.14.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.5.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 8,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "io.netty",
+          "module": "netty-all",
+          "version": {
+            "requires": "4.1.72.Final"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "packetevents-netty-common-2.14.0.jar",
+          "url": "packetevents-netty-common-2.14.0.jar",
+          "size": 14860,
+          "sha512": "7d0745ba0776c9f5e2589ad7ba629b2bc8f4cbe64ebca685f75161ea54e192c3bd1e6a847b16076a8f5101dcf1d2f7046b51a7d905a6385ad0312ce83396f0f6",
+          "sha256": "7dba1a14b08bd20c035f4ad3ba860accccf6166252bdd34361433a1087fa4bfc",
+          "sha1": "6f7f0c937aa6fd6ff2538e789447441109736c20",
+          "md5": "cf21b68b4de217e87d791d1091039e59"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 8,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "com.github.retrooper",
+          "module": "packetevents-api",
+          "version": {
+            "requires": "2.14.0"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "packetevents-netty-common-2.14.0.jar",
+          "url": "packetevents-netty-common-2.14.0.jar",
+          "size": 14860,
+          "sha512": "7d0745ba0776c9f5e2589ad7ba629b2bc8f4cbe64ebca685f75161ea54e192c3bd1e6a847b16076a8f5101dcf1d2f7046b51a7d905a6385ad0312ce83396f0f6",
+          "sha256": "7dba1a14b08bd20c035f4ad3ba860accccf6166252bdd34361433a1087fa4bfc",
+          "sha1": "6f7f0c937aa6fd6ff2538e789447441109736c20",
+          "md5": "cf21b68b4de217e87d791d1091039e59"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "packetevents-netty-common-2.14.0-sources.jar",
+          "url": "packetevents-netty-common-2.14.0-sources.jar",
+          "size": 12659,
+          "sha512": "8137c570beb1865fe1a82747262dd2f30235f641b6e84a41786a7106ab6d07e03edce02681ec353df855a59cae4857808e28c2ddafb8fbd10a2a61741b59a95f",
+          "sha256": "68aeb3b930349fe6f262f1b617e71758b62fc11066e3f2cd985eb49da8af73be",
+          "sha1": "2cf7503a1a647d9537e235ed9f8cfa6a35e1f13f",
+          "md5": "c4288575c0b963318f23f0b4d1f568e6"
+        }
+      ]
+    },
+    {
+      "name": "javadocElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "javadoc",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "packetevents-netty-common-2.14.0-javadoc.jar",
+          "url": "packetevents-netty-common-2.14.0-javadoc.jar",
+          "size": 4197121,
+          "sha512": "d9aaf689df4659fb2085ef7dd425ef04fab79f2f3f073ba60c302b616a3497cbfe437f8285abe49cd8be53e7113c6b4f5a0271c8b6bcbe3d1afa01e962451353",
+          "sha256": "9ee9bec50afcbb8820c963b3473919f9297191010b2ec34c27b63803ac5f011b",
+          "sha1": "10934868f24134a3fc215fbff1461b432f0af907",
+          "md5": "d6415b7162047d10bdc5fb68c557e2c5"
+        }
+      ]
+    }
+  ]
+}

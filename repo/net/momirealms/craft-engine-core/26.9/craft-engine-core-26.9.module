@@ -1,0 +1,38 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "net.momirealms",
+    "module": "craft-engine-core",
+    "version": "26.9",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.7.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "shadowRuntimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "shadowed",
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "craft-engine-core-26.9.jar",
+          "url": "craft-engine-core-26.9.jar",
+          "size": 5943097,
+          "sha512": "f54873331fbf29de7d32bc471fbe455c471639bea602193d7f8ad24f4cc4f4b2ba3c58f9cca7c9df66c50f072efa6f4763be6fff2e91c6496d8f10bf786e98c9",
+          "sha256": "0b08fb83e0e4dda86b142f1c5d2d0bae3347242aab8369340933ccb496c6cd9e",
+          "sha1": "d2314511ce55b88f05b0c4ed32916e07dfc39f48",
+          "md5": "ba82dd7b424a3a12f80213a6a3b9801a"
+        }
+      ]
+    }
+  ]
+}

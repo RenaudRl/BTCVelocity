@@ -1,0 +1,158 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "io.github.toxicity188",
+    "module": "bettermodel-api",
+    "version": "3.5.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.7.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.semver4j",
+          "module": "semver4j",
+          "version": {
+            "requires": "6.0.0"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "dynamicuv",
+          "version": {
+            "requires": "1.2.2"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "java-mesh",
+          "version": {
+            "requires": "0.0.1"
+          }
+        },
+        {
+          "group": "com.github.ben-manes.caffeine",
+          "module": "caffeine",
+          "version": {
+            "requires": "3.2.4"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "bettermodel-api-3.5.0.jar",
+          "url": "bettermodel-api-3.5.0.jar",
+          "size": 584985,
+          "sha512": "caad0fe3b5be696e701383fb33db3ab585b690bd5987b6e2a591aca8da3f64068f24f34312a84e4d0d0008f2790dc5f2ea982d323ddd51f86d2737ce10af262d",
+          "sha256": "3bf65e2755f3fbbbbdb51db4697e3f545cbd27716183d59e64ec2ee46fd4a60c",
+          "sha1": "2ee3cb9aa737b218e9f2bb36b9165acf07ab98e7",
+          "md5": "3ffc0ed025223895740ebe4d14920abf"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 25,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.semver4j",
+          "module": "semver4j",
+          "version": {
+            "requires": "6.0.0"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "dynamicuv",
+          "version": {
+            "requires": "1.2.2"
+          }
+        },
+        {
+          "group": "io.github.toxicity188",
+          "module": "java-mesh",
+          "version": {
+            "requires": "0.0.1"
+          }
+        },
+        {
+          "group": "com.github.ben-manes.caffeine",
+          "module": "caffeine",
+          "version": {
+            "requires": "3.2.4"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.4.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "bettermodel-api-3.5.0.jar",
+          "url": "bettermodel-api-3.5.0.jar",
+          "size": 584985,
+          "sha512": "caad0fe3b5be696e701383fb33db3ab585b690bd5987b6e2a591aca8da3f64068f24f34312a84e4d0d0008f2790dc5f2ea982d323ddd51f86d2737ce10af262d",
+          "sha256": "3bf65e2755f3fbbbbdb51db4697e3f545cbd27716183d59e64ec2ee46fd4a60c",
+          "sha1": "2ee3cb9aa737b218e9f2bb36b9165acf07ab98e7",
+          "md5": "3ffc0ed025223895740ebe4d14920abf"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "bettermodel-api-3.5.0-sources.jar",
+          "url": "bettermodel-api-3.5.0-sources.jar",
+          "size": 264922,
+          "sha512": "37186cc1c3ce7807c840ca587d835456930295bb2395dacf60cb2475cb356d3c899119a424766094d5753f964004c8a9a23d97e3c34e9e67c0c85e5ec55375a9",
+          "sha256": "7d87e7264d150ecdc464957600f8cee295fc62d2f367f1a7bff4501a4f26e673",
+          "sha1": "e33cdb88c4a5b4f09d313dbeb31356c81f2b6053",
+          "md5": "43e90f69804a5c44c72bc3300abe7800"
+        }
+      ]
+    }
+  ]
+}
