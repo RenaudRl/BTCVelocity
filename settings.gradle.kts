@@ -36,6 +36,7 @@ sequenceOf(
     "proxy",
     "cloudnet-registry",
     "arrival-router",
+    "pack-policy",
     "platform-resolver",
 ).forEach {
     val project = ":velocity-$it"
