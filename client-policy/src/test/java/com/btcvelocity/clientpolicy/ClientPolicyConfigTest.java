@@ -84,6 +84,36 @@ class ClientPolicyConfigTest {
     assertTrue(parsed.config().isEmpty());
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"fabric:.*", "c:.*", ".+:.+", "forge:.*", "fml:.*", "neoforge:.*",
+      "xaero.*:main", "voxelmap:.*", "journeymap:.*", "minecraft:.*", "fabric:register", "c:version"})
+  void aChannelRuleThatCoversAnHonestModChannelRefusesTheConfiguration(String pattern) {
+    // Act
+    var parsed = parseDeny("  - {label: Bad, channel: '" + pattern + "'}");
+
+    // Assert
+    assertEquals(Optional.empty(), parsed.config(), pattern);
+    assertTrue(parsed.errors().get(0).contains("honest mods register"), parsed.errors().toString());
+  }
+
+  @Test
+  void everyControlChannelIsProtected() {
+    assertEquals(12, DenyRule.PROTECTED_CHANNELS.size());
+    for (String channel : List.of("fabric:register", "c:register", "c:version", "fml:handshake",
+        "forge:handshake", "neoforge:register", "xaerominimap:main", "xaeroworldmap:main",
+        "voxelmap:settings", "journeymap:version", "minecraft:brand", "minecraft:register")) {
+      assertTrue(DenyRule.PROTECTED_CHANNELS.contains(channel), channel);
+    }
+  }
+
+  @Test
+  void aPreciseChannelRuleIsAccepted() {
+    var parsed = parseDeny("  - {label: Meteor, channel: 'meteor-client:.*'}");
+
+    assertTrue(parsed.errors().isEmpty(), () -> parsed.errors().toString());
+    assertEquals(1, parsed.config().orElseThrow().deny().size());
+  }
+
   @Test
   void aRuleAimedAtACheatClientIsAccepted() {
     // Act
@@ -184,6 +214,23 @@ class ClientPolicyConfigTest {
         + "      radarAlowed: true\n").config().isEmpty());
     assertTrue(ClientPolicyConfig.parseYaml("consent:\n  voxelmap:\n    default:\n"
         + "      radarAllowed: maybe\n").config().isEmpty());
+  }
+
+  @Test
+  void aNullOrEmptyTeleportCommandIsOmittedNeverWrittenAsNull() {
+    // Arrange & Act
+    var nullDefault = ClientPolicyConfig.parseYaml("consent:\n  voxelmap:\n    default:\n"
+        + "      teleportCommand:\n").config().orElseThrow();
+    var override = ClientPolicyConfig.parseYaml("consent:\n  voxelmap:\n    default:\n"
+        + "      teleportCommand: '/tp'\n    servers:\n      creatif:\n"
+        + "        teleportCommand: ''\n").config().orElseThrow();
+
+    // Assert
+    assertFalse(nullDefault.voxelMap().jsonFor("lobby").orElseThrow().contains("teleportCommand"));
+    assertFalse(nullDefault.voxelMap().jsonFor("lobby").orElseThrow().contains("null"));
+    assertTrue(override.voxelMap().jsonFor("lobby").orElseThrow().contains("\"teleportCommand\":\"/tp\""));
+    assertFalse(override.voxelMap().jsonFor("creatif").orElseThrow().contains("teleportCommand"),
+        "an empty override removes the default command on that backend");
   }
 
   @Test

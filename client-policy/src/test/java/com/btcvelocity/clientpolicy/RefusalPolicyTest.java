@@ -78,11 +78,23 @@ class RefusalPolicyTest {
   }
 
   @Test
-  void anUnmeasuredOriginIsNotExempt() {
-    // No platform source means we cannot tell Bedrock apart, not that everyone is Bedrock.
+  void anUnmeasuredOriginIsNeverRefused() {
+    // Only an established Java origin is refused: unknown might be Bedrock, and a wrongly refused
+    // Bedrock player is worse than a cheat client let through this one door.
+    assertEquals(RefusalPolicy.Action.EXEMPT_UNKNOWN,
+        run(config("enforce"), ClientOrigin.UNKNOWN, false, "wurst").action());
+    assertEquals(RefusalPolicy.Action.EXEMPT_UNKNOWN,
+        run(config("dry-run"), ClientOrigin.UNKNOWN, false, "wurst").action());
+  }
+
+  @Test
+  void theUnknownOriginJournalLineSaysTheRefusalWasSkipped() {
     var verdict = run(config("enforce"), ClientOrigin.UNKNOWN, false, "wurst");
 
-    assertEquals(RefusalPolicy.Action.REFUSE, verdict.action());
+    String line = ObservationLog.verdict(new ObservationLog.Who("Steve", java.util.UUID.randomUUID()),
+        ClientOrigin.UNKNOWN, verdict, ClientPolicyConfig.Mode.ENFORCE);
+
+    org.junit.jupiter.api.Assertions.assertTrue(line.contains("origin UNKNOWN, refusal skipped"), line);
   }
 
   @Test

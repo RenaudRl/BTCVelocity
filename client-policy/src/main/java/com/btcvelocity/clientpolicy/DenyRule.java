@@ -34,6 +34,9 @@ import java.util.regex.PatternSyntaxException;
  * {@code lunarclient:v1.2.3-4567}, and because the guard below needs to test an arbitrary pattern
  * against the protected brands.
  *
+ * <p><strong>The channel guard:</strong> a channel rule may not match any of
+ * {@link #PROTECTED_CHANNELS} either (loader, Xaero, VoxelMap, JourneyMap channels).
+ *
  * <p><strong>The guard:</strong> a rule whose pattern matches {@code fabric}, {@code forge},
  * {@code neoforge}, {@code vanilla} or {@code quilt} is rejected when the configuration loads.
  * Those are the brands of every honest player, comfort mods included; a cheat client such as
@@ -50,6 +53,16 @@ public record DenyRule(String label, Target target, Pattern pattern, String mess
   /** Brands no rule may match, whatever the pattern. */
   static final List<String> PROTECTED_BRANDS =
       List.of("fabric", "forge", "neoforge", "vanilla", "quilt");
+
+  /**
+   * Channels of honest mods and of the game itself; no rule may match any of them. Xaero,
+   * VoxelMap, JourneyMap and the loaders register these on every comfort-mod install, so a
+   * pattern that covers one would refuse the players the policy exists to leave alone.
+   */
+  static final List<String> PROTECTED_CHANNELS = List.of(
+      "fabric:register", "c:register", "c:version", "fml:handshake", "forge:handshake",
+      "neoforge:register", "xaerominimap:main", "xaeroworldmap:main", "voxelmap:settings",
+      "journeymap:version", "minecraft:brand", "minecraft:register");
 
   /** Shown when a rule has no message of its own. */
   static final String DEFAULT_MESSAGE = "<red>This client is not allowed on this server.</red>";
@@ -125,6 +138,16 @@ public record DenyRule(String label, Target target, Pattern pattern, String mess
     if (raw.isEmpty()) {
       errors.add(path + " (" + label + "): empty pattern");
       return Optional.empty();
+    }
+    if (target == Target.CHANNEL) {
+      for (String protectedChannel : PROTECTED_CHANNELS) {
+        if (pattern.matcher(protectedChannel).matches()) {
+          errors.add(path + " (" + label + "): pattern '" + raw + "' matches the channel '"
+              + protectedChannel + "', which honest mods register; a channel rule must name"
+              + " a cheat client's own channel");
+          return Optional.empty();
+        }
+      }
     }
     for (String protectedBrand : PROTECTED_BRANDS) {
       if (pattern.matcher(protectedBrand).matches()) {

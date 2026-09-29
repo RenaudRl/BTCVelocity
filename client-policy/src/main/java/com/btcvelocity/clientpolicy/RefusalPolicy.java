@@ -39,6 +39,8 @@ public final class RefusalPolicy {
     NONE,
     /** A rule matched a Bedrock session: out of scope, nothing is done. */
     EXEMPT_BEDROCK,
+    /** A rule matched a session whose origin could not be measured: refusal is skipped. */
+    EXEMPT_UNKNOWN,
     /** A rule matched a session holding the bypass permission. */
     EXEMPT_BYPASS,
     /** A rule matched in dry-run mode: journal it, do nothing. */
@@ -85,6 +87,9 @@ public final class RefusalPolicy {
                                   BooleanSupplier hasBypass) {
     if (!origin.isPolicyApplicable()) {
       return Action.EXEMPT_BEDROCK;
+    }
+    if (!origin.isRefusable()) {
+      return Action.EXEMPT_UNKNOWN;
     }
     if (hasBypass.getAsBoolean()) {
       return Action.EXEMPT_BYPASS;

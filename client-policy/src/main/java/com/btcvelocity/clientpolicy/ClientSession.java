@@ -17,10 +17,12 @@
 
 package com.btcvelocity.clientpolicy;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 /**
@@ -32,10 +34,18 @@ import java.util.Set;
  */
 final class ClientSession {
 
+  /** Most channels kept per session: a hostile client cannot grow the proxy's memory with them. */
+  static final int MAX_CHANNELS = 256;
+  /** Longest brand kept, in code points. */
+  static final int MAX_BRAND_LENGTH = 128;
+
   private final Object lock = new Object();
+  private final Object owner;
   private final Set<String> channels = new LinkedHashSet<>();
   private final Set<String> reportedRules = new HashSet<>();
   private String brand;
+  private int droppedChannels;
+  private boolean overflowNoted;
   private boolean bedrockNoted;
   private boolean inconsistencyNoted;
   private ConsentPlanner.Consent lastConsent;
@@ -44,7 +54,8 @@ final class ClientSession {
   enum Kind {
     BRAND_DECLARED,
     BRAND_CHANGED,
-    CHANNELS_ADDED
+    CHANNELS_ADDED,
+    CHANNELS_REMOVED
   }
 
   /**
@@ -52,14 +63,39 @@ final class ClientSession {
    *
    * @param kind what happened
    * @param brand the brand after the change, {@code null} while undeclared
-   * @param added the brand (for a brand event) or the new channels
+   * @param values the brand (for a brand event) or the channels added or removed
    * @param channelTotal how many channels the session holds after the change
    */
-  record Observation(Kind kind, String brand, List<String> added, int channelTotal) {
+  record Observation(Kind kind, String brand, List<String> values, int channelTotal) {
   }
 
-  /** An immutable copy of the declarations. */
-  record Snapshot(String brand, List<String> channels) {
+  /**
+   * An immutable copy of the declarations.
+   *
+   * @param brand the stored (possibly truncated) brand, {@code null} while undeclared
+   * @param channels the channels held
+   * @param droppedChannels how many channels were refused storage because of the cap
+   */
+  record Snapshot(String brand, List<String> channels, int droppedChannels) {
+  }
+
+  /**
+   * Creates the state of one connection.
+   *
+   * @param owner the connection object (the player) this state belongs to, compared by identity
+   */
+  ClientSession(Object owner) {
+    this.owner = owner;
+  }
+
+  /**
+   * Whether this state belongs to that connection rather than to an earlier one of the same UUID.
+   *
+   * @param candidate the connection object
+   * @return {@code true} for the same object
+   */
+  boolean isOwnedBy(Object candidate) {
+    return this.owner == candidate;
   }
 
   /**
@@ -69,30 +105,82 @@ final class ClientSession {
    * @return the change, empty when the client repeated what it had already said
    */
   Optional<Observation> recordBrand(String declared) {
+    String stored = truncate(declared);
     synchronized (this.lock) {
-      if (declared.equals(this.brand)) {
+      if (stored.equals(this.brand)) {
         return Optional.empty();
       }
       Kind kind = this.brand == null ? Kind.BRAND_DECLARED : Kind.BRAND_CHANGED;
-      this.brand = declared;
-      return Optional.of(new Observation(kind, declared, List.of(declared), this.channels.size()));
+      this.brand = stored;
+      return Optional.of(new Observation(kind, stored, List.of(stored), this.channels.size()));
     }
+  }
+
+  private static String truncate(String value) {
+    if (value.codePointCount(0, value.length()) <= MAX_BRAND_LENGTH) {
+      return value;
+    }
+    return value.substring(0, value.offsetByCodePoints(0, MAX_BRAND_LENGTH));
   }
 
   /**
    * Records registered channels.
    *
    * @param declared the channel identifiers
-   * @return the change, empty when every channel was already known
+   * @return the change, empty when every channel was already known or the cap was reached
    */
   Optional<Observation> recordChannels(List<String> declared) {
     synchronized (this.lock) {
-      List<String> added = declared.stream().filter(this.channels::add).toList();
+      List<String> added = new ArrayList<>();
+      for (String channel : declared) {
+        if (this.channels.contains(channel)) {
+          continue;
+        }
+        if (this.channels.size() >= MAX_CHANNELS) {
+          this.droppedChannels++;
+          continue;
+        }
+        this.channels.add(channel);
+        added.add(channel);
+      }
       if (added.isEmpty()) {
         return Optional.empty();
       }
       return Optional.of(new Observation(Kind.CHANNELS_ADDED, this.brand, added,
           this.channels.size()));
+    }
+  }
+
+  /**
+   * Forgets channels the client unregistered.
+   *
+   * @param withdrawn the channel identifiers
+   * @return the change, empty when none of them was held
+   */
+  Optional<Observation> removeChannels(List<String> withdrawn) {
+    synchronized (this.lock) {
+      List<String> removed = withdrawn.stream().filter(this.channels::remove).toList();
+      if (removed.isEmpty()) {
+        return Optional.empty();
+      }
+      return Optional.of(new Observation(Kind.CHANNELS_REMOVED, this.brand, removed,
+          this.channels.size()));
+    }
+  }
+
+  /**
+   * The number of channels refused storage, once: the first call after the cap was hit answers
+   * with the count so far, every later call answers empty. The full count stays in the snapshot.
+   *
+   * @return the dropped count the first time, else empty
+   */
+  OptionalInt takeOverflowReport() {
+    synchronized (this.lock) {
+      if (this.droppedChannels == 0 || this.overflowNoted) {
+        return OptionalInt.empty();
+      }
+      this.overflowNoted = true;
+      return OptionalInt.of(this.droppedChannels);
     }
   }
 
@@ -103,7 +191,7 @@ final class ClientSession {
    */
   Snapshot snapshot() {
     synchronized (this.lock) {
-      return new Snapshot(this.brand, List.copyOf(this.channels));
+      return new Snapshot(this.brand, List.copyOf(this.channels), this.droppedChannels);
     }
   }
 
@@ -147,24 +235,17 @@ final class ClientSession {
   }
 
   /**
-   * The consent last sent.
+   * Records the consent now in force on the client and returns the one it replaces, in one step:
+   * two server switches racing each other each see a different previous value.
    *
-   * @return the consent, {@code null} if none was sent yet
+   * @param consent what the player is about to be told
+   * @return what the player was told before, {@code null} if nothing
    */
-  ConsentPlanner.Consent lastConsent() {
+  ConsentPlanner.Consent exchangeConsent(ConsentPlanner.Consent consent) {
     synchronized (this.lock) {
-      return this.lastConsent;
-    }
-  }
-
-  /**
-   * Remembers the consent now in force on the client.
-   *
-   * @param consent what the player was last told
-   */
-  void rememberConsent(ConsentPlanner.Consent consent) {
-    synchronized (this.lock) {
+      ConsentPlanner.Consent previous = this.lastConsent;
       this.lastConsent = consent;
+      return previous;
     }
   }
 }

@@ -38,4 +38,15 @@ public enum ClientOrigin {
   public boolean isPolicyApplicable() {
     return this != BEDROCK;
   }
+
+  /**
+   * Whether a session may be refused: only when it is <em>established</em> as Java. An origin the
+   * proxy could not measure might be a Bedrock player, and refusing one of those for a mod they
+   * cannot have is worse than letting a cheat client through this one door.
+   *
+   * @return {@code true} for Java only
+   */
+  public boolean isRefusable() {
+    return this == JAVA;
+  }
 }

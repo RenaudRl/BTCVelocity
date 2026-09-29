@@ -18,9 +18,11 @@
 package com.btcvelocity.clientpolicy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class ConsentPlannerTest {
@@ -48,60 +50,63 @@ class ConsentPlannerTest {
     assertEquals(codes("$r$e$s$e$t$x$a$e$r$o"), XaeroConsent.RESET);
   }
 
+  private static final String FAIR = "$f$a$i$r$x$a$e$r$o".replace('$', SECTION);
+  private static final String NO_MAP = "$n$o$m$i$n$i$m$a$p".replace('$', SECTION);
+  private static final String RESET = "$r$e$s$e$t$x$a$e$r$o".replace('$', SECTION);
+
   @Test
   void aFirstJoinSendsFairPlayAndTheVoxelMapSettings() {
     // Act
-    var delta = ConsentPlanner.delta(null, ConsentPlanner.desired(CONFIG, "lobby"));
+    var delta = ConsentPlanner.plan(null, ConsentPlanner.desired(CONFIG, "lobby"));
 
     // Assert
-    assertEquals(codes("$f$a$i$r$x$a$e$r$o"), delta.xaeroMessage());
+    assertEquals(List.of(FAIR), delta.xaeroMessages());
     assertTrue(delta.voxelJson().contains("\"radarAllowed\":false"));
   }
 
   @Test
-  void movingToABackendWithTheSameConsentSendsNothing() {
-    // Arrange
+  void movingToABackendWithTheSameConsentResendsItAnyway() {
+    // Arrange: sending is idempotent, and the proxy cannot know the client applied the first one.
     var lobby = ConsentPlanner.desired(CONFIG, "lobby");
 
     // Act
-    var delta = ConsentPlanner.delta(lobby, ConsentPlanner.desired(CONFIG, "survie"));
+    var delta = ConsentPlanner.plan(lobby, ConsentPlanner.desired(CONFIG, "survie"));
 
     // Assert
-    assertTrue(delta.isEmpty());
+    assertEquals(List.of(FAIR), delta.xaeroMessages(), "no reset: the code did not change");
+    assertEquals(lobby.voxelJson(), delta.voxelJson());
   }
 
   @Test
-  void movingToABackendWithDifferentCodesResendsThem() {
-    // Arrange
+  void movingToABackendWithADifferentCodeResetsThenSendsTheNewOne() {
+    // Arrange: the flags are cumulative, so the new code alone would add to the old one.
     var lobby = ConsentPlanner.desired(CONFIG, "lobby");
 
     // Act
-    var delta = ConsentPlanner.delta(lobby, ConsentPlanner.desired(CONFIG, "creatif"));
+    var delta = ConsentPlanner.plan(lobby, ConsentPlanner.desired(CONFIG, "creatif"));
 
     // Assert
-    assertEquals(codes("$n$o$m$i$n$i$m$a$p"), delta.xaeroMessage());
+    assertEquals(List.of(RESET, NO_MAP), delta.xaeroMessages());
     assertTrue(delta.voxelJson().contains("\"radarAllowed\":true"));
   }
 
   @Test
-  void leavingARestrictedBackendForOneThatDeclaresNothingSendsAReset() {
-    // Arrange
+  void leavingARestrictedBackendForOneThatDeclaresNothingSendsOnlyAReset() {
     var lobby = ConsentPlanner.desired(CONFIG, "lobby");
     var free = ConsentPlanner.desired(CONFIG, "free-1");
 
-    // Act
-    var delta = ConsentPlanner.delta(lobby, free);
+    var delta = ConsentPlanner.plan(lobby, free);
 
-    // Assert
-    assertEquals(codes("$r$e$s$e$t$x$a$e$r$o"), delta.xaeroMessage(),
+    assertEquals(List.of(RESET), delta.xaeroMessages(),
         "the fair-play flags would otherwise follow the player");
   }
 
   @Test
-  void aFirstJoinOnABackendThatDeclaresNothingSendsNoXaeroMessage() {
-    var delta = ConsentPlanner.delta(null, ConsentPlanner.desired(CONFIG, "free-1"));
+  void aFirstJoinOrAStayOnABackendThatDeclaresNothingSendsNoXaeroMessage() {
+    var free = ConsentPlanner.desired(CONFIG, "free-1");
 
-    assertNull(delta.xaeroMessage());
+    assertTrue(ConsentPlanner.plan(null, free).xaeroMessages().isEmpty());
+    assertTrue(ConsentPlanner.plan(free, free).xaeroMessages().isEmpty());
   }
 
   @Test
@@ -109,8 +114,25 @@ class ConsentPlannerTest {
     var config = ClientPolicyConfig.parseYaml("consent:\n  voxelmap:\n    enabled: false\n")
         .config().orElseThrow();
 
-    var delta = ConsentPlanner.delta(null, ConsentPlanner.desired(config, "lobby"));
+    var delta = ConsentPlanner.plan(null, ConsentPlanner.desired(config, "lobby"));
 
     assertNull(delta.voxelJson());
+  }
+
+  @Test
+  void theConsentJournalLineIsReadable() {
+    // Arrange
+    var who = new ObservationLog.Who("Steve", java.util.UUID.randomUUID());
+    var delta = ConsentPlanner.plan(ConsentPlanner.desired(CONFIG, "lobby"),
+        ConsentPlanner.desired(CONFIG, "creatif"));
+
+    // Act
+    String line = ObservationLog.consent(who, ClientOrigin.UNKNOWN, "creatif", delta);
+
+    // Assert
+    assertTrue(line.contains("origin=UNKNOWN"));
+    assertTrue(line.contains("xaero=\"resetxaero+nominimap\""), line);
+    assertTrue(line.contains("voxelmap=\"radarAllowed=true, radarMobsAllowed=false,"), line);
+    assertFalse(line.contains("{"), "no raw JSON in the journal");
   }
 }

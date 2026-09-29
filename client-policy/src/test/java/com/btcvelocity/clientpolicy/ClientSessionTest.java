@@ -33,7 +33,7 @@ class ClientSessionTest {
   @Test
   void theFirstBrandIsDeclaredAndARepeatIsSilent() {
     // Arrange
-    var session = new ClientSession();
+    var session = new ClientSession(new Object());
 
     // Act & Assert
     var first = session.recordBrand("fabric").orElseThrow();
@@ -45,16 +45,99 @@ class ClientSessionTest {
   @Test
   void onlyNewChannelsAreReportedAsAdded() {
     // Arrange
-    var session = new ClientSession();
+    var session = new ClientSession(new Object());
     session.recordChannels(List.of("fabric:register", "c:version"));
 
     // Act
     var change = session.recordChannels(List.of("c:version", "xaerominimap:main")).orElseThrow();
 
     // Assert
-    assertEquals(List.of("xaerominimap:main"), change.added());
+    assertEquals(List.of("xaerominimap:main"), change.values());
     assertEquals(3, change.channelTotal());
     assertTrue(session.recordChannels(List.of("c:version")).isEmpty());
+  }
+
+  @Test
+  void channelsAreCappedAndTheOverflowIsReportedOnce() {
+    // Arrange
+    var session = new ClientSession(new Object());
+    List<String> flood = java.util.stream.IntStream.range(0, ClientSession.MAX_CHANNELS + 10)
+        .mapToObj(index -> "spam:c" + index).toList();
+
+    // Act
+    var change = session.recordChannels(flood).orElseThrow();
+
+    // Assert
+    assertEquals(ClientSession.MAX_CHANNELS, change.channelTotal());
+    assertEquals(ClientSession.MAX_CHANNELS, session.snapshot().channels().size());
+    assertEquals(10, session.snapshot().droppedChannels());
+    assertEquals(10, session.takeOverflowReport().getAsInt());
+    assertTrue(session.takeOverflowReport().isEmpty(), "reported once");
+    assertTrue(session.recordChannels(List.of("spam:more")).isEmpty());
+    assertEquals(11, session.snapshot().droppedChannels(), "later drops are counted, not logged");
+    assertTrue(session.takeOverflowReport().isEmpty());
+  }
+
+  @Test
+  void aChannelAlreadyKnownDoesNotCountAsOverflowAtTheCap() {
+    var session = new ClientSession(new Object());
+    session.recordChannels(java.util.stream.IntStream.range(0, ClientSession.MAX_CHANNELS)
+        .mapToObj(index -> "spam:c" + index).toList());
+
+    assertTrue(session.recordChannels(List.of("spam:c0")).isEmpty());
+    assertEquals(0, session.snapshot().droppedChannels());
+  }
+
+  @Test
+  void aLongBrandIsStoredTruncated() {
+    var session = new ClientSession(new Object());
+
+    var change = session.recordBrand("b".repeat(1000)).orElseThrow();
+
+    assertEquals(ClientSession.MAX_BRAND_LENGTH, change.brand().length());
+    assertEquals(ClientSession.MAX_BRAND_LENGTH, session.snapshot().brand().length());
+    assertTrue(session.recordBrand("b".repeat(2000)).isEmpty(),
+        "the same truncated value is not a change");
+  }
+
+  @Test
+  void anUnregisteredChannelIsForgottenAndJournalled() {
+    // Arrange
+    var session = new ClientSession(new Object());
+    session.recordChannels(List.of("a:x", "b:y"));
+
+    // Act
+    var change = session.removeChannels(List.of("a:x", "never:seen")).orElseThrow();
+
+    // Assert
+    assertEquals(ClientSession.Kind.CHANNELS_REMOVED, change.kind());
+    assertEquals(List.of("a:x"), change.values());
+    assertEquals(List.of("b:y"), session.snapshot().channels());
+    assertTrue(session.removeChannels(List.of("a:x")).isEmpty());
+    assertTrue(ObservationLog.observation(new ObservationLog.Who("Steve", UUID.randomUUID()),
+        ClientOrigin.JAVA, change).contains("event=channels-removed removed=[\"a:x\"]"));
+  }
+
+  @Test
+  void exchangingTheConsentReturnsThePreviousOneAtomically() {
+    var session = new ClientSession(new Object());
+    var first = new ConsentPlanner.Consent("x", null);
+    var second = new ConsentPlanner.Consent("y", null);
+
+    assertEquals(null, session.exchangeConsent(first));
+    assertEquals(first, session.exchangeConsent(second));
+    assertEquals(second, session.exchangeConsent(second));
+  }
+
+  @Test
+  void enforcementIsBlindOnlyWhenEnforcingWithoutAPlatformSource() {
+    var enforce = ClientPolicyConfig.parseYaml("mode: enforce").config().orElseThrow();
+    var dryRun = ClientPolicyConfig.builtIn();
+
+    assertTrue(BtcClientPolicyPlugin.isBlindEnforcement(enforce, PlatformSource.UNAVAILABLE));
+    assertFalse(BtcClientPolicyPlugin.isBlindEnforcement(dryRun, PlatformSource.UNAVAILABLE));
+    assertFalse(BtcClientPolicyPlugin.isBlindEnforcement(enforce,
+        source(true, Optional.empty())));
   }
 
   @Test
@@ -75,7 +158,7 @@ class ClientSessionTest {
 
   @Test
   void theOnceOnlyFlagsFireOnce() {
-    var session = new ClientSession();
+    var session = new ClientSession(new Object());
 
     assertTrue(session.markInconsistencyNoted());
     assertFalse(session.markInconsistencyNoted());
@@ -90,7 +173,7 @@ class ClientSessionTest {
   void theJournalLinesAreStructuredAndSayBedrockExplicitly() {
     // Arrange
     var who = new ObservationLog.Who("Steve", UUID.fromString("00000000-0000-0000-0000-000000000001"));
-    var session = new ClientSession();
+    var session = new ClientSession(new Object());
 
     // Act
     String brandLine = ObservationLog.observation(who, ClientOrigin.JAVA,
@@ -112,7 +195,7 @@ class ClientSessionTest {
   void aHostileBrandCannotForgeALineOrBreakTheQuoting() {
     // Arrange
     var who = new ObservationLog.Who("Steve", UUID.randomUUID());
-    var change = new ClientSession().recordBrand("x\"\nclient-policy player=Admin \\").orElseThrow();
+    var change = new ClientSession(new Object()).recordBrand("x\"\nclient-policy player=Admin \\").orElseThrow();
 
     // Act
     String line = ObservationLog.observation(who, ClientOrigin.JAVA, change);
@@ -149,7 +232,7 @@ class ClientSessionTest {
     // Arrange
     var config = ClientPolicyConfig.parseYaml("deny:\n  - {label: Wurst, brand: '.*wurst.*'}\n")
         .config().orElseThrow();
-    var snapshot = new ClientSession.Snapshot("wurst", List.of("fabric:register"));
+    var snapshot = new ClientSession.Snapshot("wurst", List.of("fabric:register"), 0);
     var verdict = RefusalPolicy.evaluate(config, ClientOrigin.JAVA, () -> false, "wurst",
         snapshot.channels());
 

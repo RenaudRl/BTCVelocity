@@ -111,7 +111,9 @@ public record VoxelMapConsent(boolean enabled, Map<String, Object> defaults,
           errors.add(path + "." + key + ": expected true or false, found " + value);
         }
       } else if (VoxelMapSettingsPacket.TELEPORT_COMMAND_KEY.equals(key)) {
-        result.put(key, String.valueOf(value));
+        // Empty or null means "no command": the key is omitted, and in a server block it removes
+        // the default's command. Never the text "null".
+        result.put(key, value == null ? "" : value.toString().trim());
       } else {
         errors.add(path + "." + key + ": unknown setting, the client reads "
             + VoxelMapSettingsPacket.BOOLEAN_KEYS + " and "

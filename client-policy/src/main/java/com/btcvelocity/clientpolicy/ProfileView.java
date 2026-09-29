@@ -52,6 +52,9 @@ final class ProfileView {
     lines.add("Channels (" + snapshot.channels().size() + "): " + (snapshot.channels().isEmpty()
         ? "none" : snapshot.channels().stream().limit(40).map(ObservationLog::quote)
             .reduce((a, b) -> a + ", " + b).orElse("")));
+    if (snapshot.droppedChannels() > 0) {
+      lines.add("Channel cap reached: " + snapshot.droppedChannels() + " further channel(s) not kept.");
+    }
     if (ClientCoherence.isVanillaWithModChannels(snapshot.brand(), snapshot.channels())) {
       lines.add("Inconsistent: brand vanilla but non-minecraft channels registered"
           + " (a clue, not proof; no action is taken).");

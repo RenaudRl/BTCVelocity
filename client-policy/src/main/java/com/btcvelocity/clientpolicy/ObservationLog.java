@@ -17,6 +17,7 @@
 
 package com.btcvelocity.clientpolicy;
 
+import com.google.gson.JsonParser;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -55,14 +56,15 @@ final class ObservationLog {
       case BRAND_DECLARED -> "brand-declared";
       case BRAND_CHANGED -> "brand-changed";
       case CHANNELS_ADDED -> "channels-added";
+      case CHANNELS_REMOVED -> "channels-removed";
     };
     StringBuilder line = head(who, origin, event);
-    if (observation.kind() == ClientSession.Kind.CHANNELS_ADDED) {
-      line.append(" added=").append(list(observation.added()));
-      line.append(" brand=").append(quote(observation.brand()));
-    } else {
-      line.append(" brand=").append(quote(observation.brand()));
+    switch (observation.kind()) {
+      case CHANNELS_ADDED -> line.append(" added=").append(list(observation.values()));
+      case CHANNELS_REMOVED -> line.append(" removed=").append(list(observation.values()));
+      default -> { }
     }
+    line.append(" brand=").append(quote(observation.brand()));
     line.append(" channels=").append(observation.channelTotal());
     return line.toString();
   }
@@ -81,6 +83,19 @@ final class ObservationLog {
     return head(who, origin, "inconsistency") + " detail=\"brand vanilla with non-minecraft"
         + " channels\" brand=" + quote(brand) + " modChannels=" + list(modChannels)
         + " action=none";
+  }
+
+  /**
+   * The one-off notice that a session hit the channel cap.
+   *
+   * @param who the session
+   * @param origin what the proxy measured of the platform
+   * @param dropped how many channels were refused storage so far
+   * @return the journal line
+   */
+  static String overflow(Who who, ClientOrigin origin, int dropped) {
+    return head(who, origin, "channels-overflow") + " cap=" + ClientSession.MAX_CHANNELS
+        + " dropped=" + dropped + " (further drops are counted, not logged)";
   }
 
   /**
@@ -109,10 +124,17 @@ final class ObservationLog {
       case WOULD_REFUSE -> "would-refuse";
       case REFUSE -> "refused";
       case EXEMPT_BEDROCK -> "exempt-bedrock";
+      case EXEMPT_UNKNOWN -> "exempt-unknown";
       case EXEMPT_BYPASS -> "exempt-bypass";
       case NONE -> "no-match";
     };
     DenyRule rule = verdict.rule().orElseThrow();
+    if (verdict.action() == RefusalPolicy.Action.EXEMPT_UNKNOWN) {
+      return PREFIX + " player=" + safe(who.name()) + " uuid=" + who.uuid()
+          + " origin UNKNOWN, refusal skipped rule=" + quote(rule.label()) + " target="
+          + rule.target() + " value=" + quote(verdict.value().orElse("")) + " mode="
+          + (mode == ClientPolicyConfig.Mode.ENFORCE ? "enforce" : "dry-run");
+    }
     return head(who, origin, event) + " rule=" + quote(rule.label()) + " target="
         + rule.target() + " value=" + quote(verdict.value().orElse("")) + " mode="
         + (mode == ClientPolicyConfig.Mode.ENFORCE ? "enforce" : "dry-run");
@@ -128,11 +150,21 @@ final class ObservationLog {
    * @return the journal line
    */
   static String consent(Who who, ClientOrigin origin, String server, ConsentPlanner.Delta delta) {
-    String xaero = delta.xaeroMessage() == null ? "none"
-        : delta.xaeroMessage().replace(String.valueOf(SECTION), "");
+    String xaero = delta.xaeroMessages().isEmpty() ? "none"
+        : delta.xaeroMessages().stream().map(code -> code.replace(String.valueOf(SECTION), ""))
+            .collect(Collectors.joining("+"));
     return head(who, origin, "consent-sent") + " server=" + quote(server) + " xaero="
-        + quote(xaero) + " voxelmap=" + quote(delta.voxelJson() == null ? "none"
-        : delta.voxelJson());
+        + quote(xaero) + " voxelmap=" + quote(readable(delta.voxelJson()));
+  }
+
+  /** Renders the settings JSON we built ourselves as {@code key=value, ...}. */
+  private static String readable(String json) {
+    if (json == null) {
+      return "none";
+    }
+    return JsonParser.parseString(json).getAsJsonObject().entrySet().stream()
+        .map(entry -> entry.getKey() + "=" + entry.getValue().getAsString())
+        .collect(Collectors.joining(", "));
   }
 
   private static StringBuilder head(Who who, ClientOrigin origin, String event) {
