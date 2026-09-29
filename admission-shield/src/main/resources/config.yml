@@ -1,0 +1,68 @@
+# BTC Admission Shield - local anti-VPN.
+#
+# A connection whose address is in a datacenter list or a Tor exit list is refused. Everything is
+# decided in memory from files kept on this proxy. NO player address is ever sent anywhere: the
+# only outbound traffic is the periodic download of the public lists below, which carries no
+# player data. There is no remote API.
+#
+# Every decision that matters (each refusal, each "observed") is written as one key=value line to
+# the logger "btc.admission.journal". Route that logger to its own file in the proxy's log4j2
+# configuration if you want a separate journal. Retention of that file (180 days) is a matter of
+# the log rotation configured there, not of this module.
+#
+# Staff command: /admission why <pseudo|ip>   and   /admission status
+# Permission: btc.admission.staff (the console always has it).
+
+# enforce : refuse listed addresses.  observe : only journal them (dry run), let everybody in.
+mode: enforce
+
+# Addresses Geyser connects from. A connection from one of these is NEVER judged on that address:
+# every Bedrock player shares it. Floodgate's record of the player's real address is judged
+# instead when it can be read; otherwise the player is admitted and the journal says
+# "bedrock, ip reelle inconnue". IP literals or CIDR, IPv4 or IPv6.
+geyser-addresses:
+  - 127.0.0.1
+  - "::1"
+
+# Let in even from a listed address.
+exemptions:
+  # A name, a UUID, or both (both = both must match, the strongest form). The name is only
+  # trusted once the login is authenticated.
+  players: []
+  #  - name: SomeStaffMember
+  #  - uuid: 00000000-0000-0000-0000-000000000000
+  #  - name: SomePartner
+  #    uuid: 11111111-1111-1111-1111-111111111111
+  # Networks (CIDR or single address), e.g. an office or a partner's fixed connection.
+  networks: []
+  #  - 203.0.113.0/24
+
+# Shown to a refused player, MiniMessage format. {code} is replaced by the cause code
+# (ADM-VPN-DC for datacenter, ADM-VPN-TOR for Tor), which is also in the journal line.
+messages:
+  datacenter: "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un réseau d'hébergement ou de VPN. Si vous n'utilisez pas de VPN, contactez le staff avec le code <white>{code}</white>.</gray>"
+  tor: "<red>Connexion refusée.</red>\n<gray>Les connexions depuis le réseau Tor ne sont pas acceptées. Contactez le staff avec le code <white>{code}</white>.</gray>"
+
+lists:
+  # How often the lists are downloaded again. A failed download keeps the last valid list.
+  refresh-hours: 24
+  download-timeout-seconds: 30
+  max-download-megabytes: 32
+  # Files are kept in <this directory>/lists/. A source needs: class (datacenter | tor), an https
+  # url, and a plain file name. Leave this section out to use the three lists below.
+  #  - X4BNet lists_vpn (MIT): networks of hosting providers and VPNs, built from ASNs.
+  #  - FireHOL tor_exits: built from the Tor Project's own exit list, updated every 5 minutes.
+  #    IPv4 only: IPv6 Tor exits are not covered.
+  sources:
+    x4bnet-datacenter-ipv4:
+      class: datacenter
+      url: https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/datacenter/ipv4.txt
+      file: x4bnet-datacenter-ipv4.txt
+    x4bnet-datacenter-ipv6:
+      class: datacenter
+      url: https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/datacenter/ipv6.txt
+      file: x4bnet-datacenter-ipv6.txt
+    firehol-tor-exits:
+      class: tor
+      url: https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/tor_exits.ipset
+      file: firehol-tor-exits.ipset

@@ -38,6 +38,7 @@ sequenceOf(
     "arrival-router",
     "pack-policy",
     "platform-resolver",
+    "admission-shield",
 ).forEach {
     val project = ":velocity-$it"
     include(project)
