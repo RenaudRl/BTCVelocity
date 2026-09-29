@@ -69,14 +69,46 @@ class CidrSetTest {
   }
 
   @Test
-  void prefixZeroCoversTheWholeFamilyAndOnlyThatFamily() {
-    final CidrSet v4 = setOf("0.0.0.0/0");
-    final CidrSet v6 = setOf("::/0");
+  void aNetworkWiderThanSlash8OrSlash16IsRejectedWhateverTheListSays() {
+    // Arrange - one such line in a poisoned list would classify a large share of the Internet
+    final CidrSet.Builder builder = CidrSet.builder();
 
-    assertTrue(v4.contains(ip("203.0.113.9")));
+    // Act & Assert
+    assertFalse(builder.add("0.0.0.0/0"));
+    assertFalse(builder.add("128.0.0.0/1"));
+    assertFalse(builder.add("10.0.0.0/7"));
+    assertFalse(builder.add("::/0"));
+    assertFalse(builder.add("2000::/3"));
+    assertFalse(builder.add("2001::/15"));
+    assertFalse(builder.add("::ffff:0.0.0.0/96"), "a mapped /96 is an IPv4 /0");
+    assertFalse(builder.add("::ffff:10.0.0.0/103"), "a mapped /103 is an IPv4 /7");
+    final CidrSet rejected = builder.build();
+    assertTrue(rejected.isEmpty());
+    assertFalse(rejected.contains(ip("203.0.113.9")));
+    assertFalse(rejected.contains(ip("2001:db8::1")));
+  }
+
+  @Test
+  void theWidestAcceptedNetworksAreSlash8AndSlash16AndStayInTheirFamily() {
+    final CidrSet v4 = setOf("10.0.0.0/8", "::ffff:11.0.0.0/104");
+    final CidrSet v6 = setOf("2001::/16");
+
+    assertTrue(v4.contains(ip("10.255.0.1")));
+    assertTrue(v4.contains(ip("11.1.2.3")));
+    assertFalse(v4.contains(ip("12.0.0.0")));
     assertFalse(v4.contains(ip("2001:db8::1")));
     assertTrue(v6.contains(ip("2001:db8::1")));
-    assertFalse(v6.contains(ip("203.0.113.9")));
+    assertFalse(v6.contains(ip("2002::1")));
+    assertFalse(v6.contains(ip("10.0.0.1")));
+  }
+
+  @Test
+  void coverageCountsEachAddressOnceAndApproximatesIpv6InSlash64Networks() {
+    final CidrSet set = setOf("192.0.2.0/24", "192.0.2.128/25", "198.51.100.7",
+        "2001:db8::/48", "2001:db8::/64", "2001:db8:1::1/128");
+
+    assertEquals(257, set.ipv4AddressCount(), "the /25 lies inside the /24");
+    assertEquals(65_536 + 1, set.ipv6Slash64Count(), 0.0, "a /48 is 65 536 /64s, a host is one");
   }
 
   @Test

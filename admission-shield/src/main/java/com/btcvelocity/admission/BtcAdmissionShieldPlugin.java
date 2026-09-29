@@ -30,13 +30,19 @@ import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetAddress;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,8 +56,12 @@ import org.slf4j.LoggerFactory;
  * login event settles the rest once the account is authenticated (nominative exemptions, and the
  * real address of a Bedrock player).
  *
- * <p>Floodgate is an <em>optional</em> dependency: without it, every Bedrock player behind Geyser
- * is admitted and journaled as "ip r&eacute;elle inconnue".
+ * <p>Floodgate is an <em>optional</em> dependency: without it nobody is recognised as a Bedrock
+ * player, so a connection from a {@code geyser-addresses} entry is judged on that address. The
+ * setting is empty by default until the bench has measured what the proxy sees (task 13.1).
+ *
+ * <p>Each refusal is also told to the staff online ({@value AdmissionCommand#PERMISSION}), at
+ * most one message every {@link StaffAlerts#WINDOW}.
  */
 @Plugin(
     id = "btc-admission-shield",
@@ -65,6 +75,7 @@ public final class BtcAdmissionShieldPlugin {
   private static final String COMMAND = "admission";
   private static final short FIRST = 1000;
   private static final long FIRST_DOWNLOAD_DELAY_SECONDS = 2;
+  private static final String LOGGING_FRAGMENT = "log4j2-admission-journal.xml";
 
   private final ProxyServer proxy;
   private final Logger logger;
@@ -76,6 +87,8 @@ public final class BtcAdmissionShieldPlugin {
   private volatile AdmissionJournal journal;
   private volatile BedrockAddressSource bedrock = BedrockAddressSource.NONE;
   private volatile ScheduledTask refreshTask;
+  private volatile ScheduledTask alertTask;
+  private volatile StaffAlerts alerts;
 
   /**
    * Creates the plugin.
@@ -104,8 +117,9 @@ public final class BtcAdmissionShieldPlugin {
   public void onProxyInitialize(final ProxyInitializeEvent event) {
     final AdmissionConfig settings =
         AdmissionConfig.loadOrCreate(this.dataDirectory.resolve("config.yml"), this.logger);
-    final ListStore store =
-        new ListStore(this.dataDirectory.resolve("lists"), this.logger, this.clock);
+    writeLoggingFragment();
+    final ListStore store = new ListStore(this.dataDirectory.resolve("lists"), this.logger,
+        this.clock, settings.maxEntries());
     store.loadAll(settings.sources());
     if (!store.hasAnyList()) {
       this.logger.warn("No list is loaded: connections are NOT filtered until a download"
@@ -113,28 +127,40 @@ public final class BtcAdmissionShieldPlugin {
     }
 
     this.bedrock = floodgateSource();
+    if (!settings.geyserAddresses().isEmpty() && this.bedrock == BedrockAddressSource.NONE) {
+      this.logger.warn("geyser-addresses is set but Floodgate is absent: nobody can be"
+          + " recognised as a Bedrock player, so every connection from those addresses is judged"
+          + " on them.");
+    }
     this.journal = new AdmissionJournal(LoggerFactory.getLogger(AdmissionJournal.LOGGER_NAME),
         this.clock);
+    this.alerts = new StaffAlerts(this.clock, this::tellStaff);
     this.engine = new AdmissionEngine(settings, store);
     this.config = settings;
     this.proxy.getCommandManager().register(
         this.proxy.getCommandManager().metaBuilder(COMMAND).plugin(this).build(),
         new AdmissionCommand(this.journal, store, settings));
+    this.alertTask = this.proxy.getScheduler()
+        .buildTask(this, this.alerts::flushIfDue)
+        .delay(StaffAlerts.WINDOW)
+        .repeat(StaffAlerts.WINDOW)
+        .schedule();
     scheduleRefresh(settings, store);
     this.logger.info("Admission shield up: mode {}, {} list(s) configured, refresh every {} h.",
         settings.mode(), settings.sources().size(), settings.refreshInterval().toHours());
   }
 
   /**
-   * Stops the periodic refresh.
+   * Stops the periodic tasks.
    *
    * @param event the proxy stop
    */
   @Subscribe
   public void onProxyShutdown(final ProxyShutdownEvent event) {
-    final ScheduledTask task = this.refreshTask;
-    if (task != null) {
-      task.cancel();
+    for (ScheduledTask task : new ScheduledTask[] {this.refreshTask, this.alertTask}) {
+      if (task != null) {
+        task.cancel();
+      }
     }
   }
 
@@ -153,16 +179,19 @@ public final class BtcAdmissionShieldPlugin {
     if (remote == null) {
       return;
     }
-    final Attempt attempt = new Attempt(event.getUsername(), null, remote, null);
+    final Attempt attempt = Attempt.claimed(event.getUsername(), remote);
     final Verdict verdict = current.decide(attempt, Phase.PRE_LOGIN);
-    this.journal.record(attempt, verdict, Phase.PRE_LOGIN, this.config.mode());
+    final Optional<AdmissionJournal.Entry> entry =
+        this.journal.record(attempt, verdict, Phase.PRE_LOGIN, this.config.mode());
     if (verdict.action() == Verdict.Action.REFUSE) {
       event.setResult(PreLoginEvent.PreLoginComponentResult.denied(refusal(verdict)));
+      entry.ifPresent(this.alerts::onRefusal);
     }
   }
 
   /**
-   * Settles what the pre-login deferred, now that the account is authenticated.
+   * Settles what the pre-login deferred, now that the account is authenticated, and applies again
+   * a pre-login refusal that a later listener may have overturned.
    *
    * @param event the login
    */
@@ -177,16 +206,60 @@ public final class BtcAdmissionShieldPlugin {
     if (remote == null) {
       return;
     }
-    final Attempt claimed = new Attempt(player.getUsername(), null, remote, null);
-    if (current.decide(claimed, Phase.PRE_LOGIN).action() != Verdict.Action.DEFER) {
+    final UUID uuid = player.getUniqueId();
+    final Attempt attempt = Attempt.claimed(player.getUsername(), remote).authenticated(
+        player.getUsername(), uuid, this.bedrock.isFloodgatePlayer(uuid),
+        this.bedrock.realAddressOf(uuid).orElse(null));
+    final Optional<Verdict> settled = current.decideAtLogin(attempt);
+    if (settled.isEmpty()) {
       return;
     }
-    final Attempt attempt = new Attempt(player.getUsername(), player.getUniqueId(), remote,
-        this.bedrock.realAddressOf(player.getUniqueId()).orElse(null));
-    final Verdict verdict = current.decide(attempt, Phase.LOGIN);
-    this.journal.record(attempt, verdict, Phase.LOGIN, this.config.mode());
+    final Verdict verdict = settled.get();
+    final Optional<AdmissionJournal.Entry> entry =
+        this.journal.record(attempt, verdict, Phase.LOGIN, this.config.mode());
+    if (verdict.origin() == Verdict.Origin.GEYSER_ADDRESS_NOT_FLOODGATE) {
+      this.logger.warn("{} connected from Geyser address {} without being a Floodgate player;"
+          + " judged on that address like anyone ({}).",
+          AdmissionJournal.value(player.getUsername()), remote.getHostAddress(),
+          Verdict.Basis.GEYSER_ADDRESS_NOT_FLOODGATE.label());
+    }
     if (verdict.action() == Verdict.Action.REFUSE) {
       event.setResult(ResultedEvent.ComponentResult.denied(refusal(verdict)));
+      entry.ifPresent(this.alerts::onRefusal);
+    }
+  }
+
+  private void tellStaff(final String message) {
+    final Component text = Component.text(message, NamedTextColor.RED);
+    for (Player online : this.proxy.getAllPlayers()) {
+      if (online.hasPermission(AdmissionCommand.PERMISSION)) {
+        online.sendMessage(text);
+      }
+    }
+  }
+
+  /**
+   * Puts the log4j2 fragment for the journal next to the configuration, once, so that the
+   * operator has it at hand (see the module README: it only takes effect at the next start of
+   * the proxy, through {@code -Dlog4j2.configurationFile}).
+   */
+  private void writeLoggingFragment() {
+    final Path target = this.dataDirectory.resolve(LOGGING_FRAGMENT);
+    if (Files.exists(target)) {
+      return;
+    }
+    try (InputStream fragment =
+        BtcAdmissionShieldPlugin.class.getResourceAsStream("/" + LOGGING_FRAGMENT)) {
+      if (fragment == null) {
+        this.logger.warn("The bundled {} is missing from the jar.", LOGGING_FRAGMENT);
+        return;
+      }
+      Files.createDirectories(this.dataDirectory);
+      Files.copy(fragment, target);
+      this.logger.info("Wrote {}: add it to -Dlog4j2.configurationFile to give the journal its"
+          + " own file, rotated daily and purged after 180 days.", target);
+    } catch (IOException failure) {
+      this.logger.warn("Could not write {}: {}", target, failure.toString());
     }
   }
 
@@ -221,6 +294,10 @@ public final class BtcAdmissionShieldPlugin {
   private void scheduleRefresh(final AdmissionConfig settings, final ListStore store) {
     final ListRefresher refresher = new ListRefresher(store,
         ListFetcher.http(settings.downloadTimeout(), settings.maxDownloadBytes()), this.logger);
+    final int purged = refresher.purgeLeftovers();
+    if (purged > 0) {
+      this.logger.info("Deleted {} unfinished download(s) left by a previous run.", purged);
+    }
     final Duration interval = settings.refreshInterval();
     final List<ListSource> due = new ArrayList<>();
     Duration untilNextFull = interval;

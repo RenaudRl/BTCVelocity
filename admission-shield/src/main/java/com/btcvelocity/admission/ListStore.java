@@ -33,7 +33,8 @@ import org.slf4j.Logger;
  *
  * <p>The store is <em>open by construction</em>: with no file, or only unreadable ones, it knows
  * no address and {@link #classify} answers empty for everything. An absent list must never turn
- * into a refusal.
+ * into a refusal. Neither does a non-public address ever get a class, nor a tunnelled one its
+ * tunnel's class (see {@link AddressPolicy}).
  *
  * <p>Readers see an immutable snapshot swapped in one write, so a lookup never waits for a reload
  * and never sees a half-loaded list.
@@ -57,6 +58,7 @@ public final class ListStore implements IpClassifier {
   private final Logger logger;
   private final Clock clock;
   private final Object writeLock = new Object();
+  private final int maxEntries;
   private volatile List<Loaded> loaded = List.of();
 
   /**
@@ -65,11 +67,14 @@ public final class ListStore implements IpClassifier {
    * @param directory where the list files are kept
    * @param logger where problems are reported
    * @param clock the source of "loaded at"
+   * @param maxEntries the ceiling on the entries of one list; a longer one is not loaded
    */
-  public ListStore(final Path directory, final Logger logger, final Clock clock) {
+  public ListStore(final Path directory, final Logger logger, final Clock clock,
+      final int maxEntries) {
     this.directory = directory;
     this.logger = logger;
     this.clock = clock;
+    this.maxEntries = maxEntries;
   }
 
   /**
@@ -79,6 +84,15 @@ public final class ListStore implements IpClassifier {
    */
   public Path directory() {
     return this.directory;
+  }
+
+  /**
+   * The ceiling on the entries of one list.
+   *
+   * @return the most entries a list may hold and still be loaded
+   */
+  public int maxEntries() {
+    return this.maxEntries;
   }
 
   /**
@@ -114,9 +128,10 @@ public final class ListStore implements IpClassifier {
           source.id(), file, unreadable.toString());
       return false;
     }
-    if (result.validLines() == 0) {
-      this.logger.error("List '{}' in {} holds no valid entry ({} bad lines). Keeping the"
-          + " previous one.", source.id(), file, result.invalidLines());
+    final String rejection = ListGuards.absoluteRejection(result, this.maxEntries);
+    if (rejection != null) {
+      this.logger.error("List '{}' in {} was rejected ({}). Keeping the previous one, if any.",
+          source.id(), file, rejection);
       return false;
     }
     if (result.invalidLines() > 0) {
@@ -171,11 +186,26 @@ public final class ListStore implements IpClassifier {
 
   @Override
   public Optional<Match> classify(final InetAddress address) {
+    final Optional<InetAddress> lookedUp = AddressPolicy.classifiable(address);
+    if (lookedUp.isEmpty()) {
+      return Optional.empty();
+    }
     for (Loaded list : this.loaded) {
-      if (list.set().contains(address)) {
+      if (list.set().contains(lookedUp.get())) {
         return Optional.of(new Match(list.source().ipClass(), list.source().id()));
       }
     }
     return Optional.empty();
+  }
+
+  /**
+   * The list currently in use for a source.
+   *
+   * @param sourceId the id of the source
+   * @return the loaded list, or empty if none is loaded for it
+   */
+  public Optional<Loaded> loadedFor(final String sourceId) {
+    final int at = indexOf(this.loaded, sourceId);
+    return at < 0 ? Optional.empty() : Optional.of(this.loaded.get(at));
   }
 }

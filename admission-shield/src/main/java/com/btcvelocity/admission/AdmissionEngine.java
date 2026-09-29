@@ -19,6 +19,7 @@ package com.btcvelocity.admission;
 
 import com.btcvelocity.admission.Verdict.Action;
 import com.btcvelocity.admission.Verdict.Basis;
+import com.btcvelocity.admission.Verdict.Origin;
 import java.net.InetAddress;
 import java.util.Optional;
 
@@ -27,11 +28,13 @@ import java.util.Optional;
  *
  * <p>The rule, in order:
  * <ol>
- *   <li>A connection from Geyser's own address is never judged: every Bedrock player shares it,
- *       and a datacenter address for Geyser would refuse them all. At the pre-login the decision
- *       waits for the login; there, the address Floodgate recorded is judged if it is known,
- *       otherwise the player is admitted and the journal says "bedrock, ip r&eacute;elle
- *       inconnue".</li>
+ *   <li>A Floodgate player coming from Geyser's own address is never judged on that address:
+ *       every Bedrock player shares it, and a datacenter address for Geyser would refuse them
+ *       all. At the pre-login the decision waits for the login; there, the address Floodgate
+ *       recorded is judged if it is known, otherwise the player is admitted and the journal says
+ *       "bedrock, ip r&eacute;elle inconnue". A connection from a Geyser address that is
+ *       <em>not</em> a Floodgate player is an anomaly: it is journaled as such and judged on
+ *       its address like any other.</li>
  *   <li>An address in no list is admitted, silently. So is every address while no list is loaded:
  *       an absent list never refuses anybody.</li>
  *   <li>A listed address in an exempted network is admitted (and journaled).</li>
@@ -66,38 +69,74 @@ public final class AdmissionEngine {
    */
   public Verdict decide(final Attempt attempt, final Phase phase) {
     InetAddress judged = attempt.remote();
+    Origin origin = Origin.DIRECT;
     if (this.config.geyserAddresses().contains(attempt.remote())) {
       if (phase == Phase.PRE_LOGIN) {
-        return new Verdict(Action.DEFER, Basis.GEYSER_ORIGIN, null, null, null);
+        return new Verdict(Action.DEFER, Basis.GEYSER_ORIGIN, Origin.GEYSER_UNCONFIRMED, null,
+            null, null);
       }
-      final InetAddress real = attempt.bedrockReal();
-      if (real == null || this.config.geyserAddresses().contains(real)) {
-        return new Verdict(Action.ADMIT, Basis.BEDROCK_IP_UNKNOWN, null, null, null);
+      if (attempt.floodgatePlayer()) {
+        final InetAddress real = attempt.bedrockReal();
+        if (real == null || this.config.geyserAddresses().contains(real)) {
+          return new Verdict(Action.ADMIT, Basis.BEDROCK_IP_UNKNOWN, Origin.GEYSER_FLOODGATE, null,
+              null, null);
+        }
+        judged = real;
+        origin = Origin.GEYSER_FLOODGATE;
+      } else {
+        // Only Floodgate players are entitled to the Geyser exception. Anything else coming from
+        // that address (a Java client on the Geyser host, a spoofed forward) is judged like anyone.
+        origin = Origin.GEYSER_ADDRESS_NOT_FLOODGATE;
       }
-      judged = real;
     }
 
     final Optional<IpClassifier.Match> match = this.classifier.classify(judged);
     if (match.isEmpty()) {
-      return new Verdict(Action.ADMIT, Basis.CLEAN, judged, null, null);
+      final Basis basis =
+          origin == Origin.GEYSER_ADDRESS_NOT_FLOODGATE ? Basis.GEYSER_ADDRESS_NOT_FLOODGATE
+              : Basis.CLEAN;
+      return new Verdict(Action.ADMIT, basis, origin, judged, null, null);
     }
     final IpClass ipClass = match.get().ipClass();
     final String sourceId = match.get().sourceId();
 
     if (this.config.exemptions().coversAddress(judged)) {
-      return new Verdict(Action.ADMIT, Basis.EXEMPT_NETWORK, judged, ipClass, sourceId);
+      return new Verdict(Action.ADMIT, Basis.EXEMPT_NETWORK, origin, judged, ipClass, sourceId);
     }
     if (phase == Phase.PRE_LOGIN) {
       if (this.config.exemptions().mayCoverLater(attempt.username())) {
-        return new Verdict(Action.DEFER, Basis.AWAITING_IDENTITY, judged, ipClass, sourceId);
+        return new Verdict(Action.DEFER, Basis.AWAITING_IDENTITY, origin, judged, ipClass,
+            sourceId);
       }
     } else if (attempt.uuid() != null
         && this.config.exemptions().coversPlayer(attempt.username(), attempt.uuid())) {
-      return new Verdict(Action.ADMIT, Basis.EXEMPT_PLAYER, judged, ipClass, sourceId);
+      return new Verdict(Action.ADMIT, Basis.EXEMPT_PLAYER, origin, judged, ipClass, sourceId);
     }
 
     final Action action =
         this.config.mode() == AdmissionConfig.Mode.ENFORCE ? Action.REFUSE : Action.OBSERVE;
-    return new Verdict(action, Basis.LISTED, judged, ipClass, sourceId);
+    return new Verdict(action, Basis.LISTED, origin, judged, ipClass, sourceId);
+  }
+
+  /**
+   * What the login must do about a connection, now that the account is authenticated.
+   *
+   * <p>The pre-login is judged again from what it knew (the address, the name). If it deferred,
+   * the login decides. If it refused, the refusal stands and is applied again: another plugin
+   * listening to the pre-login may have turned the refusal back into an admission, and the
+   * login is the last point where the proxy can still close the door. If it admitted or only
+   * observed, it has already said everything and nothing more is written.
+   *
+   * @param authenticated the connection with its authenticated identity
+   * @return the verdict to journal and apply at the login, or empty when there is none
+   */
+  public Optional<Verdict> decideAtLogin(final Attempt authenticated) {
+    final Verdict preLogin = decide(
+        Attempt.claimed(authenticated.username(), authenticated.remote()), Phase.PRE_LOGIN);
+    return switch (preLogin.action()) {
+      case DEFER -> Optional.of(decide(authenticated, Phase.LOGIN));
+      case REFUSE -> Optional.of(preLogin);
+      case ADMIT, OBSERVE -> Optional.empty();
+    };
   }
 }

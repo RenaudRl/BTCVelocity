@@ -25,14 +25,16 @@ import org.jspecify.annotations.Nullable;
  *
  * @param action what to do with the connection
  * @param basis why
+ * @param origin how the connection reached the proxy
  * @param judged the address that was judged, or {@code null} when none was (Geyser's own address
- *     is never judged)
+ *     is never judged as a Bedrock player's)
  * @param ipClass the class the address was found in, or {@code null}
  * @param sourceId the list that named that class, or {@code null}
  */
 public record Verdict(
     Action action,
     Basis basis,
+    Origin origin,
     @Nullable InetAddress judged,
     @Nullable IpClass ipClass,
     @Nullable String sourceId) {
@@ -49,6 +51,33 @@ public record Verdict(
     DEFER
   }
 
+  /** How the connection reached the proxy. */
+  public enum Origin {
+    /** From the address it is judged on. */
+    DIRECT("direct"),
+    /** From a Geyser address, at the pre-login: Floodgate cannot be asked yet. */
+    GEYSER_UNCONFIRMED("geyser-unconfirmed"),
+    /** From a Geyser address, by a player Floodgate knows. */
+    GEYSER_FLOODGATE("geyser-floodgate"),
+    /** From a Geyser address, but not a Floodgate player: an anomaly, judged like anyone. */
+    GEYSER_ADDRESS_NOT_FLOODGATE("geyser-address-not-floodgate");
+
+    private final String label;
+
+    Origin(final String label) {
+      this.label = label;
+    }
+
+    /**
+     * The words written in the journal.
+     *
+     * @return the label
+     */
+    public String label() {
+      return this.label;
+    }
+  }
+
   /** The reason behind the action, which is also what the journal states. */
   public enum Basis {
     /** The address is in no list. Nothing is written. */
@@ -63,6 +92,8 @@ public record Verdict(
     GEYSER_ORIGIN("geyser-origin"),
     /** A Bedrock player whose real address is unknown: admitted, and said so. */
     BEDROCK_IP_UNKNOWN("bedrock, ip réelle inconnue"),
+    /** From a Geyser address without being a Floodgate player, and not listed. */
+    GEYSER_ADDRESS_NOT_FLOODGATE("geyser-address-not-floodgate"),
     /** Listed, and a nominative exemption might cover the player once authenticated. */
     AWAITING_IDENTITY("awaiting-identity");
 
@@ -87,13 +118,14 @@ public record Verdict(
    *
    * <p>Every refusal and every observation, as required, plus the admissions that a person
    * reading the journal would otherwise wonder about: a listed address let in by an exemption,
-   * a Bedrock player nobody could judge.
+   * a Bedrock player nobody could judge, a Geyser address that is not a Floodgate player.
    *
    * @return {@code true} if the verdict is written
    */
   public boolean isJournaled() {
     return switch (this.basis) {
-      case LISTED, EXEMPT_NETWORK, EXEMPT_PLAYER, BEDROCK_IP_UNKNOWN -> true;
+      case LISTED, EXEMPT_NETWORK, EXEMPT_PLAYER, BEDROCK_IP_UNKNOWN,
+          GEYSER_ADDRESS_NOT_FLOODGATE -> true;
       case CLEAN, GEYSER_ORIGIN, AWAITING_IDENTITY -> false;
     };
   }

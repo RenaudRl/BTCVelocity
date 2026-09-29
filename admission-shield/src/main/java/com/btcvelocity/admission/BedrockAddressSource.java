@@ -21,12 +21,29 @@ import java.net.InetAddress;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Where the real address of a Bedrock player can be read, if anywhere. */
-@FunctionalInterface
+/** Who is a Bedrock player, and where their real address can be read, if anywhere. */
 public interface BedrockAddressSource {
 
-  /** A source that knows nothing: every Bedrock player's address stays unknown. */
-  BedrockAddressSource NONE = uuid -> Optional.empty();
+  /** A source that knows nothing: nobody is a known Bedrock player. */
+  BedrockAddressSource NONE = new BedrockAddressSource() {
+    @Override
+    public boolean isFloodgatePlayer(final UUID uuid) {
+      return false;
+    }
+
+    @Override
+    public Optional<InetAddress> realAddressOf(final UUID uuid) {
+      return Optional.empty();
+    }
+  };
+
+  /**
+   * Whether Floodgate knows this player as a Bedrock player.
+   *
+   * @param uuid the player's UUID as the proxy knows it
+   * @return {@code true} for a player that came through Geyser and Floodgate
+   */
+  boolean isFloodgatePlayer(UUID uuid);
 
   /**
    * The address a Bedrock player really connected from.

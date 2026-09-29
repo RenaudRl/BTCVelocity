@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    BTC Admission Shield - log4j2 fragment for the admission journal.
+
+    Gives the logger "btc.admission.journal" a file of its own, rotated every day and deleted
+    after 180 days (the retention of connection addresses, Sentinel 13.7). additivity="false"
+    keeps the journal lines, which carry player addresses, out of logs/latest.log, whose archives
+    Velocity never deletes.
+
+    Loaded as the second part of a composite configuration, after the proxy's own log4j2.xml:
+
+      java -Dlog4j2.configurationFile=log4j2.xml,plugins/btc-admission-shield/log4j2-admission-journal.xml -jar velocity.jar
+
+    Without it, the journal lines still go to the console and to logs/latest.log, with no purge.
+    See admission-shield/README.md.
+-->
+<Configuration status="warn" shutdownHook="disable">
+  <Appenders>
+    <RollingRandomAccessFile name="AdmissionJournal"
+      fileName="logs/admission/journal.log"
+      filePattern="logs/admission/journal-%d{yyyy-MM-dd}.log.gz"
+      immediateFlush="true">
+      <PatternLayout pattern="%msg%n"/>
+      <Policies>
+        <TimeBasedTriggeringPolicy interval="1"/>
+      </Policies>
+      <DefaultRolloverStrategy>
+        <Delete basePath="logs/admission" maxDepth="1">
+          <IfFileName glob="journal-*.log.gz"/>
+          <IfLastModified age="P180D"/>
+        </Delete>
+      </DefaultRolloverStrategy>
+    </RollingRandomAccessFile>
+  </Appenders>
+
+  <Loggers>
+    <Logger name="btc.admission.journal" level="info" additivity="false">
+      <AppenderRef ref="AdmissionJournal"/>
+    </Logger>
+  </Loggers>
+</Configuration>

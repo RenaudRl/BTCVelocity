@@ -1,0 +1,114 @@
+/*
+ * Copyright (C) 2026 Velocity Contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.btcvelocity.admission;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.function.Consumer;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * Tells the staff online about refusals, at most one message per window.
+ *
+ * <p>The first refusal after a quiet window is said at once. Those that follow within the window
+ * are counted, and said together, with the latest one as an example, when the window is over:
+ * a wave of datacenter connections produces one line every {@link #WINDOW}, not a flood.
+ * {@link #flushIfDue()} is meant to be called on a timer so that the last batch is not held until
+ * the next refusal.
+ *
+ * <p>Safe to call from several threads.
+ */
+public final class StaffAlerts {
+
+  /** The shortest time between two messages. */
+  public static final Duration WINDOW = Duration.ofSeconds(10);
+
+  private final Clock clock;
+  private final Consumer<String> sink;
+  private @Nullable Instant lastSent;
+  private int pending;
+  private AdmissionJournal.@Nullable Entry latest;
+
+  /**
+   * Creates the alerts.
+   *
+   * @param clock the source of "now"
+   * @param sink receives each message, to be shown to the staff online
+   */
+  public StaffAlerts(final Clock clock, final Consumer<String> sink) {
+    this.clock = clock;
+    this.sink = sink;
+  }
+
+  /**
+   * Counts a refusal, and says it now if the window allows.
+   *
+   * @param refusal the journal entry of the refusal
+   */
+  public void onRefusal(final AdmissionJournal.Entry refusal) {
+    final String message;
+    synchronized (this) {
+      this.pending++;
+      this.latest = refusal;
+      message = takeIfDue();
+    }
+    deliver(message);
+  }
+
+  /** Says what was counted since the last message, if the window is over. */
+  public void flushIfDue() {
+    final String message;
+    synchronized (this) {
+      message = takeIfDue();
+    }
+    deliver(message);
+  }
+
+  private @Nullable String takeIfDue() {
+    final Instant now = this.clock.instant();
+    if (this.pending == 0 || this.latest == null
+        || (this.lastSent != null && now.isBefore(this.lastSent.plus(WINDOW)))) {
+      return null;
+    }
+    final String message = this.pending == 1
+        ? "[Admission] Refus : " + describe(this.latest)
+        : "[Admission] " + this.pending + " refus depuis " + WINDOW.toSeconds()
+            + " s, dernier : " + describe(this.latest);
+    this.pending = 0;
+    this.latest = null;
+    this.lastSent = now;
+    return message;
+  }
+
+  private void deliver(final @Nullable String message) {
+    if (message != null) {
+      this.sink.accept(message);
+    }
+  }
+
+  private static String describe(final AdmissionJournal.Entry entry) {
+    final Verdict verdict = entry.verdict();
+    return AdmissionJournal.value(entry.username())
+        + " (" + AdmissionJournal.identityOf(entry.phase())
+        + ", " + (verdict.judged() == null ? "ip inconnue" : verdict.judged().getHostAddress())
+        + ", " + (verdict.ipClass() == null ? "aucune classe" : verdict.ipClass().key())
+        + ", " + (entry.code() == null ? "sans code" : entry.code()) + ")."
+        + " /admission why pour le détail.";
+  }
+}

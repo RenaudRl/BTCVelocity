@@ -35,6 +35,12 @@ import java.util.List;
  */
 public final class CidrSet {
 
+  /** The widest IPv4 network a set accepts, in prefix bits: {@code /8}. */
+  public static final int MIN_PREFIX_V4 = 8;
+
+  /** The widest IPv6 network a set accepts, in prefix bits: {@code /16}. */
+  public static final int MIN_PREFIX_V6 = 16;
+
   private static final CidrSet EMPTY = new Builder().build();
 
   private final Ranges v4;
@@ -107,6 +113,38 @@ public final class CidrSet {
    */
   public int rangeCount() {
     return this.v4.size + this.v6.size;
+  }
+
+  /**
+   * How many IPv4 addresses the set covers, overlaps counted once.
+   *
+   * @return the number of addresses
+   */
+  public long ipv4AddressCount() {
+    long total = 0;
+    for (int i = 0; i < this.v4.size; i++) {
+      total += this.v4.endLo[i] - this.v4.startLo[i] + 1;
+    }
+    return total;
+  }
+
+  /**
+   * How much IPv6 space the set covers, in /64 networks (a finer range counts as one). A measure
+   * for comparing two versions of a list, not an exact count.
+   *
+   * @return the approximate number of /64 networks
+   */
+  public double ipv6Slash64Count() {
+    double total = 0;
+    for (int i = 0; i < this.v6.size; i++) {
+      final long span = this.v6.endHi[i] - this.v6.startHi[i];
+      total += unsignedToDouble(span) + 1.0;
+    }
+    return total;
+  }
+
+  private static double unsignedToDouble(final long value) {
+    return (value >>> 1) * 2.0 + (value & 1L);
   }
 
   private static boolean isV4Mapped(final byte[] bytes) {
@@ -239,6 +277,8 @@ public final class CidrSet {
      *
      * <p>Host bits below the prefix are ignored ({@code 10.1.2.3/8} is {@code 10.0.0.0/8}). The
      * token is never resolved through DNS: anything that is not an address literal is rejected.
+     * So is a prefix shorter than {@value #MIN_PREFIX_V4} (IPv4) or {@value #MIN_PREFIX_V6}
+     * (IPv6) bits.
      *
      * @param token the entry as written in a list
      * @return {@code true} if it was understood and added, {@code false} if it was rejected
@@ -262,13 +302,19 @@ public final class CidrSet {
           return false;
         }
         prefix = Integer.parseInt(prefixPart);
-        // A prefix written against a mapped IPv6 address counts in IPv6 bits.
-        if (bytes.length == 16 && asV4) {
+        // A prefix written against a mapped IPv6 address counts in IPv6 bits. The parser may
+        // already have turned "::ffff:a.b.c.d" into a plain IPv4 address, so the text decides.
+        if (asV4 && addressPart.indexOf(':') >= 0) {
           prefix -= 96;
         }
         if (prefix < 0 || prefix > width) {
           return false;
         }
+      }
+      // A network this wide would classify a large share of the Internet: a poisoned or broken
+      // list must not be able to say it, whatever the file claims.
+      if (prefix < (asV4 ? MIN_PREFIX_V4 : MIN_PREFIX_V6)) {
+        return false;
       }
       if (asV4) {
         addV4(unsignedInt(bytes, bytes.length - 4), prefix);

@@ -6,9 +6,10 @@
 # player data. There is no remote API.
 #
 # Every decision that matters (each refusal, each "observed") is written as one key=value line to
-# the logger "btc.admission.journal". Route that logger to its own file in the proxy's log4j2
-# configuration if you want a separate journal. Retention of that file (180 days) is a matter of
-# the log rotation configured there, not of this module.
+# the logger "btc.admission.journal". The file log4j2-admission-journal.xml, written next to this
+# one on first start, gives that logger its own file, rotated daily and purged after 180 days;
+# it takes effect through -Dlog4j2.configurationFile (see the module README).
+# Each refusal is also told to the staff online, at most one message every 10 seconds.
 #
 # Staff command: /admission why <pseudo|ip>   and   /admission status
 # Permission: btc.admission.staff (the console always has it).
@@ -16,21 +17,22 @@
 # enforce : refuse listed addresses.  observe : only journal them (dry run), let everybody in.
 mode: enforce
 
-# Addresses Geyser connects from. A connection from one of these is NEVER judged on that address:
-# every Bedrock player shares it. Floodgate's record of the player's real address is judged
-# instead when it can be read; otherwise the player is admitted and the journal says
-# "bedrock, ip reelle inconnue". IP literals or CIDR, IPv4 or IPv6.
-geyser-addresses:
-  - 127.0.0.1
-  - "::1"
+# Addresses Geyser connects from. A Floodgate player connecting from one of these is NOT judged
+# on that address (every Bedrock player shares it): Floodgate's record of the player's real
+# address is judged instead when it can be read; otherwise the player is admitted and the journal
+# says "bedrock, ip reelle inconnue". A connection from one of these that is NOT a Floodgate
+# player is journaled as "geyser-address-not-floodgate", logged as a warning, and judged on the
+# address like any other. Needs Floodgate. IP literals or CIDR, IPv4 or IPv6.
+# EMPTY until the bench has measured the address the proxy sees for a Bedrock player (13.1).
+geyser-addresses: []
 
 # Let in even from a listed address.
 exemptions:
-  # A name, a UUID, or both (both = both must match, the strongest form). The name is only
-  # trusted once the login is authenticated.
+  # Each entry needs BOTH the name and the UUID, and both must match the authenticated account.
+  # An entry with only one of them is a configuration error: reported, and it exempts nobody.
   players: []
   #  - name: SomeStaffMember
-  #  - uuid: 00000000-0000-0000-0000-000000000000
+  #    uuid: 00000000-0000-0000-0000-000000000000
   #  - name: SomePartner
   #    uuid: 11111111-1111-1111-1111-111111111111
   # Networks (CIDR or single address), e.g. an office or a partner's fixed connection.
@@ -46,8 +48,15 @@ messages:
 lists:
   # How often the lists are downloaded again. A failed download keeps the last valid list.
   refresh-hours: 24
+  # For the whole download: connection, headers and body.
   download-timeout-seconds: 30
   max-download-megabytes: 32
+  # A list is thrown away (the last valid one stays, an ERROR is logged) if it holds more entries
+  # than this, covers more than 20 % of the IPv4 space, or, compared with the version in use,
+  # moves its entry count by more than 50 % or doubles its coverage. A line wider than /8 (IPv4)
+  # or /16 (IPv6) is ignored. Private, loopback, CGNAT, link-local and unique-local addresses
+  # are never classified, whatever a list says.
+  max-entries: 500000
   # Files are kept in <this directory>/lists/. A source needs: class (datacenter | tor), an https
   # url, and a plain file name. Leave this section out to use the three lists below.
   #  - X4BNet lists_vpn (MIT): networks of hosting providers and VPNs, built from ASNs.

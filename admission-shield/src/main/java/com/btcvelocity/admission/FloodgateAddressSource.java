@@ -52,6 +52,15 @@ public final class FloodgateAddressSource implements BedrockAddressSource {
   }
 
   @Override
+  public boolean isFloodgatePlayer(final UUID uuid) {
+    try {
+      return this.floodgate.isFloodgatePlayer(uuid);
+    } catch (RuntimeException | LinkageError unreadable) {
+      return false;
+    }
+  }
+
+  @Override
   public Optional<InetAddress> realAddressOf(final UUID uuid) {
     final FloodgatePlayer player = this.floodgate.getPlayer(uuid);
     if (player == null) {

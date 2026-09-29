@@ -21,29 +21,29 @@ import java.net.InetAddress;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
-import org.jspecify.annotations.Nullable;
 
 /**
  * Who is let in even from a listed address: named players (staff, partners) and networks.
  *
- * <p>A player entry carries a name, a UUID, or both. An entry with both requires both, which is
- * the strongest form: a name alone can be typed by anyone before the login is authenticated,
- * so the name is only ever trusted after authentication (see {@link Phase}).
+ * <p>A player entry carries a name <em>and</em> a UUID, and both must match. A name alone can be
+ * typed by anyone, and a UUID alone is a weak handle on a person (a renamed account, a copied
+ * entry); together, once the login is authenticated (see {@link Phase}), they name one account.
+ * An entry with only one of them is refused when the configuration is read.
  */
 public final class Exemptions {
 
   /**
    * One exempted player.
    *
-   * @param name the username, or {@code null} to match any name
-   * @param uuid the account UUID, or {@code null} to match any account
+   * @param name the username
+   * @param uuid the account UUID
    */
-  public record Player(@Nullable String name, @Nullable UUID uuid) {
+  public record Player(String name, UUID uuid) {
 
-    /** A player entry must say who it is: an entry with neither would exempt everybody. */
+    /** A player entry must say who it is, fully. */
     public Player {
-      if (name == null && uuid == null) {
-        throw new IllegalArgumentException("an exempted player needs a name or a UUID");
+      if (name == null || name.isBlank() || uuid == null) {
+        throw new IllegalArgumentException("an exempted player needs a name and a UUID");
       }
     }
   }
@@ -74,6 +74,15 @@ public final class Exemptions {
   }
 
   /**
+   * The exempted players.
+   *
+   * @return the entries, each with a name and a UUID
+   */
+  public List<Player> players() {
+    return this.players;
+  }
+
+  /**
    * Whether the address sits in an exempted network.
    *
    * @param address the address being judged
@@ -92,9 +101,7 @@ public final class Exemptions {
    */
   public boolean coversPlayer(final String username, final UUID uuid) {
     for (Player player : this.players) {
-      final boolean nameMatches = player.name() == null || sameName(player.name(), username);
-      final boolean uuidMatches = player.uuid() == null || player.uuid().equals(uuid);
-      if (nameMatches && uuidMatches) {
+      if (sameName(player.name(), username) && player.uuid().equals(uuid)) {
         return true;
       }
     }
@@ -105,15 +112,12 @@ public final class Exemptions {
    * Whether some entry could cover this player once authenticated, so that a refusal must wait
    * for the login rather than fall at the pre-login.
    *
-   * <p>True when an entry names this username, or when an entry names a UUID only: a UUID is not
-   * known before authentication, so every login is a candidate for it.
-   *
    * @param username the username claimed at the pre-login, not yet authenticated
-   * @return {@code true} if the decision must be deferred to the login
+   * @return {@code true} if an entry carries this name, so the decision waits for the login
    */
   public boolean mayCoverLater(final String username) {
     for (Player player : this.players) {
-      if (player.name() == null || sameName(player.name(), username)) {
+      if (sameName(player.name(), username)) {
         return true;
       }
     }

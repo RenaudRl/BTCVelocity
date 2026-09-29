@@ -33,13 +33,16 @@ import org.slf4j.Logger;
  * {@code /admission why}.
  *
  * <p>The line is {@code key=value} pairs so that it can be grepped and parsed without a schema:
- * {@code ts, user, uuid, ip, class, source, decision, code, basis, phase, mode}. It goes to a
- * logger of its own ({@value #LOGGER_NAME}), so the proxy's logging configuration can route it to
- * a file of its own.
+ * {@code ts, user, identity, uuid, ip, origin, class, source, decision, code, basis, phase, mode}.
+ * {@code identity} says whether {@code user} is only {@code declared} (pre-login) or
+ * {@code authenticated}. It goes to a logger of its own ({@value #LOGGER_NAME}), so the proxy's
+ * logging configuration can route it to a file of its own.
  *
- * <p>The memory is a bounded cache in RAM. Nothing is written to disk here beyond the log line,
- * and the 180-day retention the compliance note asks for is a property of the log file, not of
- * this class: rotation and deletion are configured on the logger, not implemented here.
+ * <p>The memory is a bounded cache in RAM, indexed by address and, for authenticated decisions
+ * only, by name. Nothing is written to disk here beyond the log line, and the 180-day retention
+ * the compliance note asks for is a property of the log file: the module ships the log4j2
+ * fragment that rotates it daily and deletes it after 180 days
+ * ({@code log4j2-admission-journal.xml}).
  */
 public final class AdmissionJournal {
 
@@ -47,6 +50,8 @@ public final class AdmissionJournal {
   public static final String LOGGER_NAME = "btc.admission.journal";
 
   private static final long MEMORY_SIZE = 4096;
+  private static final int LINE_SEPARATOR = 0x2028;
+  private static final int PARAGRAPH_SEPARATOR = 0x2029;
 
   /**
    * One remembered decision.
@@ -76,13 +81,15 @@ public final class AdmissionJournal {
      * @return the line, without a trailing newline
      */
     public String line() {
-      final StringBuilder line = new StringBuilder(160);
+      final StringBuilder line = new StringBuilder(200);
       append(line, "ts", this.at.toString());
       append(line, "user", this.username);
+      append(line, "identity", identityOf(this.phase));
       append(line, "uuid", this.uuid == null ? "unknown" : this.uuid.toString());
       final Verdict judgement = this.verdict;
       append(line, "ip",
           judgement.judged() == null ? "unknown" : judgement.judged().getHostAddress());
+      append(line, "origin", judgement.origin().label());
       append(line, "class", judgement.ipClass() == null ? "none" : judgement.ipClass().key());
       append(line, "source", judgement.sourceId() == null ? "none" : judgement.sourceId());
       append(line, "decision", this.decision);
@@ -94,17 +101,61 @@ public final class AdmissionJournal {
     }
 
     private static void append(final StringBuilder line, final String key, final String value) {
-      line.append(key).append('=');
-      final boolean plain = !value.isEmpty() && value.chars().noneMatch(
-          c -> c == ' ' || c == ',' || c == '"' || c == '=' || Character.isISOControl(c));
-      if (plain) {
-        line.append(value);
-      } else {
-        line.append('"').append(value.replace("\\", "\\\\").replace("\"", "\\\"")
-            .replaceAll("\\p{Cntrl}", " ")).append('"');
-      }
-      line.append(' ');
+      line.append(key).append('=').append(value(value)).append(' ');
     }
+  }
+
+  /**
+   * How a name is to be read: {@code declared} at the pre-login, where anyone can type anything,
+   * {@code authenticated} from the login on.
+   *
+   * @param phase where the decision was taken
+   * @return the word written in the journal
+   */
+  static String identityOf(final Phase phase) {
+    return phase == Phase.PRE_LOGIN ? "declared" : "authenticated";
+  }
+
+  /**
+   * A value as the journal writes it: bare when it is plain, quoted and escaped otherwise.
+   *
+   * <p>Anything that could forge a field, break the line or reorder what a reader sees is
+   * neutralised: quotes and backslashes are escaped, and control characters (C0, C1 including
+   * U+0085), the line and paragraph separators U+2028 and U+2029, and every formatting character
+   * (bidirectional overrides and isolates among them) are written as a backslash, a {@code u}
+   * and four hexadecimal digits per UTF-16 unit.
+   *
+   * @param raw the value, possibly chosen by a client
+   * @return the value, safe to put after {@code key=}
+   */
+  static String value(final String raw) {
+    final boolean plain = !raw.isEmpty() && raw.codePoints().noneMatch(
+        c -> c == ',' || c == '"' || c == '=' || c == '\\' || Character.isWhitespace(c)
+            || Character.isSpaceChar(c) || isUnsafe(c));
+    if (plain) {
+      return raw;
+    }
+    final StringBuilder quoted = new StringBuilder(raw.length() + 8).append('"');
+    raw.codePoints().forEach(c -> {
+      if (c == '\\') {
+        quoted.append("\\\\");
+      } else if (c == '"') {
+        quoted.append("\\\"");
+      } else if (isUnsafe(c)) {
+        for (char unit : Character.toChars(c)) {
+          quoted.append(String.format(Locale.ROOT, "\\u%04X", (int) unit));
+        }
+      } else {
+        quoted.appendCodePoint(c);
+      }
+    });
+    return quoted.append('"').toString();
+  }
+
+  private static boolean isUnsafe(final int codePoint) {
+    return Character.isISOControl(codePoint)
+        || codePoint == LINE_SEPARATOR || codePoint == PARAGRAPH_SEPARATOR
+        || Character.getType(codePoint) == Character.FORMAT;
   }
 
   private final Logger logger;
@@ -147,7 +198,11 @@ public final class AdmissionJournal {
     final Entry entry = new Entry(this.clock.instant(), attempt.username(), attempt.uuid(),
         verdict, decision, code, phase, mode);
     this.logger.info("{}", entry.line());
-    this.memory.put(nameKey(attempt.username()), entry);
+    // A name typed at the pre-login proves nothing: indexing it would let anyone fill the
+    // answer to "/admission why <someone else>". Only an authenticated name is an index.
+    if (phase == Phase.LOGIN && attempt.uuid() != null) {
+      this.memory.put(nameKey(attempt.username()), entry);
+    }
     final InetAddress judged = verdict.judged();
     // A Bedrock player of unknown address has no address of their own to be looked up by, and
     // Geyser's must not point at "the last Bedrock player".

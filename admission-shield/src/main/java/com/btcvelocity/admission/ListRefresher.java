@@ -19,6 +19,7 @@ package com.btcvelocity.admission;
 
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -26,6 +27,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
 /**
@@ -45,11 +48,13 @@ public final class ListRefresher {
   private final ListStore store;
   private final ListFetcher fetcher;
   private final Logger logger;
+  private final AtomicBoolean running = new AtomicBoolean();
 
   /**
    * Creates a refresher.
    *
-   * @param store the store to reload after a list was replaced; also names the directory
+   * @param store the store to reload after a list was replaced; also names the directory and the
+   *     ceiling on the entries of one list
    * @param fetcher how lists are downloaded
    * @param logger where outcomes are reported
    */
@@ -66,30 +71,56 @@ public final class ListRefresher {
    * @return how many were replaced
    */
   public int refreshAll(final List<ListSource> sources) {
-    int replaced = 0;
-    for (ListSource source : sources) {
-      if (refresh(source)) {
-        replaced++;
-      }
+    if (!this.running.compareAndSet(false, true)) {
+      this.logger.warn("A list refresh is still running; this one is skipped.");
+      return 0;
     }
-    return replaced;
+    try {
+      int replaced = 0;
+      for (ListSource source : sources) {
+        if (refreshLocked(source)) {
+          replaced++;
+        }
+      }
+      return replaced;
+    } finally {
+      this.running.set(false);
+    }
   }
 
   /**
-   * Refreshes one list.
+   * Refreshes one list. Skipped, with a warning, if another refresh is already running: two
+   * downloads must never race to replace the same files.
    *
    * @param source the list
    * @return {@code true} if a newer valid list replaced the previous one
    */
   public boolean refresh(final ListSource source) {
+    if (!this.running.compareAndSet(false, true)) {
+      this.logger.warn("A list refresh is still running; the refresh of '{}' is skipped.",
+          source.id());
+      return false;
+    }
+    try {
+      return refreshLocked(source);
+    } finally {
+      this.running.set(false);
+    }
+  }
+
+  private boolean refreshLocked(final ListSource source) {
     final Path directory = this.store.directory();
     final Path target = directory.resolve(source.fileName());
-    final Path part = directory.resolve(source.fileName() + PART_SUFFIX);
+    Path part = null;
     try {
       Files.createDirectories(directory);
+      // Unique to this attempt: nothing else can be writing, reading or deleting it.
+      part = Files.createTempFile(directory, source.fileName() + ".", PART_SUFFIX);
       this.fetcher.fetch(source.url(), part);
       final ListParser.Result parsed = ListParser.parse(part);
-      final String rejection = rejectionOf(parsed);
+      final String rejection = firstNonNull(
+          ListGuards.absoluteRejection(parsed, this.store.maxEntries()),
+          ListGuards.relativeRejection(parsed, this.store.loadedFor(source.id()).orElse(null)));
       if (rejection != null) {
         this.logger.error("List '{}' downloaded from {} was rejected ({}); keeping the last valid"
             + " list.", source.id(), source.url(), rejection);
@@ -101,9 +132,16 @@ public final class ListRefresher {
           + " list.", source.id(), source.url(), failure.toString());
       return false;
     } finally {
-      deleteQuietly(part);
+      if (part != null) {
+        deleteQuietly(part);
+      }
     }
     return this.store.reload(source);
+  }
+
+  private static @Nullable String firstNonNull(final @Nullable String first,
+      final @Nullable String second) {
+    return first != null ? first : second;
   }
 
   /**
@@ -131,18 +169,6 @@ public final class ListRefresher {
     }
   }
 
-  private static String rejectionOf(final ListParser.Result parsed) {
-    if (parsed.validLines() == 0) {
-      return "no valid entry, " + parsed.invalidLines() + " unreadable lines, first "
-          + parsed.invalidSamples();
-    }
-    if (parsed.invalidLines() > parsed.validLines()) {
-      return "more unreadable lines (" + parsed.invalidLines() + ") than entries ("
-          + parsed.validLines() + "), first " + parsed.invalidSamples();
-    }
-    return null;
-  }
-
   private static void moveInPlace(final Path part, final Path target) throws IOException {
     try {
       Files.move(part, target, StandardCopyOption.ATOMIC_MOVE,
@@ -152,11 +178,38 @@ public final class ListRefresher {
     }
   }
 
-  private static void deleteQuietly(final Path file) {
+  /**
+   * Deletes the temporary files a killed process may have left behind. Called at startup, before
+   * any refresh can run: each attempt names its own file, so none is ever reused.
+   *
+   * @return how many were deleted
+   */
+  public int purgeLeftovers() {
+    final Path directory = this.store.directory();
+    if (Files.notExists(directory)) {
+      return 0;
+    }
+    int deleted = 0;
+    try (DirectoryStream<Path> leftovers =
+        Files.newDirectoryStream(directory, "*" + PART_SUFFIX)) {
+      for (Path leftover : leftovers) {
+        if (deleteQuietly(leftover)) {
+          deleted++;
+        }
+      }
+    } catch (IOException unreadable) {
+      this.logger.warn("Could not look for leftover downloads in {}: {}", directory,
+          unreadable.toString());
+    }
+    return deleted;
+  }
+
+  private static boolean deleteQuietly(final Path file) {
     try {
-      Files.deleteIfExists(file);
+      return Files.deleteIfExists(file);
     } catch (IOException ignored) {
-      // A stale .part file is overwritten by the next download; nothing to do.
+      // Purged at the next start; it is never read, the name is unique to one attempt.
+      return false;
     }
   }
 }

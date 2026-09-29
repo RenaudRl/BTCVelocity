@@ -18,14 +18,18 @@
 package com.btcvelocity.admission;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.btcvelocity.admission.Verdict.Action;
 import com.btcvelocity.admission.Verdict.Basis;
+import com.btcvelocity.admission.Verdict.Origin;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.InetAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -33,11 +37,18 @@ import org.junit.jupiter.api.Test;
 class AdmissionEngineTest {
 
   private static final InetAddress GEYSER = ip("127.0.0.1");
+  private static final String WITH_GEYSER = "geyser-addresses: ['127.0.0.1']\n";
   private static final InetAddress DATACENTER_HOST = ip("203.0.113.50");
   private static final InetAddress TOR_EXIT = ip("185.220.101.9");
   private static final InetAddress HOME = ip("198.51.100.77");
   private static final UUID STAFF_UUID = UUID.fromString("11111111-1111-1111-1111-111111111111");
   private static final UUID OTHER_UUID = UUID.fromString("22222222-2222-2222-2222-222222222222");
+  private static final String STAFF_EXEMPTION = """
+      exemptions:
+        players:
+          - name: StaffMember
+            uuid: 11111111-1111-1111-1111-111111111111
+      """;
 
   /** The lists: 203.0.113.0/24 and 2001:db8::/32 are datacenter, 185.220.101.0/24 is Tor. */
   private static final CidrSet DATACENTER_LIST = setOf(
@@ -78,7 +89,16 @@ class AdmissionEngineTest {
   }
 
   private static Attempt java(final String name, final InetAddress from) {
-    return new Attempt(name, null, from, null);
+    return Attempt.claimed(name, from);
+  }
+
+  private static Attempt login(final String name, final UUID uuid, final InetAddress from) {
+    return Attempt.claimed(name, from).authenticated(name, uuid, false, null);
+  }
+
+  private static Attempt bedrock(final UUID uuid, final InetAddress real) {
+    return Attempt.claimed(".BedrockPlayer", GEYSER)
+        .authenticated(".BedrockPlayer", uuid, true, real);
   }
 
   @Test
@@ -87,6 +107,7 @@ class AdmissionEngineTest {
 
     assertEquals(Action.REFUSE, verdict.action());
     assertEquals(Basis.LISTED, verdict.basis());
+    assertEquals(Origin.DIRECT, verdict.origin());
     assertEquals(IpClass.DATACENTER, verdict.ipClass());
     assertEquals("dc-list", verdict.sourceId());
     assertEquals(DATACENTER_HOST, verdict.judged());
@@ -114,7 +135,7 @@ class AdmissionEngineTest {
 
     assertEquals(Action.ADMIT, verdict.action());
     assertEquals(Basis.CLEAN, verdict.basis());
-    assertTrue(!verdict.isJournaled(), "an ordinary admission is not written");
+    assertFalse(verdict.isJournaled(), "an ordinary admission is not written");
   }
 
   @Test
@@ -144,38 +165,113 @@ class AdmissionEngineTest {
     assertEquals(AdmissionConfig.Mode.OBSERVE, config("mode: OBSERVE").mode());
   }
 
+  // --- M6: a pre-login refusal is applied again at the login ----------------------------------
+
   @Test
-  void geysersOwnAddressIsNeverJudgedEvenWhenAListNamesIt() {
-    // Arrange - the fixture list DOES contain 127.0.0.1: judging it would refuse every Bedrock player
+  void aPreLoginRefusalIsAppliedAgainAtTheLogin() {
+    // Arrange - refused at the pre-login; a later listener then turned the refusal into an
+    // admission, so the connection reaches the login
     final AdmissionEngine engine = engine("");
+    assertEquals(Action.REFUSE,
+        engine.decide(java("Steve", DATACENTER_HOST), Phase.PRE_LOGIN).action());
+
+    // Act
+    final Optional<Verdict> atLogin =
+        engine.decideAtLogin(login("Steve", OTHER_UUID, DATACENTER_HOST));
+
+    // Assert
+    assertTrue(atLogin.isPresent(), "the login must not stay silent about a refused address");
+    assertEquals(Action.REFUSE, atLogin.get().action());
+    assertEquals(IpClass.DATACENTER, atLogin.get().ipClass());
+  }
+
+  @Test
+  void aConnectionThePreLoginAlreadySettledIsNotJudgedTwice() {
+    final AdmissionEngine enforce = engine("");
+    final AdmissionEngine observe = engine("mode: observe");
+
+    assertTrue(enforce.decideAtLogin(login("Steve", OTHER_UUID, HOME)).isEmpty(),
+        "clean at the pre-login: nothing to add");
+    assertTrue(observe.decideAtLogin(login("Steve", OTHER_UUID, DATACENTER_HOST)).isEmpty(),
+        "observed at the pre-login: journaled once, not twice");
+  }
+
+  @Test
+  void whatThePreLoginDeferredIsDecidedAtTheLogin() {
+    final AdmissionEngine engine = engine(STAFF_EXEMPTION);
+
+    final Optional<Verdict> staff =
+        engine.decideAtLogin(login("StaffMember", STAFF_UUID, DATACENTER_HOST));
+    final Optional<Verdict> impostor =
+        engine.decideAtLogin(login("StaffMember", OTHER_UUID, DATACENTER_HOST));
+
+    assertEquals(Basis.EXEMPT_PLAYER, staff.orElseThrow().basis());
+    assertEquals(Action.REFUSE, impostor.orElseThrow().action());
+  }
+
+  // --- Geyser and Floodgate (M8) --------------------------------------------------------------
+
+  @Test
+  void noAddressIsGeysersByDefault() {
+    assertTrue(config("").geyserAddresses().isEmpty());
+    assertEquals(Action.REFUSE, engine("").decide(java("B", GEYSER), Phase.PRE_LOGIN).action(),
+        "with no Geyser address configured, 127.0.0.1 is judged like any address");
+  }
+
+  @Test
+  void aFloodgatePlayerFromGeysersAddressIsNeverJudgedOnItEvenWhenAListNamesIt() {
+    // Arrange - the fixture list DOES contain 127.0.0.1: judging it would refuse every Bedrock player
+    final AdmissionEngine engine = engine(WITH_GEYSER);
 
     // Act
     final Verdict atPreLogin = engine.decide(java("BedrockPlayer", GEYSER), Phase.PRE_LOGIN);
-    final Verdict atLogin = engine.decide(
-        new Attempt(".BedrockPlayer", OTHER_UUID, GEYSER, null), Phase.LOGIN);
+    final Verdict atLogin = engine.decide(bedrock(OTHER_UUID, null), Phase.LOGIN);
 
     // Assert
     assertEquals(Action.DEFER, atPreLogin.action());
     assertEquals(Basis.GEYSER_ORIGIN, atPreLogin.basis());
+    assertEquals(Origin.GEYSER_UNCONFIRMED, atPreLogin.origin());
     assertEquals(Action.ADMIT, atLogin.action());
     assertEquals(Basis.BEDROCK_IP_UNKNOWN, atLogin.basis());
+    assertEquals(Origin.GEYSER_FLOODGATE, atLogin.origin());
     assertNull(atLogin.judged(), "no address was judged");
     assertEquals("bedrock, ip réelle inconnue", atLogin.basis().label());
   }
 
   @Test
+  void aNonFloodgateConnectionFromAGeyserAddressIsFlaggedAndJudgedLikeAnyOther() {
+    // Arrange - a Java client (or a forged forward) coming from the Geyser host
+    final AdmissionEngine engine = engine(WITH_GEYSER);
+    final AdmissionEngine unlisted = new AdmissionEngine(config(WITH_GEYSER),
+        address -> Optional.empty());
+
+    // Act
+    final Verdict listed = engine.decide(login("Sneaky", OTHER_UUID, GEYSER), Phase.LOGIN);
+    final Verdict clean = unlisted.decide(login("Sneaky", OTHER_UUID, GEYSER), Phase.LOGIN);
+
+    // Assert
+    assertEquals(Action.REFUSE, listed.action(), "the Geyser exception is for Floodgate players");
+    assertEquals(Origin.GEYSER_ADDRESS_NOT_FLOODGATE, listed.origin());
+    assertEquals(GEYSER, listed.judged());
+    assertEquals(Action.ADMIT, clean.action());
+    assertEquals(Basis.GEYSER_ADDRESS_NOT_FLOODGATE, clean.basis());
+    assertEquals("geyser-address-not-floodgate", clean.basis().label());
+    assertTrue(clean.isJournaled(), "the anomaly is written even when the address is clean");
+  }
+
+  @Test
   void aBedrockPlayerWhoseRealAddressIsADatacenterIsRefusedOnThatAddress() {
-    final Verdict verdict = engine("").decide(
-        new Attempt(".BedrockPlayer", OTHER_UUID, GEYSER, DATACENTER_HOST), Phase.LOGIN);
+    final Verdict verdict =
+        engine(WITH_GEYSER).decide(bedrock(OTHER_UUID, DATACENTER_HOST), Phase.LOGIN);
 
     assertEquals(Action.REFUSE, verdict.action());
     assertEquals(DATACENTER_HOST, verdict.judged());
+    assertEquals(Origin.GEYSER_FLOODGATE, verdict.origin());
   }
 
   @Test
   void aBedrockPlayerWhoseRealAddressIsResidentialIsAdmittedOnThatAddress() {
-    final Verdict verdict = engine("").decide(
-        new Attempt(".BedrockPlayer", OTHER_UUID, GEYSER, HOME), Phase.LOGIN);
+    final Verdict verdict = engine(WITH_GEYSER).decide(bedrock(OTHER_UUID, HOME), Phase.LOGIN);
 
     assertEquals(Action.ADMIT, verdict.action());
     assertEquals(Basis.CLEAN, verdict.basis());
@@ -185,21 +281,21 @@ class AdmissionEngineTest {
   @Test
   void aFloodgateAddressThatIsGeysersOwnCountsAsUnknown() {
     // Floodgate recording Geyser's own address would make every Bedrock player look the same
-    final Verdict verdict = engine("").decide(
-        new Attempt(".BedrockPlayer", OTHER_UUID, GEYSER, GEYSER), Phase.LOGIN);
+    final Verdict verdict = engine(WITH_GEYSER).decide(bedrock(OTHER_UUID, GEYSER), Phase.LOGIN);
 
     assertEquals(Action.ADMIT, verdict.action());
     assertEquals(Basis.BEDROCK_IP_UNKNOWN, verdict.basis());
   }
 
   @Test
-  void additionalGeyserAddressesAreHonouredAndTheDefaultsReplacedByTheList() {
+  void geyserAddressesAreHonouredAsNetworks() {
     final AdmissionEngine engine = engine("geyser-addresses: ['10.9.0.0/24']");
 
     assertEquals(Action.DEFER, engine.decide(java("B", ip("10.9.0.12")), Phase.PRE_LOGIN).action());
-    // 127.0.0.1 is no longer Geyser here, so it is judged like anyone (and the fixture lists it)
     assertEquals(Action.REFUSE, engine.decide(java("B", GEYSER), Phase.PRE_LOGIN).action());
   }
+
+  // --- exemptions (M7) ------------------------------------------------------------------------
 
   @Test
   void anExemptedNetworkIsAdmittedAndJournaled() {
@@ -217,68 +313,75 @@ class AdmissionEngineTest {
   @Test
   void aNamedExemptionDefersAtPreLoginAndAdmitsOnlyOnceAuthenticated() {
     // Arrange
-    final AdmissionEngine engine = engine("exemptions:\n  players:\n    - name: StaffMember");
+    final AdmissionEngine engine = engine(STAFF_EXEMPTION);
 
     // Act
     final Verdict claimed = engine.decide(java("staffmember", DATACENTER_HOST), Phase.PRE_LOGIN);
-    final Verdict authenticated = engine.decide(
-        new Attempt("StaffMember", STAFF_UUID, DATACENTER_HOST, null), Phase.LOGIN);
+    final Verdict authenticated =
+        engine.decide(login("StaffMember", STAFF_UUID, DATACENTER_HOST), Phase.LOGIN);
     final Verdict stranger = engine.decide(java("Stranger", DATACENTER_HOST), Phase.PRE_LOGIN);
 
     // Assert
     assertEquals(Action.DEFER, claimed.action(), "the name is only claimed, not proven yet");
     assertEquals(Basis.AWAITING_IDENTITY, claimed.basis());
-    assertTrue(!claimed.isJournaled());
+    assertFalse(claimed.isJournaled());
     assertEquals(Action.ADMIT, authenticated.action());
     assertEquals(Basis.EXEMPT_PLAYER, authenticated.basis());
     assertEquals(Action.REFUSE, stranger.action(), "an unlisted name is refused at once");
   }
 
   @Test
-  void aUuidOnlyExemptionAdmitsThatAccountAndRefusesAnotherOneAtLogin() {
-    final AdmissionEngine engine = engine(
-        "exemptions:\n  players:\n    - uuid: 11111111-1111-1111-1111-111111111111");
+  void anExemptionNeedsBothTheNameAndTheUuidToMatch() {
+    final AdmissionEngine engine = engine(STAFF_EXEMPTION);
 
-    final Verdict pre = engine.decide(java("Anyone", DATACENTER_HOST), Phase.PRE_LOGIN);
-    final Verdict staff = engine.decide(
-        new Attempt("Renamed", STAFF_UUID, DATACENTER_HOST, null), Phase.LOGIN);
-    final Verdict other = engine.decide(
-        new Attempt("Anyone", OTHER_UUID, DATACENTER_HOST, null), Phase.LOGIN);
-
-    assertEquals(Action.DEFER, pre.action(), "a UUID is unknown before authentication");
-    assertEquals(Action.ADMIT, staff.action());
-    assertEquals(Action.REFUSE, other.action());
+    assertEquals(Action.REFUSE,
+        engine.decide(login("StaffMember", OTHER_UUID, DATACENTER_HOST), Phase.LOGIN).action(),
+        "same name, other account: the name alone proves nothing");
+    assertEquals(Action.REFUSE,
+        engine.decide(login("Renamed", STAFF_UUID, DATACENTER_HOST), Phase.LOGIN).action(),
+        "same account under another name: the UUID alone proves nothing either");
   }
 
   @Test
-  void anEntryWithNameAndUuidNeedsBothToMatch() {
-    final AdmissionEngine engine = engine("""
+  void aUuidOnlyExemptionIsAConfigurationErrorAndExemptsNobody() throws IOException {
+    // Arrange
+    final List<String> warnings = new ArrayList<>();
+    final List<String> errors = new ArrayList<>();
+
+    // Act
+    final AdmissionConfig parsed = AdmissionConfig.parseYaml(new StringReader("""
         exemptions:
           players:
+            - uuid: 11111111-1111-1111-1111-111111111111
             - name: StaffMember
-              uuid: 11111111-1111-1111-1111-111111111111
-        """);
+            - StaffMember
+        """), warnings::add, errors::add);
+    final AdmissionEngine engine = new AdmissionEngine(parsed, LISTS);
 
-    assertEquals(Action.ADMIT, engine.decide(
-        new Attempt("StaffMember", STAFF_UUID, DATACENTER_HOST, null), Phase.LOGIN).action());
-    assertEquals(Action.REFUSE, engine.decide(
-        new Attempt("StaffMember", OTHER_UUID, DATACENTER_HOST, null), Phase.LOGIN).action(),
-        "same name, other account: the name alone proves nothing");
+    // Assert
+    assertEquals(3, errors.size(), "each incomplete entry is an error: " + errors);
+    assertTrue(errors.getFirst().contains("a UUID alone is not an exemption"));
+    assertEquals(List.of(), warnings);
+    assertEquals(Action.REFUSE,
+        engine.decide(login("Renamed", STAFF_UUID, DATACENTER_HOST), Phase.LOGIN).action());
+    assertEquals(Action.REFUSE,
+        engine.decide(java("StaffMember", DATACENTER_HOST), Phase.PRE_LOGIN).action(),
+        "no valid entry names anyone, so nothing is deferred either");
   }
 
   @Test
-  void anExemptedNameIsStillRefusedInObserveModeAsObservedOnly() {
-    final AdmissionEngine engine = engine("mode: observe\nexemptions:\n  players: [Someone]");
+  void anExemptedPlayerIsNotSparedAnotherPlayersObservation() {
+    final AdmissionEngine engine = engine("mode: observe\n" + STAFF_EXEMPTION);
 
-    final Verdict verdict = engine.decide(
-        new Attempt("Other", OTHER_UUID, DATACENTER_HOST, null), Phase.LOGIN);
+    final Verdict verdict =
+        engine.decide(login("Other", OTHER_UUID, DATACENTER_HOST), Phase.LOGIN);
 
     assertEquals(Action.OBSERVE, verdict.action());
   }
 
   @Test
-  void aBadExemptionEntryIsIgnoredWithAWarningAndExemptsNobody() throws IOException {
-    final java.util.List<String> warnings = new java.util.ArrayList<>();
+  void aBadExemptionEntryIsReportedAndExemptsNobody() throws IOException {
+    final List<String> reports = new ArrayList<>();
 
     final AdmissionConfig parsed = AdmissionConfig.parseYaml(new StringReader("""
         exemptions:
@@ -286,9 +389,9 @@ class AdmissionEngineTest {
             - uuid: not-a-uuid
             - {}
           networks: ['10.0.0.0/99']
-        """), warnings::add);
+        """), reports::add);
 
-    assertEquals(3, warnings.size());
+    assertEquals(3, reports.size());
     assertEquals(Action.REFUSE, new AdmissionEngine(parsed, LISTS)
         .decide(java("Steve", DATACENTER_HOST), Phase.PRE_LOGIN).action());
   }

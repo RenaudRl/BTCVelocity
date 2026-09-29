@@ -48,7 +48,8 @@ class AdmissionConfigAndJournalTest {
   }
 
   private static Verdict listed(final Verdict.Action action, final String address) {
-    return new Verdict(action, Verdict.Basis.LISTED, ip(address), IpClass.DATACENTER, "dc-list");
+    return new Verdict(action, Verdict.Basis.LISTED, Verdict.Origin.DIRECT, ip(address),
+        IpClass.DATACENTER, "dc-list");
   }
 
   // --- configuration ---------------------------------------------------------------------
@@ -73,8 +74,40 @@ class AdmissionConfigAndJournalTest {
     assertEquals(defaults.sources(), parsed.sources());
     assertEquals(defaults.messages(), parsed.messages());
     assertEquals(Duration.ofHours(24), parsed.refreshInterval());
-    assertTrue(parsed.geyserAddresses().contains(ip("127.0.0.1")));
-    assertTrue(parsed.geyserAddresses().contains(ip("::1")));
+    assertEquals(AdmissionConfig.DEFAULT_MAX_ENTRIES, parsed.maxEntries());
+    assertEquals(defaults.maxEntries(), parsed.maxEntries());
+    assertTrue(parsed.geyserAddresses().isEmpty(), "no Geyser address until 13.1 has measured");
+    assertTrue(defaults.geyserAddresses().isEmpty());
+    assertTrue(parsed.exemptions().players().isEmpty());
+  }
+
+  @Test
+  void theTemplateShowsOnlyExemptionsWithBothNameAndUuid() throws IOException {
+    // The commented examples, uncommented, must be accepted as they stand: a template that
+    // taught a UUID-only entry would teach a configuration error.
+    final String template;
+    try (var stream = AdmissionConfig.class.getResourceAsStream("/config.yml")) {
+      template = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+    final String uncommented = template
+        .replace("  players: []\n", "  players:\n")
+        .replace("  #  - name:", "    - name:")
+        .replace("  #    uuid:", "      uuid:");
+    final List<String> errors = new ArrayList<>();
+
+    final AdmissionConfig parsed =
+        AdmissionConfig.parseYaml(new StringReader(uncommented), errors::add, errors::add);
+
+    assertEquals(List.of(), errors);
+    assertEquals(2, parsed.exemptions().players().size());
+  }
+
+  @Test
+  void theListCeilingIsConfigurable() throws IOException {
+    final AdmissionConfig parsed = AdmissionConfig.parseYaml(
+        new StringReader("lists:\n  max-entries: 1234\n"), warning -> { });
+
+    assertEquals(1234, parsed.maxEntries());
   }
 
   @Test
@@ -138,7 +171,7 @@ class AdmissionConfigAndJournalTest {
     // Arrange
     final RecordingLogger log = new RecordingLogger();
     final AdmissionJournal journal = new AdmissionJournal(log.logger(), CLOCK);
-    final Attempt attempt = new Attempt("Steve", PLAYER_UUID, ip("203.0.113.50"), null);
+    final Attempt attempt = new Attempt("Steve", PLAYER_UUID, ip("203.0.113.50"), false, null);
 
     // Act
     final Optional<AdmissionJournal.Entry> entry = journal.record(attempt,
@@ -148,10 +181,59 @@ class AdmissionConfigAndJournalTest {
     // Assert
     assertTrue(entry.isPresent());
     assertEquals(1, log.lines().size());
-    assertEquals("INFO ts=2026-09-29T20:15:30Z user=Steve"
-        + " uuid=33333333-3333-3333-3333-333333333333 ip=203.0.113.50 class=datacenter"
-        + " source=dc-list decision=refused code=ADM-VPN-DC basis=listed phase=login"
-        + " mode=enforce", log.lines().getFirst());
+    assertEquals("INFO ts=2026-09-29T20:15:30Z user=Steve identity=authenticated"
+        + " uuid=33333333-3333-3333-3333-333333333333 ip=203.0.113.50 origin=direct"
+        + " class=datacenter source=dc-list decision=refused code=ADM-VPN-DC basis=listed"
+        + " phase=login mode=enforce", log.lines().getFirst());
+  }
+
+  @Test
+  void aPreLoginNameIsMarkedDeclaredAndIsNotAnIndexForWhy() {
+    // Arrange - anyone can type any name at the pre-login
+    final RecordingLogger log = new RecordingLogger();
+    final AdmissionJournal journal = new AdmissionJournal(log.logger(), CLOCK);
+
+    // Act
+    journal.record(Attempt.claimed("StaffMember", ip("203.0.113.50")),
+        listed(Verdict.Action.REFUSE, "203.0.113.50"), Phase.PRE_LOGIN,
+        AdmissionConfig.Mode.ENFORCE);
+
+    // Assert
+    assertTrue(log.lines().getFirst().contains("user=StaffMember identity=declared"));
+    assertTrue(journal.lastForName("StaffMember").isEmpty(),
+        "a declared name must not answer /admission why for that player");
+    assertTrue(journal.lastForAddress(ip("203.0.113.50")).isPresent());
+  }
+
+  @Test
+  void controlLineAndBidiCharactersAreEscapedNotWritten() {
+    // Arrange - each of these could forge a line or reorder what a reader sees
+    final String[] hostile = {"a\nfake=1", "a\rb", "a\u0085b", "a b", "a b", // NEL, LS, PS
+        "a‮b", "a⁦b", "a‏b", "a؜b", "a\u0000b", "a\u009Bb"}; // bidi, C0, C1
+    final RecordingLogger log = new RecordingLogger();
+    final AdmissionJournal journal = new AdmissionJournal(log.logger(), CLOCK);
+
+    for (String name : hostile) {
+      // Act
+      journal.record(Attempt.claimed(name, ip("203.0.113.50")),
+          listed(Verdict.Action.REFUSE, "203.0.113.50"), Phase.PRE_LOGIN,
+          AdmissionConfig.Mode.ENFORCE);
+      final String line = log.lines().getLast();
+
+      // Assert
+      final int bad = name.codePointAt(1);
+      assertTrue(line.codePoints().noneMatch(c -> c == bad),
+          "U+" + Integer.toHexString(bad) + " reached the line: " + line);
+      assertTrue(line.contains(String.format(java.util.Locale.ROOT, "\\u%04X", bad)), line);
+      assertTrue(line.contains("user=\"a"), "an escaped value is quoted: " + line);
+    }
+  }
+
+  @Test
+  void anOrdinaryNameIsWrittenBare() {
+    assertEquals("Steve_42", AdmissionJournal.value("Steve_42"));
+    assertEquals("\"two words\"", AdmissionJournal.value("two words"));
+    assertEquals("\"back\\\\slash\"", AdmissionJournal.value("back\\slash"));
   }
 
   @Test
@@ -159,7 +241,7 @@ class AdmissionConfigAndJournalTest {
     final RecordingLogger log = new RecordingLogger();
     final AdmissionJournal journal = new AdmissionJournal(log.logger(), CLOCK);
 
-    journal.record(new Attempt("Steve", null, ip("203.0.113.50"), null),
+    journal.record(new Attempt("Steve", null, ip("203.0.113.50"), false, null),
         listed(Verdict.Action.OBSERVE, "203.0.113.50"), Phase.PRE_LOGIN,
         AdmissionConfig.Mode.OBSERVE);
 
@@ -175,8 +257,9 @@ class AdmissionConfigAndJournalTest {
     final RecordingLogger log = new RecordingLogger();
     final AdmissionJournal journal = new AdmissionJournal(log.logger(), CLOCK);
 
-    journal.record(new Attempt(".Alex", PLAYER_UUID, ip("127.0.0.1"), null),
-        new Verdict(Verdict.Action.ADMIT, Verdict.Basis.BEDROCK_IP_UNKNOWN, null, null, null),
+    journal.record(new Attempt(".Alex", PLAYER_UUID, ip("127.0.0.1"), false, null),
+        new Verdict(Verdict.Action.ADMIT, Verdict.Basis.BEDROCK_IP_UNKNOWN,
+            Verdict.Origin.GEYSER_FLOODGATE, null, null, null),
         Phase.LOGIN, AdmissionConfig.Mode.ENFORCE);
 
     final String line = log.lines().getFirst();
@@ -191,12 +274,14 @@ class AdmissionConfigAndJournalTest {
     final AdmissionJournal journal = new AdmissionJournal(log.logger(), CLOCK);
 
     final Optional<AdmissionJournal.Entry> clean = journal.record(
-        new Attempt("Steve", null, ip("198.51.100.1"), null),
-        new Verdict(Verdict.Action.ADMIT, Verdict.Basis.CLEAN, ip("198.51.100.1"), null, null),
+        new Attempt("Steve", null, ip("198.51.100.1"), false, null),
+        new Verdict(Verdict.Action.ADMIT, Verdict.Basis.CLEAN, Verdict.Origin.DIRECT,
+            ip("198.51.100.1"), null, null),
         Phase.PRE_LOGIN, AdmissionConfig.Mode.ENFORCE);
     final Optional<AdmissionJournal.Entry> deferred = journal.record(
-        new Attempt("Steve", null, ip("127.0.0.1"), null),
-        new Verdict(Verdict.Action.DEFER, Verdict.Basis.GEYSER_ORIGIN, null, null, null),
+        new Attempt("Steve", null, ip("127.0.0.1"), false, null),
+        new Verdict(Verdict.Action.DEFER, Verdict.Basis.GEYSER_ORIGIN,
+            Verdict.Origin.GEYSER_UNCONFIRMED, null, null, null),
         Phase.PRE_LOGIN, AdmissionConfig.Mode.ENFORCE);
 
     assertTrue(clean.isEmpty());
@@ -209,7 +294,7 @@ class AdmissionConfigAndJournalTest {
     final RecordingLogger log = new RecordingLogger();
     final AdmissionJournal journal = new AdmissionJournal(log.logger(), CLOCK);
 
-    journal.record(new Attempt("a\" decision=admitted", null, ip("203.0.113.50"), null),
+    journal.record(new Attempt("a\" decision=admitted", null, ip("203.0.113.50"), false, null),
         listed(Verdict.Action.REFUSE, "203.0.113.50"), Phase.PRE_LOGIN,
         AdmissionConfig.Mode.ENFORCE);
 
@@ -224,7 +309,7 @@ class AdmissionConfigAndJournalTest {
     final AdmissionJournal journal = new AdmissionJournal(new RecordingLogger().logger(), CLOCK);
     final IpClassifier lists = address -> Optional.of(
         new IpClassifier.Match(IpClass.DATACENTER, "dc-list"));
-    journal.record(new Attempt("Steve", PLAYER_UUID, ip("203.0.113.50"), null),
+    journal.record(new Attempt("Steve", PLAYER_UUID, ip("203.0.113.50"), false, null),
         listed(Verdict.Action.REFUSE, "203.0.113.50"), Phase.LOGIN, AdmissionConfig.Mode.ENFORCE);
 
     // Act
@@ -257,9 +342,9 @@ class AdmissionConfigAndJournalTest {
   void theMemoryIsBounded() {
     final AdmissionJournal journal = new AdmissionJournal(new RecordingLogger().logger(), CLOCK);
     for (int i = 0; i < 20_000; i++) {
-      journal.record(new Attempt("player" + i, null, ip("203.0.113.50"), null),
-          listed(Verdict.Action.REFUSE, "203.0.113.50"), Phase.PRE_LOGIN,
-          AdmissionConfig.Mode.ENFORCE);
+      final String address = "203.0." + (i / 256 % 256) + "." + (i % 256);
+      journal.record(new Attempt("player" + i, new UUID(0, i), ip(address), false, null),
+          listed(Verdict.Action.REFUSE, address), Phase.LOGIN, AdmissionConfig.Mode.ENFORCE);
     }
     assertTrue(journal.memorySize() <= 4096, "the memory must not grow with the traffic");
     assertFalse(journal.lastForName("never-seen").isPresent());

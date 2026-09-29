@@ -48,13 +48,15 @@ import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
  * ({@code enforce}, datacenter and Tor refused).
  *
  * @param mode whether listed connections are refused or only journaled
- * @param geyserAddresses the addresses Geyser connects from: never judged
+ * @param geyserAddresses the addresses Geyser connects from: a Floodgate player coming from one
+ *     is not judged on it. Empty by default, until the bench has measured what the proxy sees
  * @param exemptions the players and networks let in even when listed
  * @param messages the text shown to a refused player, per class, with a {@code {code}} placeholder
  * @param sources the lists to load and refresh
  * @param refreshInterval how often the lists are downloaded again
- * @param downloadTimeout how long one download may take
+ * @param downloadTimeout how long one download may take, all included
  * @param maxDownloadBytes the most one downloaded list may weigh
+ * @param maxEntries the most entries one list may hold; a longer list is not trusted
  */
 public record AdmissionConfig(
     Mode mode,
@@ -64,7 +66,11 @@ public record AdmissionConfig(
     List<ListSource> sources,
     Duration refreshInterval,
     Duration downloadTimeout,
-    long maxDownloadBytes) {
+    long maxDownloadBytes,
+    int maxEntries) {
+
+  /** The default ceiling on the entries of one list, well above the largest default list. */
+  public static final int DEFAULT_MAX_ENTRIES = 500_000;
 
   /** Whether a listed connection is turned away or only written down. */
   public enum Mode {
@@ -132,7 +138,8 @@ public record AdmissionConfig(
         logger.info("Wrote the default configuration to {}.", file);
       }
       try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-        return parseYaml(reader, warning -> logger.warn("config.yml: {}", warning));
+        return parseYaml(reader, warning -> logger.warn("config.yml: {}", warning),
+            error -> logger.error("config.yml: {}", error));
       }
     } catch (IOException | RuntimeException unreadable) {
       logger.error("Could not read {}: {}. Using the strict defaults.", file,
@@ -151,11 +158,25 @@ public record AdmissionConfig(
    */
   public static AdmissionConfig parseYaml(final Reader source, final Consumer<String> warnings)
       throws IOException {
+    return parseYaml(source, warnings, warnings);
+  }
+
+  /**
+   * Parses a YAML document, keeping errors apart from warnings.
+   *
+   * @param source the YAML text
+   * @param warnings receives one sentence per value that was ignored
+   * @param errors receives one sentence per entry refused because it would be unsafe as written
+   * @return the settings
+   * @throws IOException if the text is not valid YAML
+   */
+  public static AdmissionConfig parseYaml(final Reader source, final Consumer<String> warnings,
+      final Consumer<String> errors) throws IOException {
     final BufferedReader reader =
         source instanceof BufferedReader buffered ? buffered : new BufferedReader(source);
     try {
       return parse(YamlConfigurationLoader.builder().source(() -> reader).build().load(),
-          warnings);
+          warnings, errors);
     } catch (ConfigurateException malformed) {
       throw new IOException(malformed.getMessage(), malformed);
     }
@@ -170,11 +191,26 @@ public record AdmissionConfig(
    */
   public static AdmissionConfig parse(final ConfigurationNode root,
       final Consumer<String> warnings) {
+    return parse(root, warnings, warnings);
+  }
+
+  /**
+   * Reads the settings from a parsed document, keeping errors apart from warnings.
+   *
+   * @param root the document root
+   * @param warnings receives one sentence per value that was ignored
+   * @param errors receives one sentence per entry refused because it would be unsafe as written
+   * @return the settings
+   */
+  public static AdmissionConfig parse(final ConfigurationNode root,
+      final Consumer<String> warnings, final Consumer<String> errors) {
     final Mode mode = parseMode(root.node("mode").getString("enforce"), warnings);
+    // Empty by default: until the bench has measured the address Geyser connects from (13.1),
+    // no address is spared its judgement.
     final CidrSet geyser = parseNetworks(
-        root.node("geyser-addresses"), List.of("127.0.0.1", "::1"), "geyser-addresses", warnings);
+        root.node("geyser-addresses"), List.of(), "geyser-addresses", warnings);
     final Exemptions exemptions = new Exemptions(
-        parsePlayers(root.node("exemptions", "players"), warnings),
+        parsePlayers(root.node("exemptions", "players"), errors),
         parseNetworks(root.node("exemptions", "networks"), List.of(), "exemptions.networks",
             warnings));
 
@@ -185,11 +221,12 @@ public record AdmissionConfig(
         lists.node("download-timeout-seconds").getLong(DEFAULT_TIMEOUT.toSeconds())));
     final long maxBytes = Math.max(1, lists.node("max-download-megabytes")
         .getLong(DEFAULT_MAX_BYTES / (1024 * 1024))) * 1024 * 1024;
+    final int maxEntries = Math.max(1, lists.node("max-entries").getInt(DEFAULT_MAX_ENTRIES));
     final List<ListSource> sources = lists.node("sources").empty()
         ? defaultSources() : parseSources(lists.node("sources"), warnings);
 
     return new AdmissionConfig(mode, geyser, exemptions, parseMessages(root.node("messages")),
-        sources, refresh, timeout, maxBytes);
+        sources, refresh, timeout, maxBytes, maxEntries);
   }
 
   /**
@@ -228,33 +265,33 @@ public record AdmissionConfig(
     return builder.build();
   }
 
+  /**
+   * Reads the exempted players. Each one needs a name <em>and</em> a UUID: an entry with only one
+   * of them is an error, reported and left out, so that it exempts nobody.
+   */
   private static List<Exemptions.Player> parsePlayers(final ConfigurationNode node,
-      final Consumer<String> warnings) {
+      final Consumer<String> errors) {
     final List<Exemptions.Player> players = new ArrayList<>();
+    int index = 0;
     for (ConfigurationNode entry : node.childrenList()) {
-      String name = null;
-      UUID uuid = null;
-      boolean valid = true;
-      if (entry.isMap()) {
-        name = entry.node("name").getString();
-        final String rawUuid = entry.node("uuid").getString();
-        if (rawUuid != null) {
-          uuid = parseUuid(rawUuid);
-          valid = uuid != null;
-        }
-      } else {
-        final String scalar = entry.getString("").trim();
-        uuid = parseUuid(scalar);
-        name = uuid == null ? scalar : null;
-      }
-      if (name != null && name.isBlank()) {
-        name = null;
-      }
-      if (!valid || (name == null && uuid == null)) {
-        warnings.accept("exemptions.players: an entry needs a name and/or a valid UUID; ignored");
+      final String where = "exemptions.players[" + index++ + "]";
+      if (!entry.isMap()) {
+        errors.accept(where + ": '" + entry.getString("") + "' is a bare value; an exemption"
+            + " needs both 'name' and 'uuid'. Entry REFUSED, it exempts nobody");
         continue;
       }
-      players.add(new Exemptions.Player(name, uuid));
+      final String name = entry.node("name").getString("").trim();
+      final String rawUuid = entry.node("uuid").getString("").trim();
+      final UUID uuid = rawUuid.isEmpty() ? null : parseUuid(rawUuid);
+      if (name.isEmpty() && uuid != null) {
+        errors.accept(where + ": a UUID alone is not an exemption; add the player's 'name'."
+            + " Entry REFUSED, it exempts nobody");
+      } else if (name.isEmpty() || uuid == null) {
+        errors.accept(where + ": an exemption needs both 'name' and a valid 'uuid'. Entry"
+            + " REFUSED, it exempts nobody");
+      } else {
+        players.add(new Exemptions.Player(name, uuid));
+      }
     }
     return players;
   }

@@ -27,6 +27,10 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Downloads one public list into a file.
@@ -48,9 +52,10 @@ public interface ListFetcher {
   void fetch(URI url, Path destination) throws IOException;
 
   /**
-   * The fetcher used in production: HTTPS through the JDK client, bounded in time and in size.
+   * The fetcher used in production: HTTPS through the JDK client, bounded in size and in total
+   * duration (connection, headers and body together).
    *
-   * @param timeout how long a whole download may take
+   * @param timeout how long a whole download may take, from the first byte sent to the last read
    * @param maxBytes the most a download may write; a longer body is an error
    * @return the fetcher
    */
@@ -60,6 +65,7 @@ public interface ListFetcher {
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build();
     return (url, destination) -> {
+      final long deadline = System.nanoTime() + timeout.toNanos();
       final HttpRequest request = HttpRequest.newBuilder(url)
           .timeout(timeout)
           .header("User-Agent", "btc-admission-shield")
@@ -76,24 +82,39 @@ public interface ListFetcher {
         if (response.statusCode() != 200) {
           throw new IOException("HTTP " + response.statusCode() + " from " + url);
         }
+        // A read blocked on a server that went silent does not look at any clock: closing the
+        // stream from here is what makes it fail at the deadline.
+        final ScheduledFuture<?> watchdog = Watchdog.INSTANCE.schedule(
+            () -> closeQuietly(body), Math.max(1L, deadline - System.nanoTime()),
+            TimeUnit.NANOSECONDS);
         try (OutputStream out = Files.newOutputStream(destination)) {
-          copyBounded(body, out, maxBytes);
+          BoundedCopy.copy(body, out, maxBytes, deadline, System::nanoTime);
+        } finally {
+          watchdog.cancel(false);
         }
       }
     };
   }
 
-  private static void copyBounded(final InputStream in, final OutputStream out, final long max)
-      throws IOException {
-    final byte[] buffer = new byte[64 * 1024];
-    long total = 0;
-    int read;
-    while ((read = in.read(buffer)) != -1) {
-      total += read;
-      if (total > max) {
-        throw new IOException("list larger than " + max + " bytes, download abandoned");
-      }
-      out.write(buffer, 0, read);
+  private static void closeQuietly(final InputStream stream) {
+    try {
+      stream.close();
+    } catch (IOException ignored) {
+      // The download is being abandoned anyway.
+    }
+  }
+
+  /** One daemon thread that fires the deadlines of the downloads. */
+  final class Watchdog {
+
+    private static final ScheduledExecutorService INSTANCE =
+        Executors.newSingleThreadScheduledExecutor(task -> {
+          final Thread thread = new Thread(task, "btc-admission-download-watchdog");
+          thread.setDaemon(true);
+          return thread;
+        });
+
+    private Watchdog() {
     }
   }
 }
