@@ -1,0 +1,62 @@
+# BTC Client Policy - client-policy/config.yml (Sentinel volet 14)
+#
+# Any error in this file switches the whole plugin off (the proxy still starts): fix it and restart.
+
+# dry-run : a matching deny rule is journalled as "would-refuse", nobody is touched (the default).
+# enforce : a matching deny rule disconnects the player with the rule's message. Never a ban.
+# Run dry-run for at least a week on real traffic before switching to enforce.
+mode: dry-run
+
+permissions:
+  bypass: btc.clientpolicy.bypass   # staff exempt from refusal
+  view: btc.clientpolicy.view       # may use /clientpolicy <player>
+
+# Consent (14.2). Sent as a system message / plugin message once the player is on a backend, and
+# again when they move to a backend whose consent differs. Honest mods apply it to themselves; a
+# modified client ignores it. Bedrock players receive nothing.
+consent:
+  xaero:
+    # Aliases: fairplay (radar + cave mode off), no-minimap, nether-fair-minimap,
+    # nether-fair-worldmap, reset, none. A raw code containing the section sign is accepted too,
+    # and a list concatenates several. A backend that resolves to 'none' after another one sends
+    # 'reset' so the earlier restriction does not follow the player.
+    default: fairplay
+    servers: {}
+    # Example - the minimap is fully off on a given backend (exact name, or a prefix ending in *):
+    #   servers:
+    #     creatif: no-minimap
+    #     build-*: no-minimap
+  voxelmap:
+    enabled: true
+    default:
+      radarAllowed: false
+      radarMobsAllowed: false
+      radarPlayersAllowed: false
+      cavesAllowed: false
+      minimapAllowed: true
+      worldmapAllowed: true
+      waypointsAllowed: true
+      deathWaypointAllowed: false
+      # teleportCommand: "/tp {x} {y} {z}"   # left out unless set
+    servers: {}
+    # Example - partial override for one backend (unmentioned keys keep the default):
+    #   servers:
+    #     creatif:
+    #       radarAllowed: true
+
+# Deny list (14.4) - EMPTY by default. Each rule targets exactly one of:
+#   brand:   regular expression on the minecraft:brand string
+#   channel: regular expression on a registered plugin channel (any channel matching counts)
+# The expression is case-insensitive and must match the WHOLE value (write .*wurst.* for a
+# substring). Loading is refused if an expression matches fabric, forge, neoforge, vanilla or
+# quilt: those are the brands of every honest player. A client that hides its brand and channels
+# (Wurst, Meteor: one click) is not caught; the anticheat engine judges it by its effects.
+#   message: MiniMessage text shown on disconnect (optional).
+deny: []
+# Example:
+#   deny:
+#     - label: "Example cheat client"
+#       brand: ".*examplecheat.*"
+#       message: "<red>This client is not allowed on Born To Craft.</red>"
+#     - label: "Example cheat channel"
+#       channel: "examplecheat:.*"
