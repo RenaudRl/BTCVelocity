@@ -78,6 +78,22 @@ class ListGuardsTest {
   }
 
   @Test
+  void theUnreadableLinesQuotedInARejectionCannotForgeOrReorderALogLine() {
+    // Arrange - the lines come from someone else's file: a bidi override and an escape sequence
+    final ListParser.Result garbage =
+        ListParser.parse("a‮evil\nx\u001b[2Jred\nplain-garbage\n");
+
+    // Act
+    final String rejection = ListGuards.absoluteRejection(garbage, 10);
+
+    // Assert
+    assertNotNull(rejection);
+    assertTrue(rejection.codePoints().noneMatch(c -> c == 0x202E || c == 0x1B), rejection);
+    assertTrue(rejection.contains("\\u202E"), rejection);
+    assertTrue(rejection.contains("\\u001B"), rejection);
+  }
+
+  @Test
   void anIpv6CoverageThatDoublesIsRejected() {
     final ListStore.Loaded previous = loaded("2001:db8::/48\n2001:db9::/48\n");
 

@@ -122,6 +122,19 @@ class ListStoreAndRefresherTest {
   }
 
   @Test
+  void theInvalidLinesQuotedWhenAListIsLoadedAreEscaped() throws IOException {
+    Files.writeString(this.directory.resolve("dc.txt"), "203.0.113.0/24\n198.51.100.0/24\n"
+        + "x‮evil\n");
+
+    this.store.loadAll(List.of(DATACENTER));
+
+    final String warning = this.log.lines().stream()
+        .filter(line -> line.contains("invalid lines ignored")).findFirst().orElseThrow();
+    assertTrue(warning.codePoints().noneMatch(c -> c == 0x202E), warning);
+    assertTrue(warning.contains("\\u202E"), warning);
+  }
+
+  @Test
   void aSuccessfulRefreshReplacesTheFileAndTheClassification() throws IOException {
     // Arrange - an old list is in place
     Files.writeString(this.directory.resolve("dc.txt"), "203.0.113.0/24\n");

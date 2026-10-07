@@ -104,9 +104,13 @@ public final class StaffAlerts {
 
   private static String describe(final AdmissionJournal.Entry entry) {
     final Verdict verdict = entry.verdict();
-    return AdmissionJournal.value(entry.username())
+    // The name is typed by a client and shown in a chat line, where the client reads a section
+    // sign as a formatting code: written out, not interpreted. The address is shown as its
+    // network (a /24 or a /48), not the player's own: /admission why gives the full one.
+    return AdmissionJournal.value(entry.username()).replace("§", "\\u00A7")
         + " (" + AdmissionJournal.identityOf(entry.phase())
-        + ", " + (verdict.judged() == null ? "ip inconnue" : verdict.judged().getHostAddress())
+        + ", " + (verdict.judged() == null ? "ip inconnue"
+            : Networks.of(verdict.judged(), Networks.STAFF_V4, Networks.STAFF_V6))
         + ", " + (verdict.ipClass() == null ? "aucune classe" : verdict.ipClass().key())
         + ", " + (entry.code() == null ? "sans code" : entry.code()) + ")."
         + " /admission why pour le détail.";

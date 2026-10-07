@@ -104,6 +104,28 @@ class StaffAlertsTest {
   }
 
   @Test
+  void theStaffSeesTheNetworkNotThePlayersOwnAddress() {
+    final ManualClock clock = new ManualClock();
+    final List<String> told = new ArrayList<>();
+
+    new StaffAlerts(clock, told::add).onRefusal(refusal("Bot", clock.instant()));
+
+    assertTrue(told.getFirst().contains("203.0.113.0/24"), told.getFirst());
+    assertTrue(!told.getFirst().contains("203.0.113.50"), told.getFirst());
+  }
+
+  @Test
+  void aSectionSignInANameIsWrittenOutNotLeftForTheClientToInterpret() {
+    final ManualClock clock = new ManualClock();
+    final List<String> told = new ArrayList<>();
+
+    new StaffAlerts(clock, told::add).onRefusal(refusal("§cStaff§kX", clock.instant()));
+
+    assertTrue(!told.getFirst().contains("§"), told.getFirst());
+    assertTrue(told.getFirst().contains("\\u00A7cStaff"), told.getFirst());
+  }
+
+  @Test
   void aHostileNameReachesTheStaffEscaped() {
     final ManualClock clock = new ManualClock();
     final List<String> told = new ArrayList<>();

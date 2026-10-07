@@ -55,6 +55,17 @@ public final class ListParser {
    */
   public record Result(CidrSet set, int validLines, int invalidLines, List<String> invalidSamples,
       boolean truncated) {
+
+    /**
+     * The rejected lines as a log may carry them. A line comes from someone else's file, so
+     * control and formatting characters are escaped (as in the journal): nothing in it can
+     * forge a log line or reorder what the reader sees.
+     *
+     * @return the samples, each safe to write
+     */
+    public List<String> printableSamples() {
+      return this.invalidSamples.stream().map(AdmissionJournal::value).toList();
+    }
   }
 
   /**

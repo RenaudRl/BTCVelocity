@@ -187,7 +187,7 @@ public final class ListStore implements IpClassifier {
     }
     if (result.invalidLines() > 0) {
       this.logger.warn("List '{}': {} valid entries, {} invalid lines ignored (first: {}).",
-          source.id(), result.validLines(), result.invalidLines(), result.invalidSamples());
+          source.id(), result.validLines(), result.invalidLines(), result.printableSamples());
     }
     install(new Loaded(source, result.set(), result.validLines(), result.invalidLines(),
         this.clock.instant()));

@@ -79,11 +79,11 @@ public final class ListGuards {
     }
     if (candidate.validLines() == 0) {
       return "no valid entry, " + candidate.invalidLines() + " unreadable lines, first "
-          + candidate.invalidSamples();
+          + candidate.printableSamples();
     }
     if (candidate.invalidLines() > candidate.validLines()) {
       return "more unreadable lines (" + candidate.invalidLines() + ") than entries ("
-          + candidate.validLines() + "), first " + candidate.invalidSamples();
+          + candidate.validLines() + "), first " + candidate.printableSamples();
     }
     if (candidate.validLines() > maxEntries) {
       return candidate.validLines() + " entries, above the ceiling of " + maxEntries
