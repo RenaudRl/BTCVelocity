@@ -21,6 +21,7 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.event.ResultedEvent;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.LoginEvent;
+import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
@@ -73,7 +74,22 @@ import org.slf4j.LoggerFactory;
 public final class BtcAdmissionShieldPlugin {
 
   private static final String COMMAND = "admission";
-  private static final short FIRST = 1000;
+  /**
+   * Velocity runs the listener with the HIGHEST priority first ({@code PostOrder.FIRST} is
+   * {@code Short.MAX_VALUE - 1}, {@code LAST} is {@code Short.MIN_VALUE + 1}). The pre-login
+   * refusal goes early, so that a refused connection costs nothing more; it is applied again at
+   * the login.
+   */
+  static final short PRE_LOGIN_PRIORITY = 1000;
+
+  /**
+   * The login refusal runs after every other listener, {@code PostOrder.LAST} included, so that
+   * none of them can turn it back into an admission.
+   */
+  static final short LOGIN_PRIORITY = Short.MIN_VALUE;
+
+  /** The net under the login refusal. */
+  static final short POST_LOGIN_PRIORITY = Short.MIN_VALUE;
   private static final long FIRST_DOWNLOAD_DELAY_SECONDS = 2;
   private static final Duration SETTLE_PERIOD = Duration.ofMinutes(1);
   private static final String LOGGING_FRAGMENT = "log4j2-admission-journal.xml";
@@ -85,6 +101,7 @@ public final class BtcAdmissionShieldPlugin {
 
   private volatile AdmissionEngine engine;
   private volatile AdmissionConfig config;
+  private final RefusalLedger refusals = new RefusalLedger();
   private volatile ListStore store;
   private volatile ScheduledTask settleTask;
   private volatile AdmissionJournal journal;
@@ -174,7 +191,7 @@ public final class BtcAdmissionShieldPlugin {
    *
    * @param event the pre-login
    */
-  @Subscribe(priority = FIRST, async = false)
+  @Subscribe(priority = PRE_LOGIN_PRIORITY, async = false)
   public void onPreLogin(final PreLoginEvent event) {
     final AdmissionEngine current = this.engine;
     if (current == null || !event.getResult().isAllowed()) {
@@ -190,6 +207,7 @@ public final class BtcAdmissionShieldPlugin {
         this.journal.record(attempt, verdict, Phase.PRE_LOGIN, this.config.mode());
     if (verdict.action() == Verdict.Action.REFUSE) {
       event.setResult(PreLoginEvent.PreLoginComponentResult.denied(refusal(verdict)));
+      this.refusals.note(event.getConnection().getRemoteAddress(), verdict);
       entry.ifPresent(this.alerts::onRefusal);
     }
   }
@@ -200,7 +218,7 @@ public final class BtcAdmissionShieldPlugin {
    *
    * @param event the login
    */
-  @Subscribe(priority = FIRST, async = false)
+  @Subscribe(priority = LOGIN_PRIORITY, async = false)
   public void onLogin(final LoginEvent event) {
     final AdmissionEngine current = this.engine;
     if (current == null || !event.getResult().isAllowed()) {
@@ -235,8 +253,26 @@ public final class BtcAdmissionShieldPlugin {
     }
     if (verdict.action() == Verdict.Action.REFUSE) {
       event.setResult(ResultedEvent.ComponentResult.denied(refusal(verdict)));
+      this.refusals.note(player.getRemoteAddress(), verdict);
       entry.ifPresent(this.alerts::onRefusal);
     }
+  }
+
+  /**
+   * The last net: closes a connection that was refused and got through anyway, because a listener
+   * overturned the refusal after this plugin's.
+   *
+   * @param event the post-login
+   */
+  @Subscribe(priority = POST_LOGIN_PRIORITY, async = false)
+  public void onPostLogin(final PostLoginEvent event) {
+    final Player player = event.getPlayer();
+    this.refusals.take(player.getRemoteAddress()).ifPresent(verdict -> {
+      this.logger.error("{} was refused ({}) but a later listener let the connection through;"
+          + " disconnecting it.", AdmissionJournal.value(player.getUsername()),
+          verdict.ipClass() == null ? "no class" : verdict.ipClass().key());
+      player.disconnect(refusal(verdict));
+    });
   }
 
   private void tellStaff(final String message) {
