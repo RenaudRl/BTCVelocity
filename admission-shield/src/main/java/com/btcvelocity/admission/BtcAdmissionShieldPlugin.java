@@ -162,7 +162,10 @@ public final class BtcAdmissionShieldPlugin {
         this.proxy.getCommandManager().metaBuilder(COMMAND).plugin(this).build(),
         new AdmissionCommand(this.journal, store, settings));
     this.alertTask = this.proxy.getScheduler()
-        .buildTask(this, this.alerts::flushIfDue)
+        .buildTask(this, () -> {
+          this.alerts.flushIfDue();
+          this.journal.flushExpired();
+        })
         .delay(StaffAlerts.WINDOW)
         .repeat(StaffAlerts.WINDOW)
         .schedule();

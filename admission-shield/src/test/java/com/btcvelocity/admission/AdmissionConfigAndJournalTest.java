@@ -233,10 +233,12 @@ class AdmissionConfigAndJournalTest {
     final RecordingLogger log = new RecordingLogger();
     final AdmissionJournal journal = new AdmissionJournal(log.logger(), CLOCK);
 
+    int network = 0;
     for (String name : hostile) {
-      // Act
-      journal.record(Attempt.claimed(name, ip("203.0.113.50")),
-          listed(Verdict.Action.REFUSE, "203.0.113.50"), Phase.PRE_LOGIN,
+      // Act - one network each: refusals from one /24 within a minute are aggregated
+      final String address = "203.0." + network++ + ".50";
+      journal.record(Attempt.claimed(name, ip(address)),
+          listed(Verdict.Action.REFUSE, address), Phase.PRE_LOGIN,
           AdmissionConfig.Mode.ENFORCE);
       final String line = log.lines().getLast();
 

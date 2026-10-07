@@ -73,4 +73,20 @@ class LoggingFragmentTest {
     assertTrue(appender.getAttribute("filePattern").endsWith(".log.gz"));
     assertEquals("journal-*.log.gz", only(document, "IfFileName").getAttribute("glob"));
   }
+
+  @Test
+  void theDiskIsBoundedByFileSizeAndByTheTotalOfTheArchives() throws Exception {
+    final Document document = fragment();
+
+    final Element appender = only(document, "RollingRandomAccessFile");
+    assertTrue(only(document, "SizeBasedTriggeringPolicy").getAttribute("size").endsWith("MB"));
+    assertTrue(appender.getAttribute("filePattern").contains("%i"),
+        "several archives a day need an index in the name");
+    final Element total = only(document, "IfAccumulatedFileSize");
+    assertTrue(total.getAttribute("exceeds").endsWith("GB"));
+    // OR with the age: the size limit must be able to delete files younger than 180 days
+    assertEquals("IfAny", total.getParentNode().getNodeName());
+    assertEquals("IfLastModified", ((Element) total.getParentNode()).getElementsByTagName(
+        "IfLastModified").item(0).getNodeName());
+  }
 }

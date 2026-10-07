@@ -21,8 +21,14 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.net.InetAddress;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
@@ -48,6 +54,12 @@ public final class AdmissionJournal {
 
   /** The name of the dedicated logger. */
   public static final String LOGGER_NAME = "btc.admission.journal";
+
+  /** How long the refusals of one network are counted into one line. */
+  static final Duration AGGREGATION_WINDOW = Duration.ofMinutes(1);
+
+  /** The most networks followed at once; beyond it, lines are written in full. */
+  private static final int MAX_BURSTS = 10_000;
 
   private static final long MEMORY_SIZE = 4096;
   private static final int LINE_SEPARATOR = 0x2028;
@@ -160,6 +172,8 @@ public final class AdmissionJournal {
 
   private final Logger logger;
   private final Clock clock;
+  private final Object burstLock = new Object();
+  private final Map<String, Burst> bursts = new HashMap<>();
   private final Cache<String, Entry> memory =
       Caffeine.newBuilder().maximumSize(MEMORY_SIZE).build();
 
@@ -197,7 +211,9 @@ public final class AdmissionJournal {
         ? verdict.ipClass().causeCode() : null;
     final Entry entry = new Entry(this.clock.instant(), attempt.username(), attempt.uuid(),
         verdict, decision, code, phase, mode);
-    this.logger.info("{}", entry.line());
+    if (claimFullLine(entry)) {
+      this.logger.info("{}", entry.line());
+    }
     // A name typed at the pre-login proves nothing: indexing it would let anyone fill the
     // answer to "/admission why <someone else>". Only an authenticated name is an index.
     if (phase == Phase.LOGIN && attempt.uuid() != null) {
@@ -210,6 +226,96 @@ public final class AdmissionJournal {
       this.memory.put(addressKey(judged), entry);
     }
     return Optional.of(entry);
+  }
+
+  /** One run of refusals or observations from the same network, within one window. */
+  private static final class Burst {
+    private final Instant start;
+    private final String decision;
+    private final String ipClass;
+    private final String source;
+    private final String network;
+    private int suppressed;
+
+    private Burst(final Instant start, final Entry first, final String network) {
+      this.start = start;
+      this.decision = first.decision();
+      this.ipClass = first.verdict().ipClass() == null ? "none" : first.verdict().ipClass().key();
+      this.source = first.verdict().sourceId() == null ? "none" : first.verdict().sourceId();
+      this.network = network;
+    }
+
+    private String summary() {
+      final StringBuilder line = new StringBuilder(160);
+      Entry.append(line, "ts", this.start.plus(AGGREGATION_WINDOW).toString());
+      Entry.append(line, "event", "aggregate");
+      Entry.append(line, "decision", this.decision);
+      Entry.append(line, "class", this.ipClass);
+      Entry.append(line, "source", this.source);
+      Entry.append(line, "net", this.network);
+      Entry.append(line, "suppressed", Integer.toString(this.suppressed));
+      Entry.append(line, "since", this.start.toString());
+      Entry.append(line, "window_s", Long.toString(AGGREGATION_WINDOW.toSeconds()));
+      return line.toString().trim();
+    }
+  }
+
+  /**
+   * Whether this decision gets its own line. Refusals and observations from one network (an IPv4
+   * /24, an IPv6 /64) are written in full the first time in a {@link #AGGREGATION_WINDOW}; the
+   * rest of the window is counted and written as one {@code event=aggregate} line when it ends,
+   * so that a wave from one datacenter cannot drown the journal (and its retention).
+   * Exemptions and the other admissions are rare and always written.
+   */
+  private boolean claimFullLine(final Entry entry) {
+    final InetAddress judged = entry.verdict().judged();
+    if (entry.verdict().basis() != Verdict.Basis.LISTED || judged == null) {
+      return true;
+    }
+    final String network = Networks.of(judged, Networks.AGGREGATE_V4, Networks.AGGREGATE_V6);
+    final String key = entry.decision() + '|' + entry.verdict().sourceId() + '|' + network;
+    String closed = null;
+    boolean full = true;
+    synchronized (this.burstLock) {
+      final Burst burst = this.bursts.get(key);
+      if (burst != null && entry.at().isBefore(burst.start.plus(AGGREGATION_WINDOW))) {
+        burst.suppressed++;
+        full = false;
+      } else {
+        if (burst != null && burst.suppressed > 0) {
+          closed = burst.summary();
+        }
+        if (burst != null || this.bursts.size() < MAX_BURSTS) {
+          this.bursts.put(key, new Burst(entry.at(), entry, network));
+        }
+      }
+    }
+    if (closed != null) {
+      this.logger.info("{}", closed);
+    }
+    return full;
+  }
+
+  /**
+   * Writes the summary of every window that is over. Called from a timer so that the last window
+   * of a wave is not held back until the next refusal from the same network.
+   */
+  public void flushExpired() {
+    final Instant now = this.clock.instant();
+    final List<String> closed = new ArrayList<>();
+    synchronized (this.burstLock) {
+      final Iterator<Burst> bursts = this.bursts.values().iterator();
+      while (bursts.hasNext()) {
+        final Burst burst = bursts.next();
+        if (!now.isBefore(burst.start.plus(AGGREGATION_WINDOW))) {
+          bursts.remove();
+          if (burst.suppressed > 0) {
+            closed.add(burst.summary());
+          }
+        }
+      }
+    }
+    closed.forEach(line -> this.logger.info("{}", line));
   }
 
   /**
