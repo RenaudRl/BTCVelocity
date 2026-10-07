@@ -111,6 +111,18 @@ class AdmissionConfigAndJournalTest {
   }
 
   @Test
+  void aDownloadIsBoundedTo8MegabytesByDefaultInTheCodeAndInTheTemplate() throws IOException {
+    final String template;
+    try (var stream = AdmissionConfig.class.getResourceAsStream("/config.yml")) {
+      template = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    assertEquals(8L * 1024 * 1024, AdmissionConfig.defaults().maxDownloadBytes());
+    assertEquals(8L * 1024 * 1024, AdmissionConfig.parseYaml(new StringReader(template),
+        warning -> { }).maxDownloadBytes());
+  }
+
+  @Test
   void theEmbeddedBaselineIsOnByDefaultAndCanBeSwitchedOff() throws IOException {
     assertTrue(AdmissionConfig.defaults().embeddedBaseline());
     assertFalse(AdmissionConfig.parseYaml(

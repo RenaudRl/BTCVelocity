@@ -173,7 +173,7 @@ public final class ListStore implements IpClassifier {
     final Path file = this.directory.resolve(source.fileName());
     final ListParser.Result result;
     try {
-      result = ListParser.parse(file);
+      result = ListParser.parse(file, this.maxEntries);
     } catch (IOException unreadable) {
       this.logger.error("List '{}' could not be read from {}: {}. Keeping the previous one.",
           source.id(), file, unreadable.toString());

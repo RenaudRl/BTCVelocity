@@ -93,7 +93,8 @@ public record AdmissionConfig(
   private static final Pattern SAFE_FILE_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
   private static final Duration DEFAULT_REFRESH = Duration.ofHours(24);
   private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
-  private static final long DEFAULT_MAX_BYTES = 32L * 1024 * 1024;
+  /** The largest default list is 0.7 MB (October 2026); 8 MB bounds what a host can send. */
+  private static final long DEFAULT_MAX_BYTES = 8L * 1024 * 1024;
   private static final Duration DEFAULT_QUARANTINE = Duration.ofHours(6);
   private static final int DEFAULT_QUARANTINE_MAX_EXTRA_PLAYERS = 0;
 

@@ -68,6 +68,16 @@ class ListGuardsTest {
   }
 
   @Test
+  void aListReadOnlyUpToTheCeilingIsRejectedAsTooLongWhatEverItsFirstLinesAre() {
+    final ListParser.Result cut = ListParser.parse("192.0.2.1\n192.0.2.2\n192.0.2.3\n", 2);
+
+    final String rejection = ListGuards.absoluteRejection(cut, 2);
+
+    assertNotNull(rejection);
+    assertTrue(rejection.contains("above the ceiling of 2"), rejection);
+  }
+
+  @Test
   void anIpv6CoverageThatDoublesIsRejected() {
     final ListStore.Loaded previous = loaded("2001:db8::/48\n2001:db9::/48\n");
 

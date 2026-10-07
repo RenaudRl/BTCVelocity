@@ -52,6 +52,31 @@ class ListParserTest {
   }
 
   @Test
+  void readingStopsAsSoonAsTheLineCeilingIsCrossed(@TempDir final Path directory)
+      throws IOException {
+    // Arrange - a list that goes on far past the ceiling, valid and invalid lines mixed
+    final StringBuilder text = new StringBuilder();
+    for (int i = 0; i < 5_000; i++) {
+      text.append(i % 2 == 0 ? "203.0.113.0/24" : "garbage").append('\n');
+    }
+    final Path file = directory.resolve("long.txt");
+    Files.writeString(file, text);
+
+    // Act
+    final ListParser.Result fromFile = ListParser.parse(file, 10);
+    final ListParser.Result fromText = ListParser.parse(text.toString(), 10);
+
+    // Assert - nothing past the ceiling was read or kept
+    for (ListParser.Result result : List.of(fromFile, fromText)) {
+      assertTrue(result.truncated());
+      assertEquals(10, result.validLines() + result.invalidLines());
+    }
+    final ListParser.Result exact = ListParser.parse("192.0.2.1\n192.0.2.2\n192.0.2.3\n", 3);
+    assertFalse(exact.truncated(), "exactly at the ceiling is still within it");
+    assertEquals(3, exact.validLines());
+  }
+
+  @Test
   void readsTheFireholIpsetFormatWithItsCommentedHeader() {
     // Arrange - shape of tor_exits.ipset: '#' header, then bare addresses
     final String text = """

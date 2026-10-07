@@ -50,38 +50,68 @@ public final class ListParser {
    * @param validLines how many entry lines were accepted
    * @param invalidLines how many entry lines were rejected
    * @param invalidSamples the first few rejected lines, shortened, for the log
+   * @param truncated whether reading stopped because the list went past the line ceiling: the
+   *     counts then stop at that point, and the list is not to be trusted
    */
-  public record Result(CidrSet set, int validLines, int invalidLines, List<String> invalidSamples) {
+  public record Result(CidrSet set, int validLines, int invalidLines, List<String> invalidSamples,
+      boolean truncated) {
+  }
+
+  /**
+   * Parses a list held in memory, with no ceiling on its length.
+   *
+   * @param text the whole list
+   * @return what was found
+   */
+  public static Result parse(final String text) {
+    return parse(text, Integer.MAX_VALUE);
   }
 
   /**
    * Parses a list held in memory.
    *
    * @param text the whole list
+   * @param maxLines stop reading once more entry lines (valid and invalid) than this were seen
    * @return what was found
    */
-  public static Result parse(final String text) {
+  public static Result parse(final String text, final int maxLines) {
     try (BufferedReader reader = new BufferedReader(new StringReader(text))) {
-      return parse(reader);
+      return parse(reader, maxLines);
     } catch (IOException impossible) {
       throw new IllegalStateException("a string reader does not fail", impossible);
     }
   }
 
   /**
-   * Parses a list held in a file.
+   * Parses a list held in a file, with no ceiling on its length.
    *
    * @param file the list, UTF-8
    * @return what was found
    * @throws IOException if the file cannot be read
    */
   public static Result parse(final Path file) throws IOException {
+    return parse(file, Integer.MAX_VALUE);
+  }
+
+  /**
+   * Parses a list held in a file.
+   *
+   * <p>Reading stops as soon as more than {@code maxLines} entry lines were seen: every accepted
+   * entry costs memory, and a list that long is thrown away anyway, so it must not be read to the
+   * end first.
+   *
+   * @param file the list, UTF-8
+   * @param maxLines the ceiling on entry lines (valid and invalid together)
+   * @return what was found; {@link Result#truncated()} says whether reading was cut short
+   * @throws IOException if the file cannot be read
+   */
+  public static Result parse(final Path file, final int maxLines) throws IOException {
     try (BufferedReader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-      return parse(reader);
+      return parse(reader, maxLines);
     }
   }
 
-  private static Result parse(final Reader source) throws IOException {
+  private static Result parse(final Reader source, final int maxLines) throws IOException {
     final BufferedReader reader =
         source instanceof BufferedReader buffered ? buffered : new BufferedReader(source);
     final CidrSet.Builder builder = CidrSet.builder();
@@ -94,6 +124,9 @@ public final class ListParser {
       if (entry.isEmpty()) {
         continue;
       }
+      if (valid + invalid >= maxLines) {
+        return new Result(builder.build(), valid, invalid, List.copyOf(samples), true);
+      }
       if (builder.add(entry)) {
         valid++;
       } else {
@@ -103,7 +136,7 @@ public final class ListParser {
         }
       }
     }
-    return new Result(builder.build(), valid, invalid, List.copyOf(samples));
+    return new Result(builder.build(), valid, invalid, List.copyOf(samples), false);
   }
 
   /** The first token of the line once any comment is cut off, or empty. */

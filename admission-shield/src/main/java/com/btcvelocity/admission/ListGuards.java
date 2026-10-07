@@ -73,6 +73,10 @@ public final class ListGuards {
    */
   public static @Nullable String absoluteRejection(
       final ListParser.Result candidate, final int maxEntries) {
+    if (candidate.truncated()) {
+      return "more than " + maxEntries + " lines, above the ceiling of " + maxEntries
+          + " (lists.max-entries); not read further";
+    }
     if (candidate.validLines() == 0) {
       return "no valid entry, " + candidate.invalidLines() + " unreadable lines, first "
           + candidate.invalidSamples();

@@ -50,9 +50,10 @@ lists:
   refresh-hours: 24
   # For the whole download: connection, headers and body.
   download-timeout-seconds: 30
-  max-download-megabytes: 32
+  # The largest default list is under 1 MB; a longer download is cut and thrown away.
+  max-download-megabytes: 8
   # A list is thrown away (the last valid one stays, an ERROR is logged) if it holds more entries
-  # than this, covers more than 20 % of the IPv4 space or more than 0.01 % of the IPv6 space
+  # than this (reading stops as soon as it is crossed), covers more than 20 % of the IPv4 space or more than 0.01 % of the IPv6 space
   # 2000::/3, or, compared with the version in use, moves its entry count by more than 50 %,
   # doubles its coverage, or brings a family (IPv4, IPv6) the version in use does not have.
   # A line wider than /8 (IPv4) or /20 (IPv6) is ignored. Private, loopback, CGNAT, link-local and

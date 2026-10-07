@@ -139,7 +139,7 @@ public final class ListRefresher {
       // Unique to this attempt: nothing else can be writing, reading or deleting it.
       part = Files.createTempFile(directory, source.fileName() + ".", PART_SUFFIX);
       this.fetcher.fetch(source.url(), part);
-      final ListParser.Result parsed = ListParser.parse(part);
+      final ListParser.Result parsed = ListParser.parse(part, this.store.maxEntries());
       final String rejection = this.store.rejectionOf(source, parsed);
       if (rejection != null) {
         this.logger.error("List '{}' downloaded from {} was rejected ({}); keeping the last valid"
