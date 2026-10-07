@@ -9,12 +9,58 @@ trafic sortant est le téléchargement périodique des listes (X4BNet `lists_vpn
 
 | | |
 |---|---|
-| Refus | datacenter (`ADM-VPN-DC`) et Tor (`ADM-VPN-TOR`), code affiché au joueur ; mode `observe` pour un essai à blanc |
+| Refus | datacenter (`ADM-VPN-DC`) et Tor (`ADM-VPN-TOR`), code affiché au joueur ; mode `observe` pour un essai à blanc. Trop de tentatives d'un même réseau : `ADM-RATE-NET` (voir plus bas, `observe` par défaut) |
 | Décision | au pré-login ; reportée au login pour une exemption nominative ou un joueur Floodgate. Un refus de pré-login est **ré-appliqué** au login, au cas où un autre plugin l'aurait levé |
 | Exemptions | joueur = pseudo **et** UUID ensemble (un UUID seul est une erreur de configuration) ; réseaux en CIDR |
 | Geyser | `geyser-addresses` **vide par défaut** tant que 13.1 n'a pas mesuré l'adresse vue au proxy. Une connexion venue d'une de ces adresses sans être joueur Floodgate est journalisée `geyser-address-not-floodgate`, signalée en WARN et jugée normalement |
 | Journal | une ligne `key=value` par refus, observation ou exemption, sur le logger `btc.admission.journal` ; `identity=declared` au pré-login, `authenticated` au login |
 | Staff | `/admission why <pseudo\|ip>`, `/admission status` (`btc.admission.staff`) ; alerte en jeu à chaque refus, au plus un message toutes les 10 s |
+
+## Borne de débit par réseau (13.4, `network-rate`)
+
+Indépendante des listes : chaque **pré-login** dépense un jeton du réseau de son adresse, un /24 en
+IPv4 ou un /48 en IPv6 (6to4, Teredo, NAT64 et IPv4-mappées sont d'abord lues comme l'IPv4 qu'elles
+portent). Un réseau a un seau de `burst` jetons qui se remplit de `attempts` par `window-seconds` ;
+une tentative qui trouve le seau vide est au-delà de la limite. Refus : code **`ADM-RATE-NET`**,
+texte réglable (`messages.network-rate`), journalisé et agrégé par minute comme les refus de liste.
+Technique de Gate (Minekube) : borner le bloc, pas l'adresse, pour ne pas punir un CGNAT.
+
+- **Défauts** : 10 tentatives / 10 s, rafale 20, `observe`. Un /24 d'opérateur mobile français
+  derrière CGNAT représente quelques centaines d'abonnés : 1 tentative par seconde en continu est
+  très au-dessus de ce qu'il produit en jeu normal, et la rafale de 20 laisse passer un groupe qui
+  se connecte ensemble ou une vague de reconnexions après un redémarrage. Une vague de bots d'un
+  seul réseau passe ses 20 premières tentatives puis avance à une par seconde. **Valeurs non
+  mesurées** : `observe` d'abord (13.5), `enforce` ensuite.
+- **Modes** : `observe` journalise (`decision=observed`) et laisse entrer ; `enforce` refuse. Le
+  `mode: observe` du module entier retient aussi cette borne. Une faute de frappe dans `mode`
+  retombe sur `observe` (pas sur le strict : une limite non mesurée ne doit pas refuser par erreur).
+  `enabled: false` la coupe. Valeurs absurdes (préfixe hors plage, `attempts` < 1…) : avertissement
+  et défaut ; `burst` < `attempts` est relevé à `attempts`.
+- **Jamais appliquée à** : une adresse non publique (loopback, privée, `100.64.0.0/10`,
+  lien-local, ULA : jamais comptée), les `geyser-addresses` (Bedrock arrive de l'adresse de Geyser,
+  le pré-login y reste différé comme avant) et `exemptions.networks`.
+- **Exemptions de joueur** : elles exigent pseudo **et** UUID, or le pré-login ne connaît que le
+  pseudo déclaré, que n'importe qui peut taper. Un pseudo que porte une exemption n'excuse donc
+  **pas** la tentative (sinon un bot taperait le nom d'un staff) : au-delà de la limite, la décision
+  est **différée au login**, comme pour les listes. Le joueur authentifié nommé par une exemption
+  entre ; tout autre porteur de ce pseudo est refusé si le réseau est encore au-delà de sa limite.
+  En `observe`, rien n'est différé. Le login ne dépense aucun jeton.
+- **Une tentative refusée ne dépense rien** : sous une vague, les joueurs du réseau passent au
+  rythme soutenu au lieu d'être affamés tant que dure la vague. Chaque pré-login est compté, même
+  si les listes le refusent aussi (le décompte dit la vérité du trafic) ; le code affiché est alors
+  celui de la liste.
+- **Mémoire** : au plus `max-networks` réseaux suivis (20 000 par défaut, quelques Mo), le moins
+  récemment vu est oublié d'abord et repart avec un seau plein : la pression sur la table ne peut
+  que laisser passer, jamais refuser un réseau innocent. Un verrou unique protège la table (les
+  événements Velocity sont concurrents) ; un seau inactif ne demande aucune minuterie.
+- **Un refus de pré-login levé par un autre plugin** est rattrapé par le `PostLoginEvent` (filet
+  existant), pas ré-appliqué au login : il n'y a pas d'état à rejouer sans re-dépenser un jeton.
+- **Pas de borne par ASN** : GeoLite2 n'est pas décidé. Point d'extension :
+  `NetworkRateLimiter.Grouping` (adresse publique → clé de réseau) ; une borne par ASN serait une
+  seconde instance avec son propre `Grouping` et ses propres réglages.
+- **Visible** : `/admission why <ip>` donne la dernière décision (ligne `basis=rate-network
+  code=ADM-RATE-NET`), `/admission status` la configuration, le nombre de réseaux suivis et de
+  tentatives au-delà de la limite depuis le démarrage.
 
 ## Garde-fous des listes
 
@@ -95,4 +141,10 @@ pour ce rapprochement.
 
 ## Hors périmètre
 
-GeoLite2 ASN (licence MaxMind à trancher), anti-bot (Sonar, 13.3), débit par /24 ou par ASN (13.4).
+GeoLite2 ASN (licence MaxMind à trancher) et donc toute borne par ASN, vérification anti-bot en
+limbo (Sonar, 13.3), débit Bedrock borné en amont de Geyser (13.4, autre moitié).
+
+> **À valider au banc (13.5)** : que les valeurs par défaut absorbent une vague SoulFire de 50 à
+> 200 bots sans toucher un Java et un Bedrock réels ; combien de pré-logins un joueur légitime
+> produit réellement (si Sonar double le pré-login, une connexion coûte deux jetons) ; le comportement
+> d'un `PreLoginEvent` refusé par ce module puis levé par un autre plugin.

@@ -51,6 +51,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Turns away connections whose address is a datacenter or a Tor exit, judged on local lists.
  *
+ * <p>It also bounds the connection attempts of one network (an IPv4 /24, an IPv6 /48), see
+ * {@link NetworkRateLimiter}; an attempt over the limit is turned away with
+ * {@value Verdict#RATE_NETWORK_CODE}, or only observed (the default).
+ *
  * <p>Nothing about a player leaves the proxy. The lists are public files fetched by URL; every
  * lookup is made in memory. The rule itself is in {@link AdmissionEngine}; this class wires it to
  * Velocity: the pre-login event decides what the address and the claimed name can settle, and the
@@ -156,11 +160,13 @@ public final class BtcAdmissionShieldPlugin {
         this.clock);
     this.alerts = new StaffAlerts(this.clock, this::tellStaff);
     this.store = store;
-    this.engine = new AdmissionEngine(settings, store, store.quarantine().shadow());
+    final AdmissionEngine admission =
+        new AdmissionEngine(settings, store, store.quarantine().shadow(), this.clock);
+    this.engine = admission;
     this.config = settings;
     this.proxy.getCommandManager().register(
         this.proxy.getCommandManager().metaBuilder(COMMAND).plugin(this).build(),
-        new AdmissionCommand(this.journal, store, settings));
+        new AdmissionCommand(this.journal, store, settings, admission.rateLimiter()));
     this.alertTask = this.proxy.getScheduler()
         .buildTask(this, () -> {
           this.alerts.flushIfDue();
@@ -170,8 +176,10 @@ public final class BtcAdmissionShieldPlugin {
         .repeat(StaffAlerts.WINDOW)
         .schedule();
     scheduleRefresh(settings, store);
-    this.logger.info("Admission shield up: mode {}, {} list(s) configured, refresh every {} h.",
-        settings.mode(), settings.sources().size(), settings.refreshInterval().toHours());
+    this.logger.info("Admission shield up: mode {}, {} list(s) configured, refresh every {} h;"
+        + " network rate bound {}.", settings.mode(), settings.sources().size(),
+        settings.refreshInterval().toHours(),
+        settings.networkRate().enabled() ? settings.rateMode() : "off");
   }
 
   /**
@@ -205,9 +213,9 @@ public final class BtcAdmissionShieldPlugin {
       return;
     }
     final Attempt attempt = Attempt.claimed(event.getUsername(), remote);
-    final Verdict verdict = current.decide(attempt, Phase.PRE_LOGIN);
-    final Optional<AdmissionJournal.Entry> entry =
-        this.journal.record(attempt, verdict, Phase.PRE_LOGIN, this.config.mode());
+    final Verdict verdict = current.decidePreLogin(attempt);
+    final Optional<AdmissionJournal.Entry> entry = this.journal.record(
+        attempt, verdict, Phase.PRE_LOGIN, this.config.modeFor(verdict));
     if (verdict.action() == Verdict.Action.REFUSE) {
       event.setResult(PreLoginEvent.PreLoginComponentResult.denied(refusal(verdict)));
       this.refusals.note(event.getConnection().getRemoteAddress(), verdict);
@@ -246,8 +254,8 @@ public final class BtcAdmissionShieldPlugin {
       return;
     }
     final Verdict verdict = settled.get();
-    final Optional<AdmissionJournal.Entry> entry =
-        this.journal.record(attempt, verdict, Phase.LOGIN, this.config.mode());
+    final Optional<AdmissionJournal.Entry> entry = this.journal.record(
+        attempt, verdict, Phase.LOGIN, this.config.modeFor(verdict));
     if (verdict.origin() == Verdict.Origin.GEYSER_ADDRESS_NOT_FLOODGATE) {
       this.logger.warn("{} connected from Geyser address {} without being a Floodgate player;"
           + " judged on that address like anyone ({}).",
@@ -313,9 +321,7 @@ public final class BtcAdmissionShieldPlugin {
   }
 
   private Component refusal(final Verdict verdict) {
-    final IpClass ipClass = verdict.ipClass();
-    final String text = this.config.messageFor(ipClass).replace("{code}", ipClass.causeCode());
-    return MiniMessage.miniMessage().deserialize(text);
+    return MiniMessage.miniMessage().deserialize(this.config.refusalText(verdict));
   }
 
   private BedrockAddressSource floodgateSource() {

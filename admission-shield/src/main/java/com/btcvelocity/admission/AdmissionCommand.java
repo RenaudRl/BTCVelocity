@@ -38,6 +38,7 @@ public final class AdmissionCommand implements SimpleCommand {
   private final AdmissionJournal journal;
   private final ListStore store;
   private final AdmissionConfig config;
+  private final NetworkRateLimiter rate;
 
   /**
    * Creates the command.
@@ -45,12 +46,14 @@ public final class AdmissionCommand implements SimpleCommand {
    * @param journal the remembered decisions
    * @param store the lists in memory
    * @param config the settings in force
+   * @param rate the per-network bound on connection attempts
    */
-  public AdmissionCommand(
-      final AdmissionJournal journal, final ListStore store, final AdmissionConfig config) {
+  public AdmissionCommand(final AdmissionJournal journal, final ListStore store,
+      final AdmissionConfig config, final NetworkRateLimiter rate) {
     this.journal = journal;
     this.store = store;
     this.config = config;
+    this.rate = rate;
   }
 
   @Override
@@ -100,6 +103,22 @@ public final class AdmissionCommand implements SimpleCommand {
           + " joueur(s) refusé(s) en plus (seuil " + this.config.quarantineMaxExtraPlayers()
           + ").");
     }
+    lines.add(rateStatus(this.config, this.rate));
     return lines;
+  }
+
+  /** One line on the per-network bound; the refusals themselves are read with {@code why <ip>}. */
+  static String rateStatus(final AdmissionConfig config, final NetworkRateLimiter rate) {
+    final NetworkRateSettings settings = config.networkRate();
+    if (!settings.enabled()) {
+      return "Débit par réseau : désactivé.";
+    }
+    return "Débit par réseau (" + config.rateMode().name().toLowerCase(Locale.ROOT)
+        + ") : " + settings.attempts() + " tentatives / " + settings.window().toSeconds()
+        + " s, rafale " + settings.burst() + ", par /" + settings.ipv4Prefix() + " (IPv4) ou /"
+        + settings.ipv6Prefix() + " (IPv6) ; " + rate.trackedNetworks() + " réseau(x) suivi(s)"
+        + " sur " + settings.maxNetworks() + " ; " + rate.limitedAttempts()
+        + " tentative(s) au-delà de la limite depuis le démarrage (code "
+        + Verdict.RATE_NETWORK_CODE + ").";
   }
 }

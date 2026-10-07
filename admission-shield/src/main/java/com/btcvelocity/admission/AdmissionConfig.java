@@ -63,6 +63,7 @@ import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
  *     refuse anybody (see {@link ListQuarantine}); zero puts it in use at once
  * @param quarantineMaxExtraPlayers the most authenticated players a version may have refused in
  *     addition during its quarantine and still be promoted
+ * @param networkRate the bound on connection attempts per network
  */
 public record AdmissionConfig(
     Mode mode,
@@ -76,7 +77,8 @@ public record AdmissionConfig(
     int maxEntries,
     boolean embeddedBaseline,
     Duration quarantine,
-    int quarantineMaxExtraPlayers) {
+    int quarantineMaxExtraPlayers,
+    NetworkRateSettings networkRate) {
 
   /** The default ceiling on the entries of one list, well above the largest default list. */
   public static final int DEFAULT_MAX_ENTRIES = 500_000;
@@ -243,7 +245,10 @@ public record AdmissionConfig(
     return new AdmissionConfig(mode, geyser, exemptions, parseMessages(root.node("messages")),
         sources, refresh, timeout, maxBytes, maxEntries, embeddedBaseline, quarantine,
         Math.max(0, lists.node("quarantine-max-extra-players")
-            .getInt(DEFAULT_QUARANTINE_MAX_EXTRA_PLAYERS)));
+            .getInt(DEFAULT_QUARANTINE_MAX_EXTRA_PLAYERS)),
+        NetworkRateSettings.parse(root.node("network-rate"),
+            root.node("messages", "network-rate").getString(NetworkRateSettings.DEFAULT_MESSAGE),
+            warnings));
   }
 
   /**
@@ -254,6 +259,39 @@ public record AdmissionConfig(
    */
   public String messageFor(final IpClass ipClass) {
     return this.messages.get(ipClass);
+  }
+
+  /**
+   * The text to show a player this verdict refuses, its cause code already written in.
+   *
+   * @param refusal a verdict that refuses a connection
+   * @return the MiniMessage text
+   */
+  public String refusalText(final Verdict refusal) {
+    final String code = refusal.causeCode();
+    final String template = refusal.basis() == Verdict.Basis.RATE_NETWORK
+        ? this.networkRate.message() : messageFor(refusal.ipClass());
+    return template.replace("{code}", code == null ? "" : code);
+  }
+
+  /**
+   * The mode the network bound runs in. The module-wide {@code observe} is a dry run for
+   * everything the module does, so it also holds the bound back.
+   *
+   * @return {@code observe} if either the module or the bound is in {@code observe}
+   */
+  public Mode rateMode() {
+    return this.mode == Mode.OBSERVE ? Mode.OBSERVE : this.networkRate.mode();
+  }
+
+  /**
+   * The mode in force for the rule behind a verdict, as the journal states it.
+   *
+   * @param verdict the verdict
+   * @return the network bound's mode for a rate verdict, the module's otherwise
+   */
+  public Mode modeFor(final Verdict verdict) {
+    return verdict.basis() == Verdict.Basis.RATE_NETWORK ? rateMode() : this.mode;
   }
 
   private static Mode parseMode(final String value, final Consumer<String> warnings) {

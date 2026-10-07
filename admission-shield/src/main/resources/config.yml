@@ -40,10 +40,50 @@ exemptions:
   #  - 203.0.113.0/24
 
 # Shown to a refused player, MiniMessage format. {code} is replaced by the cause code
-# (ADM-VPN-DC for datacenter, ADM-VPN-TOR for Tor), which is also in the journal line.
+# (ADM-VPN-DC for datacenter, ADM-VPN-TOR for Tor, ADM-RATE-NET for too many attempts from one
+# network), which is also in the journal line.
 messages:
   datacenter: "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un réseau d'hébergement ou de VPN. Si vous n'utilisez pas de VPN, contactez le staff avec le code <white>{code}</white>.</gray>"
   tor: "<red>Connexion refusée.</red>\n<gray>Les connexions depuis le réseau Tor ne sont pas acceptées. Contactez le staff avec le code <white>{code}</white>.</gray>"
+  network-rate: "<red>Connexion refusée.</red>\n<gray>Trop de tentatives de connexion depuis votre réseau. Patientez quelques secondes puis réessayez. Si cela persiste, contactez le staff avec le code <white>{code}</white>.</gray>"
+
+# BOUND ON CONNECTION ATTEMPTS PER NETWORK (Sentinel 13.4). Independent of the lists above.
+# Every pre-login spends one token of its network: an IPv4 /24 or an IPv6 /48 (6to4, Teredo, NAT64
+# and IPv4-mapped addresses are first read as the IPv4 address they carry). A network owns a
+# bucket of `burst` tokens that refills at `attempts` per `window-seconds`; an attempt that finds
+# it empty is over the limit. A refused attempt spends nothing, so the players of a throttled
+# network still get through at the sustained rate while a bot wave is turned away.
+#
+# Why these values: a /24 of a French mobile carrier behind carrier-grade NAT stands for a few
+# hundred subscribers. 10 attempts / 10 s is one per second sustained, far above what such a /24
+# produces in normal play; a burst of 20 lets a group join together or a wave of reconnections
+# after a restart through. A bot wave from one network passes its first 20 attempts and then
+# crawls at one per second. Measure in `observe` before enforcing (task 13.5).
+#
+# NEVER applied to: addresses that are not public (loopback, private, 100.64.0.0/10, link-local,
+# unique-local), `geyser-addresses` (every Bedrock player arrives from it), and
+# `exemptions.networks`. A player exemption (name AND UUID) cannot be checked at the pre-login,
+# where anyone can type any name: an attempt over the limit whose name some exemption carries is
+# not refused there, the decision waits for the login; an authenticated player named by an
+# exemption is then let in, anyone else with that name is refused if the network is still over
+# its limit. In `observe`, nothing is deferred: the attempt is only journaled.
+network-rate:
+  enabled: true
+  # observe : journal the attempts over the limit (decision=observed, code stays none) and let
+  #           them in.  enforce : refuse them (ADM-RATE-NET). The module-wide `mode: observe`
+  #           also holds this bound back. Default observe: the limit is not measured yet.
+  mode: observe
+  attempts: 10
+  window-seconds: 10
+  # At least `attempts`; left out, twice `attempts`.
+  burst: 20
+  # Network size: IPv4 16..32, IPv6 32..64. A shorter prefix groups more players together.
+  ipv4-prefix: 24
+  ipv6-prefix: 48
+  # Networks followed at once (1000..1000000). Beyond it the least recently seen is forgotten, and
+  # a forgotten network starts again with a full bucket: pressure on the table lets attempts
+  # through, it never refuses an innocent network.
+  max-networks: 20000
 
 lists:
   # How often the lists are downloaded again. A failed download keeps the last valid list.

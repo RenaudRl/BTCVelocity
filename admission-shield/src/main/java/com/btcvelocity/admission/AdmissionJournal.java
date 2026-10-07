@@ -207,8 +207,7 @@ public final class AdmissionJournal {
       case OBSERVE -> "observed";
       case ADMIT, DEFER -> "admitted";
     };
-    final String code = verdict.action() == Verdict.Action.REFUSE && verdict.ipClass() != null
-        ? verdict.ipClass().causeCode() : null;
+    final String code = verdict.action() == Verdict.Action.REFUSE ? verdict.causeCode() : null;
     final Entry entry = new Entry(this.clock.instant(), attempt.username(), attempt.uuid(),
         verdict, decision, code, phase, mode);
     if (claimFullLine(entry)) {
@@ -232,6 +231,7 @@ public final class AdmissionJournal {
   private static final class Burst {
     private final Instant start;
     private final String decision;
+    private final String basis;
     private final String ipClass;
     private final String source;
     private final String network;
@@ -240,6 +240,7 @@ public final class AdmissionJournal {
     private Burst(final Instant start, final Entry first, final String network) {
       this.start = start;
       this.decision = first.decision();
+      this.basis = first.verdict().basis().label();
       this.ipClass = first.verdict().ipClass() == null ? "none" : first.verdict().ipClass().key();
       this.source = first.verdict().sourceId() == null ? "none" : first.verdict().sourceId();
       this.network = network;
@@ -250,6 +251,7 @@ public final class AdmissionJournal {
       Entry.append(line, "ts", this.start.plus(AGGREGATION_WINDOW).toString());
       Entry.append(line, "event", "aggregate");
       Entry.append(line, "decision", this.decision);
+      Entry.append(line, "basis", this.basis);
       Entry.append(line, "class", this.ipClass);
       Entry.append(line, "source", this.source);
       Entry.append(line, "net", this.network);
@@ -262,18 +264,21 @@ public final class AdmissionJournal {
 
   /**
    * Whether this decision gets its own line. Refusals and observations from one network (an IPv4
-   * /24, an IPv6 /64) are written in full the first time in a {@link #AGGREGATION_WINDOW}; the
-   * rest of the window is counted and written as one {@code event=aggregate} line when it ends,
-   * so that a wave from one datacenter cannot drown the journal (and its retention).
+   * /24, an IPv6 /64), listed or over the rate limit, are written in full the first time in a
+   * {@link #AGGREGATION_WINDOW}; the rest of the window is counted and written as one
+   * {@code event=aggregate} line when it ends, so that a wave from one datacenter cannot drown
+   * the journal (and its retention).
    * Exemptions and the other admissions are rare and always written.
    */
   private boolean claimFullLine(final Entry entry) {
     final InetAddress judged = entry.verdict().judged();
-    if (entry.verdict().basis() != Verdict.Basis.LISTED || judged == null) {
+    final Verdict.Basis basis = entry.verdict().basis();
+    if ((basis != Verdict.Basis.LISTED && basis != Verdict.Basis.RATE_NETWORK) || judged == null) {
       return true;
     }
     final String network = Networks.of(judged, Networks.AGGREGATE_V4, Networks.AGGREGATE_V6);
-    final String key = entry.decision() + '|' + entry.verdict().sourceId() + '|' + network;
+    final String key = entry.decision() + '|' + basis.label() + '|' + entry.verdict().sourceId()
+        + '|' + network;
     String closed = null;
     boolean full = true;
     synchronized (this.burstLock) {

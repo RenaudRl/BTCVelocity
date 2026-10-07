@@ -39,6 +39,9 @@ public record Verdict(
     @Nullable IpClass ipClass,
     @Nullable String sourceId) {
 
+  /** The cause code of a connection turned away for coming too often from one network. */
+  public static final String RATE_NETWORK_CODE = "ADM-RATE-NET";
+
   /** What happens to the connection. */
   public enum Action {
     /** Let it in. */
@@ -95,7 +98,9 @@ public record Verdict(
     /** From a Geyser address without being a Floodgate player, and not listed. */
     GEYSER_ADDRESS_NOT_FLOODGATE("geyser-address-not-floodgate"),
     /** Listed, and a nominative exemption might cover the player once authenticated. */
-    AWAITING_IDENTITY("awaiting-identity");
+    AWAITING_IDENTITY("awaiting-identity"),
+    /** Too many connection attempts from the same network in a short time (not a list). */
+    RATE_NETWORK("rate-network");
 
     private final String label;
 
@@ -125,8 +130,21 @@ public record Verdict(
   public boolean isJournaled() {
     return switch (this.basis) {
       case LISTED, EXEMPT_NETWORK, EXEMPT_PLAYER, BEDROCK_IP_UNKNOWN,
-          GEYSER_ADDRESS_NOT_FLOODGATE -> true;
+          GEYSER_ADDRESS_NOT_FLOODGATE, RATE_NETWORK -> true;
       case CLEAN, GEYSER_ORIGIN, AWAITING_IDENTITY -> false;
     };
+  }
+
+  /**
+   * The code shown to a player this verdict refuses and written in the journal.
+   *
+   * @return {@value #RATE_NETWORK_CODE} for a rate refusal, the class code for a listed address,
+   *     {@code null} when there is no cause to give
+   */
+  public @Nullable String causeCode() {
+    if (this.basis == Basis.RATE_NETWORK) {
+      return RATE_NETWORK_CODE;
+    }
+    return this.ipClass == null ? null : this.ipClass.causeCode();
   }
 }
