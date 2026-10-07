@@ -61,6 +61,7 @@ public final class ListStore implements IpClassifier {
   private final Object writeLock = new Object();
   private final int maxEntries;
   private final boolean useBaseline;
+  private final ListQuarantine quarantine;
   private volatile List<Loaded> loaded = List.of();
 
   /**
@@ -93,6 +94,7 @@ public final class ListStore implements IpClassifier {
     this.clock = clock;
     this.maxEntries = maxEntries;
     this.useBaseline = useBaseline;
+    this.quarantine = new ListQuarantine(this, directory, logger, clock);
   }
 
   /**
@@ -187,13 +189,20 @@ public final class ListStore implements IpClassifier {
       this.logger.warn("List '{}': {} valid entries, {} invalid lines ignored (first: {}).",
           source.id(), result.validLines(), result.invalidLines(), result.invalidSamples());
     }
-    final Loaded entry = new Loaded(source, result.set(), result.validLines(),
-        result.invalidLines(), this.clock.instant());
+    install(new Loaded(source, result.set(), result.validLines(), result.invalidLines(),
+        this.clock.instant()));
+    this.logger.info("List '{}' ({}): {} entries loaded from {}.", source.id(),
+        source.ipClass().key(), result.validLines(), file);
+    return true;
+  }
+
+  /** Swaps one list in, in the position of the version it replaces. */
+  void install(final Loaded entry) {
     synchronized (this.writeLock) {
       final List<Loaded> next = new ArrayList<>(this.loaded);
       // Replaced in place: the order lists were first loaded in (the configuration order)
       // decides which list names an address that several of them hold.
-      final int at = indexOf(next, source.id());
+      final int at = indexOf(next, entry.source().id());
       if (at >= 0) {
         next.set(at, entry);
       } else {
@@ -201,9 +210,15 @@ public final class ListStore implements IpClassifier {
       }
       this.loaded = List.copyOf(next);
     }
-    this.logger.info("List '{}' ({}): {} entries loaded from {}.", source.id(),
-        source.ipClass().key(), result.validLines(), file);
-    return true;
+  }
+
+  /**
+   * The new versions held aside before they may refuse anybody.
+   *
+   * @return the quarantine
+   */
+  public ListQuarantine quarantine() {
+    return this.quarantine;
   }
 
   /**

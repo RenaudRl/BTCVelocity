@@ -59,6 +59,10 @@ import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
  * @param maxEntries the most entries one list may hold; a longer list is not trusted
  * @param embeddedBaseline whether a default list with no previous version (first start, or a
  *     list directory that is not kept) is judged against the bounds shipped with the module
+ * @param quarantine how long a changed version of a list in use is held aside before it may
+ *     refuse anybody (see {@link ListQuarantine}); zero puts it in use at once
+ * @param quarantineMaxExtraPlayers the most authenticated players a version may have refused in
+ *     addition during its quarantine and still be promoted
  */
 public record AdmissionConfig(
     Mode mode,
@@ -70,7 +74,9 @@ public record AdmissionConfig(
     Duration downloadTimeout,
     long maxDownloadBytes,
     int maxEntries,
-    boolean embeddedBaseline) {
+    boolean embeddedBaseline,
+    Duration quarantine,
+    int quarantineMaxExtraPlayers) {
 
   /** The default ceiling on the entries of one list, well above the largest default list. */
   public static final int DEFAULT_MAX_ENTRIES = 500_000;
@@ -88,6 +94,8 @@ public record AdmissionConfig(
   private static final Duration DEFAULT_REFRESH = Duration.ofHours(24);
   private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
   private static final long DEFAULT_MAX_BYTES = 32L * 1024 * 1024;
+  private static final Duration DEFAULT_QUARANTINE = Duration.ofHours(6);
+  private static final int DEFAULT_QUARANTINE_MAX_EXTRA_PLAYERS = 0;
 
   private static final String DEFAULT_DATACENTER_MESSAGE =
       "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un réseau"
@@ -226,11 +234,15 @@ public record AdmissionConfig(
         .getLong(DEFAULT_MAX_BYTES / (1024 * 1024))) * 1024 * 1024;
     final int maxEntries = Math.max(1, lists.node("max-entries").getInt(DEFAULT_MAX_ENTRIES));
     final boolean embeddedBaseline = lists.node("embedded-baseline").getBoolean(true);
+    final Duration quarantine = Duration.ofMinutes(Math.max(0, Math.round(
+        lists.node("quarantine-hours").getDouble(DEFAULT_QUARANTINE.toHours()) * 60)));
     final List<ListSource> sources = lists.node("sources").empty()
         ? defaultSources() : parseSources(lists.node("sources"), warnings);
 
     return new AdmissionConfig(mode, geyser, exemptions, parseMessages(root.node("messages")),
-        sources, refresh, timeout, maxBytes, maxEntries, embeddedBaseline);
+        sources, refresh, timeout, maxBytes, maxEntries, embeddedBaseline, quarantine,
+        Math.max(0, lists.node("quarantine-max-extra-players")
+            .getInt(DEFAULT_QUARANTINE_MAX_EXTRA_PLAYERS)));
   }
 
   /**

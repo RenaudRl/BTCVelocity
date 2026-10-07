@@ -75,6 +75,7 @@ public final class BtcAdmissionShieldPlugin {
   private static final String COMMAND = "admission";
   private static final short FIRST = 1000;
   private static final long FIRST_DOWNLOAD_DELAY_SECONDS = 2;
+  private static final Duration SETTLE_PERIOD = Duration.ofMinutes(1);
   private static final String LOGGING_FRAGMENT = "log4j2-admission-journal.xml";
 
   private final ProxyServer proxy;
@@ -84,6 +85,8 @@ public final class BtcAdmissionShieldPlugin {
 
   private volatile AdmissionEngine engine;
   private volatile AdmissionConfig config;
+  private volatile ListStore store;
+  private volatile ScheduledTask settleTask;
   private volatile AdmissionJournal journal;
   private volatile BedrockAddressSource bedrock = BedrockAddressSource.NONE;
   private volatile ScheduledTask refreshTask;
@@ -135,7 +138,8 @@ public final class BtcAdmissionShieldPlugin {
     this.journal = new AdmissionJournal(LoggerFactory.getLogger(AdmissionJournal.LOGGER_NAME),
         this.clock);
     this.alerts = new StaffAlerts(this.clock, this::tellStaff);
-    this.engine = new AdmissionEngine(settings, store);
+    this.store = store;
+    this.engine = new AdmissionEngine(settings, store, store.quarantine().shadow());
     this.config = settings;
     this.proxy.getCommandManager().register(
         this.proxy.getCommandManager().metaBuilder(COMMAND).plugin(this).build(),
@@ -157,7 +161,8 @@ public final class BtcAdmissionShieldPlugin {
    */
   @Subscribe
   public void onProxyShutdown(final ProxyShutdownEvent event) {
-    for (ScheduledTask task : new ScheduledTask[] {this.refreshTask, this.alertTask}) {
+    for (ScheduledTask task :
+        new ScheduledTask[] {this.refreshTask, this.alertTask, this.settleTask}) {
       if (task != null) {
         task.cancel();
       }
@@ -210,6 +215,11 @@ public final class BtcAdmissionShieldPlugin {
     final Attempt attempt = Attempt.claimed(player.getUsername(), remote).authenticated(
         player.getUsername(), uuid, this.bedrock.isFloodgatePlayer(uuid),
         this.bedrock.realAddressOf(uuid).orElse(null));
+    current.wouldRefuseInAddition(attempt).ifPresent(extra -> {
+      if (this.store.quarantine().noteWouldRefuse(extra.sourceId(), uuid)) {
+        this.journal.recordWouldRefuse(attempt, extra, this.config.mode());
+      }
+    });
     final Optional<Verdict> settled = current.decideAtLogin(attempt);
     if (settled.isEmpty()) {
       return;
@@ -293,7 +303,15 @@ public final class BtcAdmissionShieldPlugin {
    */
   private void scheduleRefresh(final AdmissionConfig settings, final ListStore store) {
     final ListRefresher refresher = new ListRefresher(store,
-        ListFetcher.http(settings.downloadTimeout(), settings.maxDownloadBytes()), this.logger);
+        ListFetcher.http(settings.downloadTimeout(), settings.maxDownloadBytes()), this.logger,
+        settings.quarantine());
+    if (!settings.quarantine().isZero()) {
+      this.settleTask = this.proxy.getScheduler()
+          .buildTask(this, () -> settleQuarantines(store, settings))
+          .delay(SETTLE_PERIOD)
+          .repeat(SETTLE_PERIOD)
+          .schedule();
+    }
     final int purged = refresher.purgeLeftovers();
     if (purged > 0) {
       this.logger.info("Deleted {} unfinished download(s) left by a previous run.", purged);
@@ -323,6 +341,21 @@ public final class BtcAdmissionShieldPlugin {
         .delay(untilNextFull)
         .repeat(interval)
         .schedule();
+  }
+
+  /** Ends the quarantines that are due; a rejected version is told to the staff online. */
+  private void settleQuarantines(final ListStore lists, final AdmissionConfig settings) {
+    try {
+      for (ListQuarantine.Outcome outcome
+          : lists.quarantine().settleDue(settings.quarantineMaxExtraPlayers())) {
+        if (!outcome.promoted()) {
+          tellStaff(outcome.staffMessage());
+        }
+      }
+    } catch (RuntimeException unexpected) {
+      this.logger.error("Settling the list quarantines failed unexpectedly; they stay as they"
+          + " were.", unexpected);
+    }
   }
 
   private void refresh(final ListRefresher refresher, final List<ListSource> sources) {

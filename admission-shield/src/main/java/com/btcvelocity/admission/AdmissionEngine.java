@@ -48,16 +48,47 @@ public final class AdmissionEngine {
 
   private final AdmissionConfig config;
   private final IpClassifier classifier;
+  private final IpClassifier shadow;
+
+  /**
+   * Creates the engine, with no new list version waiting.
+   *
+   * @param config the settings
+   * @param classifier where an address is looked up
+   */
+  public AdmissionEngine(final AdmissionConfig config, final IpClassifier classifier) {
+    this(config, classifier, address -> Optional.empty());
+  }
 
   /**
    * Creates the engine.
    *
    * @param config the settings
    * @param classifier where an address is looked up
+   * @param shadow what the new list versions in quarantine would say; never refuses anybody
    */
-  public AdmissionEngine(final AdmissionConfig config, final IpClassifier classifier) {
+  public AdmissionEngine(final AdmissionConfig config, final IpClassifier classifier,
+      final IpClassifier shadow) {
     this.config = config;
     this.classifier = classifier;
+    this.shadow = shadow;
+  }
+
+  /**
+   * Whether an authenticated player is one the new list versions in quarantine would refuse
+   * <em>in addition</em> to what the versions in use refuse. Exemptions and the Geyser rule apply
+   * as they would for a real decision.
+   *
+   * @param authenticated the connection with its authenticated identity
+   * @return the verdict the new versions would give, or empty when they would add no refusal
+   */
+  public Optional<Verdict> wouldRefuseInAddition(final Attempt authenticated) {
+    final Verdict waiting = decide(authenticated, Phase.LOGIN, this.shadow);
+    if (waiting.basis() != Basis.LISTED) {
+      return Optional.empty();
+    }
+    final Verdict inUse = decide(authenticated, Phase.LOGIN, this.classifier);
+    return inUse.basis() == Basis.LISTED ? Optional.empty() : Optional.of(waiting);
   }
 
   /**
@@ -68,6 +99,11 @@ public final class AdmissionEngine {
    * @return the verdict
    */
   public Verdict decide(final Attempt attempt, final Phase phase) {
+    return decide(attempt, phase, this.classifier);
+  }
+
+  private Verdict decide(final Attempt attempt, final Phase phase,
+      final IpClassifier lists) {
     InetAddress judged = attempt.remote();
     Origin origin = Origin.DIRECT;
     if (this.config.geyserAddresses().contains(attempt.remote())) {
@@ -90,7 +126,7 @@ public final class AdmissionEngine {
       }
     }
 
-    final Optional<IpClassifier.Match> match = this.classifier.classify(judged);
+    final Optional<IpClassifier.Match> match = lists.classify(judged);
     if (match.isEmpty()) {
       final Basis basis =
           origin == Origin.GEYSER_ADDRESS_NOT_FLOODGATE ? Basis.GEYSER_ADDRESS_NOT_FLOODGATE

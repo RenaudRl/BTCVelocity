@@ -64,6 +64,19 @@ lists:
   # to false only if a default list has outgrown them (the ERROR in the log says which bound);
   # the first load is then judged by the absolute guards alone.
   embedded-baseline: true
+  # QUARANTINE. A new version of a list that is already in use (it passed the guards above, and is
+  # not byte-identical to the one in use) is NOT put in use at once: it waits this many hours in
+  # <file>.candidate. Meanwhile the version in use keeps deciding, and the new one only watches:
+  # every authenticated player it would refuse IN ADDITION is journaled once as decision=would_refuse
+  # and counted. At the end, if that count is <= quarantine-max-extra-players the new version is
+  # put in use; otherwise it is thrown away, an ERROR is logged and the staff online is told (the
+  # next download starts again). This stops a poisoning that grows by steps, each within the guards.
+  # 0 hours = no quarantine. A restart forgets a quarantine (the next download starts a new one).
+  # The default 0 means one single player the new version would refuse is enough to reject it;
+  # raise it if legitimate new listings keep being held back (a new datacenter range will refuse
+  # the odd VPN user it is meant to refuse).
+  quarantine-hours: 6
+  quarantine-max-extra-players: 0
   # Files are kept in <this directory>/lists/. A source needs: class (datacenter | tor), an https
   # url, and a plain file name. Leave this section out to use the three lists below.
   #  - X4BNet lists_vpn (MIT): networks of hosting providers and VPNs, built from ASNs.

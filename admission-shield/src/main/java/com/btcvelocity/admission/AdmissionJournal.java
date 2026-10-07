@@ -213,6 +213,22 @@ public final class AdmissionJournal {
   }
 
   /**
+   * Writes down that a list version still in quarantine would have refused an authenticated
+   * player in addition to the versions in use. Nothing happens to the player. Not remembered for
+   * {@code /admission why}: it is not a decision.
+   *
+   * @param attempt the authenticated connection
+   * @param verdict what the waiting version would decide
+   * @param mode the mode in force
+   */
+  public void recordWouldRefuse(final Attempt attempt, final Verdict verdict,
+      final AdmissionConfig.Mode mode) {
+    final Entry entry = new Entry(this.clock.instant(), attempt.username(), attempt.uuid(),
+        verdict, "would_refuse", null, Phase.LOGIN, mode);
+    this.logger.info("{}", entry.line());
+  }
+
+  /**
    * The latest remembered decision about a player.
    *
    * @param username the player's name, any case

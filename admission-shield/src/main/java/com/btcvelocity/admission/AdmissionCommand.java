@@ -93,6 +93,13 @@ public final class AdmissionCommand implements SimpleCommand {
           + list.validLines() + " entrées, " + list.invalidLines()
           + " lignes invalides, chargée " + list.loadedAt() + ".");
     }
+    for (ListQuarantine.Status waiting : this.store.quarantine().waiting()) {
+      lines.add(waiting.pending().list().source().id() + " : nouvelle version ("
+          + waiting.pending().list().validLines() + " entrées) en quarantaine jusqu'à "
+          + waiting.pending().releaseAt() + ", " + waiting.extraPlayers()
+          + " joueur(s) refusé(s) en plus (seuil " + this.config.quarantineMaxExtraPlayers()
+          + ").");
+    }
     return lines;
   }
 }

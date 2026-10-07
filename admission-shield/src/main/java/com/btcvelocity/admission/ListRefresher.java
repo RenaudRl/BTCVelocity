@@ -47,7 +47,20 @@ public final class ListRefresher {
   private final ListStore store;
   private final ListFetcher fetcher;
   private final Logger logger;
+  private final Duration quarantine;
   private final AtomicBoolean running = new AtomicBoolean();
+
+  /**
+   * Creates a refresher whose new versions take effect at once.
+   *
+   * @param store the store to reload after a list was replaced; also names the directory and the
+   *     ceiling on the entries of one list
+   * @param fetcher how lists are downloaded
+   * @param logger where outcomes are reported
+   */
+  public ListRefresher(final ListStore store, final ListFetcher fetcher, final Logger logger) {
+    this(store, fetcher, logger, Duration.ZERO);
+  }
 
   /**
    * Creates a refresher.
@@ -56,11 +69,16 @@ public final class ListRefresher {
    *     ceiling on the entries of one list
    * @param fetcher how lists are downloaded
    * @param logger where outcomes are reported
+   * @param quarantine how long a changed version of a list in use is held aside, see
+   *     {@link ListQuarantine}; zero puts it in use at once. A first version is never held:
+   *     there is nothing in use to keep deciding meanwhile
    */
-  public ListRefresher(final ListStore store, final ListFetcher fetcher, final Logger logger) {
+  public ListRefresher(final ListStore store, final ListFetcher fetcher, final Logger logger,
+      final Duration quarantine) {
     this.store = store;
     this.fetcher = fetcher;
     this.logger = logger;
+    this.quarantine = quarantine;
   }
 
   /**
@@ -110,6 +128,11 @@ public final class ListRefresher {
   private boolean refreshLocked(final ListSource source) {
     final Path directory = this.store.directory();
     final Path target = directory.resolve(source.fileName());
+    if (this.store.quarantine().holds(source.id())) {
+      this.logger.info("List '{}' has a new version in quarantine: not downloaded again until it"
+          + " is settled.", source.id());
+      return false;
+    }
     Path part = null;
     try {
       Files.createDirectories(directory);
@@ -123,6 +146,12 @@ public final class ListRefresher {
             + " list.", source.id(), source.url(), rejection);
         return false;
       }
+      if (shouldWait(source, part, target)) {
+        final Path candidate = directory.resolve(source.fileName() + ListQuarantine.FILE_SUFFIX);
+        moveInPlace(part, candidate);
+        this.store.quarantine().hold(source, parsed, candidate, this.quarantine);
+        return false;
+      }
       moveInPlace(part, target);
     } catch (IOException | RuntimeException failure) {
       this.logger.error("List '{}' could not be refreshed from {}: {}. Keeping the last valid"
@@ -134,6 +163,18 @@ public final class ListRefresher {
       }
     }
     return this.store.reload(source);
+  }
+
+  /** A changed version of a list in use waits, if quarantine is on; an unchanged one does not. */
+  private boolean shouldWait(final ListSource source, final Path part, final Path target) {
+    if (this.quarantine.isZero() || this.store.loadedFor(source.id()).isEmpty()) {
+      return false;
+    }
+    try {
+      return Files.mismatch(part, target) != -1;
+    } catch (IOException missingOrUnreadable) {
+      return true;
+    }
   }
 
   /**
@@ -161,7 +202,7 @@ public final class ListRefresher {
     }
   }
 
-  private static void moveInPlace(final Path part, final Path target) throws IOException {
+  static void moveInPlace(final Path part, final Path target) throws IOException {
     try {
       Files.move(part, target, StandardCopyOption.ATOMIC_MOVE,
           StandardCopyOption.REPLACE_EXISTING);
@@ -171,8 +212,9 @@ public final class ListRefresher {
   }
 
   /**
-   * Deletes the temporary files a killed process may have left behind. Called at startup, before
-   * any refresh can run: each attempt names its own file, so none is ever reused.
+   * Deletes the temporary files a killed process may have left behind, and the versions that were
+   * in quarantine (the quarantine is in memory: a new download starts it again). Called at
+   * startup, before any refresh can run: each attempt names its own file, so none is ever reused.
    *
    * @return how many were deleted
    */
@@ -182,16 +224,17 @@ public final class ListRefresher {
       return 0;
     }
     int deleted = 0;
-    try (DirectoryStream<Path> leftovers =
-        Files.newDirectoryStream(directory, "*" + PART_SUFFIX)) {
-      for (Path leftover : leftovers) {
-        if (deleteQuietly(leftover)) {
-          deleted++;
+    for (String suffix : List.of(PART_SUFFIX, ListQuarantine.FILE_SUFFIX)) {
+      try (DirectoryStream<Path> leftovers = Files.newDirectoryStream(directory, "*" + suffix)) {
+        for (Path leftover : leftovers) {
+          if (deleteQuietly(leftover)) {
+            deleted++;
+          }
         }
+      } catch (IOException unreadable) {
+        this.logger.warn("Could not look for leftover downloads in {}: {}", directory,
+            unreadable.toString());
       }
-    } catch (IOException unreadable) {
-      this.logger.warn("Could not look for leftover downloads in {}: {}", directory,
-          unreadable.toString());
     }
     return deleted;
   }
