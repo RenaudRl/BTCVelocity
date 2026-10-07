@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
 /**
@@ -59,10 +60,11 @@ public final class ListStore implements IpClassifier {
   private final Clock clock;
   private final Object writeLock = new Object();
   private final int maxEntries;
+  private final boolean useBaseline;
   private volatile List<Loaded> loaded = List.of();
 
   /**
-   * Creates an empty store.
+   * Creates an empty store that judges a first load against the embedded baseline.
    *
    * @param directory where the list files are kept
    * @param logger where problems are reported
@@ -71,10 +73,57 @@ public final class ListStore implements IpClassifier {
    */
   public ListStore(final Path directory, final Logger logger, final Clock clock,
       final int maxEntries) {
+    this(directory, logger, clock, maxEntries, true);
+  }
+
+  /**
+   * Creates an empty store.
+   *
+   * @param directory where the list files are kept
+   * @param logger where problems are reported
+   * @param clock the source of "loaded at"
+   * @param maxEntries the ceiling on the entries of one list; a longer one is not loaded
+   * @param useBaseline whether a list with no previous version is judged against the embedded
+   *     {@link ListBaseline} of its source
+   */
+  public ListStore(final Path directory, final Logger logger, final Clock clock,
+      final int maxEntries, final boolean useBaseline) {
     this.directory = directory;
     this.logger = logger;
     this.clock = clock;
     this.maxEntries = maxEntries;
+    this.useBaseline = useBaseline;
+  }
+
+  /**
+   * Whether a parsed list may be trusted: the absolute guards, then the version in use if there is
+   * one, otherwise the embedded baseline of the source. The same judgement at start (a file on
+   * disk), after a download, and for a list that has no previous version because the directory
+   * is not kept between two starts.
+   *
+   * @param source the list
+   * @param candidate what it was parsed into
+   * @return why it is refused, or {@code null} if it passes
+   */
+  public @Nullable String rejectionOf(final ListSource source, final ListParser.Result candidate) {
+    final String absolute = ListGuards.absoluteRejection(candidate, this.maxEntries);
+    if (absolute != null) {
+      return absolute;
+    }
+    final Loaded previous = loadedFor(source.id()).orElse(null);
+    if (previous != null) {
+      return ListGuards.relativeRejection(candidate, previous);
+    }
+    if (!this.useBaseline) {
+      return null;
+    }
+    final Optional<ListBaseline> baseline = ListBaseline.forSource(source.id());
+    if (baseline.isEmpty()) {
+      this.logger.warn("List '{}' has no embedded baseline (not a default list): its first load"
+          + " is only judged by the absolute guards.", source.id());
+      return null;
+    }
+    return baseline.get().rejection(candidate);
   }
 
   /**
@@ -128,7 +177,7 @@ public final class ListStore implements IpClassifier {
           source.id(), file, unreadable.toString());
       return false;
     }
-    final String rejection = ListGuards.absoluteRejection(result, this.maxEntries);
+    final String rejection = rejectionOf(source, result);
     if (rejection != null) {
       this.logger.error("List '{}' in {} was rejected ({}). Keeping the previous one, if any.",
           source.id(), file, rejection);

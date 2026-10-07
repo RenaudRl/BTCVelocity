@@ -119,7 +119,7 @@ public final class BtcAdmissionShieldPlugin {
         AdmissionConfig.loadOrCreate(this.dataDirectory.resolve("config.yml"), this.logger);
     writeLoggingFragment();
     final ListStore store = new ListStore(this.dataDirectory.resolve("lists"), this.logger,
-        this.clock, settings.maxEntries());
+        this.clock, settings.maxEntries(), settings.embeddedBaseline());
     store.loadAll(settings.sources());
     if (!store.hasAnyList()) {
       this.logger.warn("No list is loaded: connections are NOT filtered until a download"

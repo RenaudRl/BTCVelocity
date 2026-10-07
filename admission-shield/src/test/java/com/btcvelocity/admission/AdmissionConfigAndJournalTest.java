@@ -111,6 +111,14 @@ class AdmissionConfigAndJournalTest {
   }
 
   @Test
+  void theEmbeddedBaselineIsOnByDefaultAndCanBeSwitchedOff() throws IOException {
+    assertTrue(AdmissionConfig.defaults().embeddedBaseline());
+    assertFalse(AdmissionConfig.parseYaml(
+        new StringReader("lists:\n  embedded-baseline: false\n"), warning -> { })
+        .embeddedBaseline());
+  }
+
+  @Test
   void theDefaultListsAreHttpsAndCoverBothFamiliesForDatacentersAndTor() {
     final List<ListSource> sources = AdmissionConfig.defaultSources();
 

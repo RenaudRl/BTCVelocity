@@ -28,7 +28,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
 /**
@@ -118,9 +117,7 @@ public final class ListRefresher {
       part = Files.createTempFile(directory, source.fileName() + ".", PART_SUFFIX);
       this.fetcher.fetch(source.url(), part);
       final ListParser.Result parsed = ListParser.parse(part);
-      final String rejection = firstNonNull(
-          ListGuards.absoluteRejection(parsed, this.store.maxEntries()),
-          ListGuards.relativeRejection(parsed, this.store.loadedFor(source.id()).orElse(null)));
+      final String rejection = this.store.rejectionOf(source, parsed);
       if (rejection != null) {
         this.logger.error("List '{}' downloaded from {} was rejected ({}); keeping the last valid"
             + " list.", source.id(), source.url(), rejection);
@@ -137,11 +134,6 @@ public final class ListRefresher {
       }
     }
     return this.store.reload(source);
-  }
-
-  private static @Nullable String firstNonNull(final @Nullable String first,
-      final @Nullable String second) {
-    return first != null ? first : second;
   }
 
   /**

@@ -309,6 +309,64 @@ class ListStoreAndRefresherTest {
     assertTrue(this.store.classify(ip("203.0.7.7")).isEmpty());
   }
 
+  // --- a first load has no previous version: the embedded baseline judges it -------------------
+
+  private static final ListSource X4BNET_V4 = new ListSource("x4bnet-datacenter-ipv4",
+      IpClass.DATACENTER, URI.create("https://lists.invalid/v4.txt"), "v4.txt");
+
+  @Test
+  void aFirstDownloadFarOutsideTheBaselineIsRejectedEvenWithNothingToCompareWith() {
+    // Arrange - the lists/ directory is not kept: every start has no previous version
+    this.store.loadAll(List.of(X4BNET_V4));
+
+    // Act - a plausible-looking but tiny (or poisoned) list
+    final boolean replaced = refresherServing("203.0.113.0/24\n2a01:e00::/26\n", new ArrayList<>())
+        .refresh(X4BNET_V4);
+
+    // Assert
+    assertFalse(replaced);
+    assertTrue(this.log.has("ERROR", "outside the embedded baseline"));
+    assertFalse(this.store.hasAnyList());
+    assertFalse(Files.exists(this.directory.resolve("v4.txt")), "nothing was put in place");
+  }
+
+  @Test
+  void aFileOnDiskFarOutsideTheBaselineIsNotLoadedAtStart() throws IOException {
+    Files.writeString(this.directory.resolve("v4.txt"), "203.0.113.0/24\n");
+
+    this.store.loadAll(List.of(X4BNET_V4));
+
+    assertFalse(this.store.hasAnyList());
+    assertTrue(this.log.has("ERROR", "outside the embedded baseline"));
+  }
+
+  @Test
+  void aListTheSizeOfTheRealOneIsLoadedOnAFirstDownload() {
+    final boolean replaced = refresherServing(ListBaselineTest.x4bnetIpv4Sized(),
+        new ArrayList<>()).refresh(X4BNET_V4);
+
+    assertTrue(replaced);
+    assertTrue(this.store.classify(ip("15.1.2.3")).isPresent());
+  }
+
+  @Test
+  void theBaselineCanBeSwitchedOffAndACustomSourceHasNone() throws IOException {
+    // Arrange
+    final ListStore off = new ListStore(this.directory, this.log.logger(), Clock.systemUTC(),
+        AdmissionConfig.DEFAULT_MAX_ENTRIES, false);
+    Files.writeString(this.directory.resolve("v4.txt"), "203.0.113.0/24\n");
+    Files.writeString(this.directory.resolve("dc.txt"), "198.51.100.0/24\n");
+
+    // Act
+    off.loadAll(List.of(X4BNET_V4));
+    this.store.loadAll(List.of(DATACENTER));
+
+    // Assert
+    assertTrue(off.hasAnyList(), "switched off: only the absolute guards judge a first load");
+    assertTrue(this.store.hasAnyList(), "a custom source is loaded, with a warning");
+    assertTrue(this.log.has("WARN", "has no embedded baseline"));
+  }
+
   @Test
   void anIpv6LineAddedToAnIpv4OnlyListIsRejectedAndThePreviousOneKept() throws IOException {
     // Arrange - the review's case: 2a01::/16-sized poison in the Tor list, which has no IPv6

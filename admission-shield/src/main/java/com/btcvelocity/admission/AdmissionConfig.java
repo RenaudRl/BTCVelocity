@@ -57,6 +57,8 @@ import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
  * @param downloadTimeout how long one download may take, all included
  * @param maxDownloadBytes the most one downloaded list may weigh
  * @param maxEntries the most entries one list may hold; a longer list is not trusted
+ * @param embeddedBaseline whether a default list with no previous version (first start, or a
+ *     list directory that is not kept) is judged against the bounds shipped with the module
  */
 public record AdmissionConfig(
     Mode mode,
@@ -67,7 +69,8 @@ public record AdmissionConfig(
     Duration refreshInterval,
     Duration downloadTimeout,
     long maxDownloadBytes,
-    int maxEntries) {
+    int maxEntries,
+    boolean embeddedBaseline) {
 
   /** The default ceiling on the entries of one list, well above the largest default list. */
   public static final int DEFAULT_MAX_ENTRIES = 500_000;
@@ -222,11 +225,12 @@ public record AdmissionConfig(
     final long maxBytes = Math.max(1, lists.node("max-download-megabytes")
         .getLong(DEFAULT_MAX_BYTES / (1024 * 1024))) * 1024 * 1024;
     final int maxEntries = Math.max(1, lists.node("max-entries").getInt(DEFAULT_MAX_ENTRIES));
+    final boolean embeddedBaseline = lists.node("embedded-baseline").getBoolean(true);
     final List<ListSource> sources = lists.node("sources").empty()
         ? defaultSources() : parseSources(lists.node("sources"), warnings);
 
     return new AdmissionConfig(mode, geyser, exemptions, parseMessages(root.node("messages")),
-        sources, refresh, timeout, maxBytes, maxEntries);
+        sources, refresh, timeout, maxBytes, maxEntries, embeddedBaseline);
   }
 
   /**

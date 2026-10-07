@@ -52,11 +52,18 @@ lists:
   download-timeout-seconds: 30
   max-download-megabytes: 32
   # A list is thrown away (the last valid one stays, an ERROR is logged) if it holds more entries
-  # than this, covers more than 20 % of the IPv4 space, or, compared with the version in use,
-  # moves its entry count by more than 50 % or doubles its coverage. A line wider than /8 (IPv4)
-  # or /16 (IPv6) is ignored. Private, loopback, CGNAT, link-local and unique-local addresses
-  # are never classified, whatever a list says.
+  # than this, covers more than 20 % of the IPv4 space or more than 0.01 % of the IPv6 space
+  # 2000::/3, or, compared with the version in use, moves its entry count by more than 50 %,
+  # doubles its coverage, or brings a family (IPv4, IPv6) the version in use does not have.
+  # A line wider than /8 (IPv4) or /20 (IPv6) is ignored. Private, loopback, CGNAT, link-local and
+  # unique-local addresses are never classified, whatever a list says.
   max-entries: 500000
+  # A default list with NO previous version (first start, or this directory is not kept between
+  # two starts, as with a recreated CloudNet template) is judged against bounds shipped with the
+  # module: entries and coverage per family, taken from the real lists with a wide margin. Set
+  # to false only if a default list has outgrown them (the ERROR in the log says which bound);
+  # the first load is then judged by the absolute guards alone.
+  embedded-baseline: true
   # Files are kept in <this directory>/lists/. A source needs: class (datacenter | tor), an https
   # url, and a plain file name. Leave this section out to use the three lists below.
   #  - X4BNet lists_vpn (MIT): networks of hosting providers and VPNs, built from ASNs.
