@@ -129,6 +129,14 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
   @Override
   public boolean handle(final PluginMessagePacket packet) {
     final VelocityServerConnection serverConn = player.getConnectionInFlight();
+
+    // Track the channels the client announces during configuration (Fabric registers them here)
+    // so plugins see them before the play phase. This only updates state and fires an event
+    // without waiting for it; the packet itself is relayed below exactly as before. It runs
+    // before the backend check on purpose: a register that arrives before the backend
+    // connection exists is not relayed, but is still remembered and replayed on join.
+    ClientChannelUpdates.handle(server, player, packet);
+
     if (PluginMessageUtil.isMcBrand(packet)) {
       final String brand = PluginMessageUtil.readBrandMessage(packet.content());
       server.getEventManager().fireAndForget(new PlayerClientBrandEvent(player, brand));

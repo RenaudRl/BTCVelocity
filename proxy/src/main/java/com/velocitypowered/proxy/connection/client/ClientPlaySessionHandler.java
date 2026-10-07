@@ -19,13 +19,10 @@ package com.velocitypowered.proxy.connection.client;
 
 import static com.velocitypowered.proxy.protocol.util.PluginMessageUtil.constructChannelsPacket;
 
-import com.google.common.collect.ImmutableList;
 import com.mojang.brigadier.suggestion.Suggestion;
 import com.btcvelocity.api.event.player.TabCompleteRequestEvent;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.CookieReceiveEvent;
-import com.velocitypowered.api.event.player.PlayerChannelRegisterEvent;
-import com.velocitypowered.api.event.player.PlayerChannelUnregisterEvent;
 import com.velocitypowered.api.event.player.PlayerClientBrandEvent;
 import com.velocitypowered.api.event.player.TabCompleteEvent;
 import com.velocitypowered.api.event.player.configuration.PlayerEnteredConfigurationEvent;
@@ -325,18 +322,10 @@ public class ClientPlaySessionHandler implements MinecraftSessionHandler {
         LOGGER.warn("A plugin message was received while the backend server was not "
             + "ready. Channel: {}. Packet discarded.", packet.getChannel());
       } else if (PluginMessageUtil.isRegister(packet)) {
-        List<ChannelIdentifier> channels = PluginMessageUtil.getChannels(this.player.getClientsideChannels().size(), packet,
-                this.player.getProtocolVersion(), this.server);
-        player.getClientsideChannels().addAll(channels);
-        server.getEventManager().fireAndForget(new PlayerChannelRegisterEvent(player, ImmutableList.copyOf(channels)));
+        ClientChannelUpdates.handle(server, player, packet);
         backendConn.write(packet.retain());
       } else if (PluginMessageUtil.isUnregister(packet)) {
-        List<ChannelIdentifier> channels =
-            PluginMessageUtil.getChannels(0, packet, this.player.getProtocolVersion(), this.server);
-        player.getClientsideChannels().removeAll(channels);
-        server.getEventManager()
-            .fireAndForget(
-                new PlayerChannelUnregisterEvent(player, ImmutableList.copyOf(channels)));
+        ClientChannelUpdates.handle(server, player, packet);
         backendConn.write(packet.retain());
       } else if (PluginMessageUtil.isMcBrand(packet)) {
         String brand = PluginMessageUtil.readBrandMessage(packet.content());
