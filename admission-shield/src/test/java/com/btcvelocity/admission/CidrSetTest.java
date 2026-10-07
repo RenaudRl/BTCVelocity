@@ -69,7 +69,7 @@ class CidrSetTest {
   }
 
   @Test
-  void aNetworkWiderThanSlash8OrSlash16IsRejectedWhateverTheListSays() {
+  void aNetworkWiderThanSlash8OrSlash20IsRejectedWhateverTheListSays() {
     // Arrange - one such line in a poisoned list would classify a large share of the Internet
     final CidrSet.Builder builder = CidrSet.builder();
 
@@ -80,6 +80,8 @@ class CidrSetTest {
     assertFalse(builder.add("::/0"));
     assertFalse(builder.add("2000::/3"));
     assertFalse(builder.add("2001::/15"));
+    assertFalse(builder.add("2a01::/16"), "a /16 of the RIPE space holds several large ISPs");
+    assertFalse(builder.add("2a01::/19"));
     assertFalse(builder.add("::ffff:0.0.0.0/96"), "a mapped /96 is an IPv4 /0");
     assertFalse(builder.add("::ffff:10.0.0.0/103"), "a mapped /103 is an IPv4 /7");
     final CidrSet rejected = builder.build();
@@ -89,9 +91,9 @@ class CidrSetTest {
   }
 
   @Test
-  void theWidestAcceptedNetworksAreSlash8AndSlash16AndStayInTheirFamily() {
+  void theWidestAcceptedNetworksAreSlash8AndSlash20AndStayInTheirFamily() {
     final CidrSet v4 = setOf("10.0.0.0/8", "::ffff:11.0.0.0/104");
-    final CidrSet v6 = setOf("2001::/16");
+    final CidrSet v6 = setOf("2001::/20");
 
     assertTrue(v4.contains(ip("10.255.0.1")));
     assertTrue(v4.contains(ip("11.1.2.3")));

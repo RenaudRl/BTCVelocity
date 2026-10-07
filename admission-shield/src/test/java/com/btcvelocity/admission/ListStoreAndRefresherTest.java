@@ -310,18 +310,34 @@ class ListStoreAndRefresherTest {
   }
 
   @Test
+  void anIpv6LineAddedToAnIpv4OnlyListIsRejectedAndThePreviousOneKept() throws IOException {
+    // Arrange - the review's case: 2a01::/16-sized poison in the Tor list, which has no IPv6
+    Files.writeString(this.directory.resolve("tor.ipset"), slash24s(10));
+    this.store.loadAll(List.of(TOR));
+
+    // Act
+    final boolean replaced = refresherServing(slash24s(10) + "2a01:e00::/26\n", new ArrayList<>())
+        .refresh(TOR);
+
+    // Assert
+    assertFalse(replaced);
+    assertTrue(this.log.has("ERROR", "IPv6 networks appear in a list that had none"));
+    assertTrue(this.store.classify(ip("2a01:e00::1")).isEmpty());
+  }
+
+  @Test
   void privateAndSharedAddressesAreNeverClassifiedEvenWhenAListNamesThem() throws IOException {
     // Arrange - a list that (wrongly) holds the proxy's neighbours
     Files.writeString(this.directory.resolve("dc.txt"), "10.0.0.0/8\n172.16.0.0/12\n"
-        + "192.168.0.0/16\n100.64.0.0/10\n127.0.0.0/8\n169.254.0.0/16\nfc00::/16\nfd00::/16\n"
-        + "fe80::/16\n203.0.113.0/24\n");
+        + "192.168.0.0/16\n100.64.0.0/10\n127.0.0.0/8\n169.254.0.0/16\nfc00::/20\nfd00::/20\n"
+        + "fe80::/20\n203.0.113.0/24\n");
 
     // Act
     this.store.loadAll(List.of(DATACENTER));
 
     // Assert
     for (String neighbour : List.of("10.1.2.3", "172.20.0.1", "192.168.1.10", "100.100.0.1",
-        "127.0.0.1", "169.254.3.4", "fc00::1", "fd12::1", "fe80::1", "::1", "::ffff:10.0.0.1")) {
+        "127.0.0.1", "169.254.3.4", "fc00::1", "fd0a::1", "fe80::1", "::1", "::ffff:10.0.0.1")) {
       assertTrue(this.store.classify(ip(neighbour)).isEmpty(), neighbour + " was classified");
     }
     assertTrue(this.store.classify(ip("203.0.113.1")).isPresent());

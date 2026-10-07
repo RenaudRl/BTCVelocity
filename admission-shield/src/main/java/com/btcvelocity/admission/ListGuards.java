@@ -44,10 +44,22 @@ public final class ListGuards {
   /** The most of the IPv4 space one list may cover, in percent. */
   public static final int MAX_IPV4_SHARE_PERCENT = 20;
 
+  /**
+   * The most of the global unicast IPv6 space ({@code 2000::/3}) one list may cover, in percent.
+   *
+   * <p>The X4BNet datacenter list covers 0.00125 % of it (October 2026); this is eight times
+   * that, so ordinary growth fits, while a handful of {@code /20} lines (0.00076 % each) or any
+   * {@code /16} (0.012 %) cannot hide in it.
+   */
+  public static final double MAX_IPV6_SHARE_PERCENT = 0.01;
+
   /** The most the entry count may move between two versions of a list, in percent. */
   public static final int MAX_ENTRY_VARIATION_PERCENT = 50;
 
   private static final double MAX_COVERAGE_GROWTH = 2.0;
+
+  /** 2000::/3 counted in /64 networks, the unit of {@link CidrSet#ipv6Slash64Count()}. */
+  private static final double GLOBAL_UNICAST_SLASH64 = Math.scalb(1.0, 61);
 
   private ListGuards() {
   }
@@ -78,6 +90,11 @@ public final class ListGuards {
       return String.format(Locale.ROOT, "covers %.1f %% of the IPv4 space (limit %d %%)",
           share, MAX_IPV4_SHARE_PERCENT);
     }
+    final double share6 = 100.0 * candidate.set().ipv6Slash64Count() / GLOBAL_UNICAST_SLASH64;
+    if (share6 > MAX_IPV6_SHARE_PERCENT) {
+      return String.format(Locale.ROOT, "covers %.5f %% of the IPv6 space 2000::/3 (limit %s %%)",
+          share6, MAX_IPV6_SHARE_PERCENT);
+    }
     return null;
   }
 
@@ -97,20 +114,27 @@ public final class ListGuards {
     final double variation = 100.0 * Math.abs(candidate.validLines() - before) / before;
     if (variation > MAX_ENTRY_VARIATION_PERCENT) {
       return String.format(Locale.ROOT,
-          "entry count moved from %d to %d (%.0f %%, limit %d %%); delete the list file and"
-              + " restart to accept it", previous.validLines(), candidate.validLines(), variation,
-          MAX_ENTRY_VARIATION_PERCENT);
+          "entry count moved from %d to %d (%.0f %%, limit %d %%)", previous.validLines(),
+          candidate.validLines(), variation, MAX_ENTRY_VARIATION_PERCENT);
     }
     final CidrSet old = previous.set();
-    if (old.ipv4AddressCount() > 0
-        && candidate.set().ipv4AddressCount() >= MAX_COVERAGE_GROWTH * old.ipv4AddressCount()) {
-      return "IPv4 coverage doubled (" + old.ipv4AddressCount() + " to "
-          + candidate.set().ipv4AddressCount() + " addresses); delete the list file and restart"
-          + " to accept it";
+    // A family the version in use does not have cannot appear: a datacenter IPv4 list that
+    // suddenly names IPv6 networks (or the reverse) is not the same list any more, and the
+    // growth test below has no base to compare with.
+    if (old.ipv4AddressCount() == 0 && candidate.set().ipv4AddressCount() > 0) {
+      return "IPv4 networks appear in a list that had none";
     }
-    if (old.ipv6Slash64Count() > 0
-        && candidate.set().ipv6Slash64Count() >= MAX_COVERAGE_GROWTH * old.ipv6Slash64Count()) {
-      return "IPv6 coverage doubled; delete the list file and restart to accept it";
+    if (old.ipv6Slash64Count() == 0 && candidate.set().ipv6Slash64Count() > 0) {
+      return "IPv6 networks appear in a list that had none";
+    }
+    if (candidate.set().ipv4AddressCount() >= MAX_COVERAGE_GROWTH * old.ipv4AddressCount()
+        && old.ipv4AddressCount() > 0) {
+      return "IPv4 coverage doubled (" + old.ipv4AddressCount() + " to "
+          + candidate.set().ipv4AddressCount() + " addresses)";
+    }
+    if (candidate.set().ipv6Slash64Count() >= MAX_COVERAGE_GROWTH * old.ipv6Slash64Count()
+        && old.ipv6Slash64Count() > 0) {
+      return "IPv6 coverage doubled";
     }
     return null;
   }

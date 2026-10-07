@@ -38,8 +38,12 @@ public final class CidrSet {
   /** The widest IPv4 network a set accepts, in prefix bits: {@code /8}. */
   public static final int MIN_PREFIX_V4 = 8;
 
-  /** The widest IPv6 network a set accepts, in prefix bits: {@code /16}. */
-  public static final int MIN_PREFIX_V6 = 16;
+  /**
+   * The widest IPv6 network a set accepts, in prefix bits: {@code /20}. The widest line of the
+   * X4BNet datacenter list is a {@code /24} (October 2026), so a {@code /20} leaves four bits of
+   * room; a {@code /16} would already take in several large residential ISPs.
+   */
+  public static final int MIN_PREFIX_V6 = 20;
 
   private static final CidrSet EMPTY = new Builder().build();
 

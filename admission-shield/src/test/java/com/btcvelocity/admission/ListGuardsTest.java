@@ -80,6 +80,46 @@ class ListGuardsTest {
   }
 
   @Test
+  void aFamilyTheVersionInUseDoesNotHaveCannotAppear() {
+    // The review's case: an IPv6 line added to a list that had none skipped the growth test
+    final ListStore.Loaded v4Only = loaded("203.0.113.0/24\n198.51.100.0/24\n");
+    final ListStore.Loaded v6Only = loaded("2001:db8::/32\n2001:db9::/32\n");
+
+    final String v6Appears = ListGuards.relativeRejection(
+        ListParser.parse("203.0.113.0/24\n198.51.100.0/24\n2a01:e00::/26\n"), v4Only);
+    final String v4Appears = ListGuards.relativeRejection(
+        ListParser.parse("2001:db8::/32\n2001:db9::/32\n203.0.113.0/24\n"), v6Only);
+
+    assertNotNull(v6Appears);
+    assertTrue(v6Appears.contains("IPv6 networks appear"), v6Appears);
+    assertNotNull(v4Appears);
+    assertTrue(v4Appears.contains("IPv4 networks appear"), v4Appears);
+    assertNull(ListGuards.relativeRejection(
+        ListParser.parse("203.0.113.0/24\n192.0.2.0/24\n"), v4Only), "same family: fine");
+  }
+
+  @Test
+  void theIpv6CoverageHasAnAbsoluteCeilingWithoutAnyPreviousVersion() {
+    // A /20 is the widest line accepted: 2^-17 of 2000::/3. Twelve of them are under the
+    // ceiling of 0.01 %, fourteen are over it.
+    final String twelve = slash20s(12);
+    final String fourteen = slash20s(14);
+
+    assertNull(ListGuards.absoluteRejection(ListParser.parse(twelve), 1000));
+    final String rejection = ListGuards.absoluteRejection(ListParser.parse(fourteen), 1000);
+    assertNotNull(rejection);
+    assertTrue(rejection.contains("of the IPv6 space"), rejection);
+  }
+
+  private static String slash20s(final int count) {
+    final StringBuilder lines = new StringBuilder();
+    for (int i = 0; i < count; i++) {
+      lines.append(String.format(java.util.Locale.ROOT, "2a01:%x::/20\n", i * 0x1000));
+    }
+    return lines.toString();
+  }
+
+  @Test
   void anEntryCountMovingByExactlyHalfIsStillAccepted() {
     final ListStore.Loaded previous = loaded("192.0.2.1\n192.0.2.2\n192.0.2.3\n192.0.2.4\n");
 
