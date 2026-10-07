@@ -36,6 +36,8 @@ import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
 import com.velocitypowered.proxy.event.VelocityEventManager;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
+import com.velocitypowered.proxy.protocol.StateRegistry;
+import com.velocitypowered.proxy.util.collect.CappedSet;
 import com.velocitypowered.proxy.protocol.packet.PluginMessagePacket;
 import com.velocitypowered.proxy.util.VelocityChannelRegistrar;
 import io.netty.buffer.ByteBuf;
@@ -43,6 +45,7 @@ import io.netty.buffer.Unpooled;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -77,7 +80,7 @@ class ClientChannelUpdatesTest {
   }
 
   private static ClientChannelUpdates.Update expectUpdate(
-      final java.util.Optional<ClientChannelUpdates.Update> result) {
+      final Optional<ClientChannelUpdates.Update> result) {
     assertTrue(result.isPresent(), "an update was expected");
     return result.get();
   }
@@ -95,25 +98,26 @@ class ClientChannelUpdatesTest {
   }
 
   @Test
-  void channelAlreadyKnownFromConfigurationIsNotReportedAgainInPlay() {
+  void aRepeatedRegisterReportsEveryChannelAgainButStoresThemOnce() {
     final Set<ChannelIdentifier> known = new HashSet<>();
     ClientChannelUpdates.apply(nulJoined("minecraft:register", "fabric:a"), known, CLIENT, null);
 
-    final var again = ClientChannelUpdates.apply(
-        nulJoined("minecraft:register", "fabric:a"), known, CLIENT, null);
+    final var again = expectUpdate(ClientChannelUpdates.apply(
+        nulJoined("minecraft:register", "fabric:a"), known, CLIENT, null));
 
-    assertTrue(again.isEmpty());
+    assertEquals(List.of(FABRIC_A), again.channels());
     assertEquals(Set.of(FABRIC_A), known);
   }
 
   @Test
-  void partialOverlapReportsOnlyTheNewChannels() {
+  void partialOverlapReportsAllTheChannelsOfThePacket() {
     final Set<ChannelIdentifier> known = new HashSet<>(Set.of(FABRIC_A));
 
     final var update = expectUpdate(ClientChannelUpdates.apply(
         nulJoined("minecraft:register", "fabric:a", "fabric:b"), known, CLIENT, null));
 
-    assertEquals(List.of(FABRIC_B), update.channels());
+    assertEquals(List.of(FABRIC_A, FABRIC_B), update.channels());
+    assertEquals(Set.of(FABRIC_A, FABRIC_B), known);
   }
 
   @Test
@@ -144,12 +148,39 @@ class ClientChannelUpdatesTest {
   }
 
   @Test
-  void commonRegisterAndPlainRegisterShareTheSameDeduplication() {
+  void commonRegisterAndPlainRegisterShareTheSameKnownSet() {
     final Set<ChannelIdentifier> known = new HashSet<>();
     ClientChannelUpdates.apply(commonRegister("play", "fabric:a"), known, CLIENT, null);
 
-    assertTrue(ClientChannelUpdates.apply(
-        nulJoined("minecraft:register", "fabric:a"), known, CLIENT, null).isEmpty());
+    ClientChannelUpdates.apply(
+        nulJoined("minecraft:register", "fabric:a", "fabric:b"), known, CLIENT, null);
+
+    assertEquals(Set.of(FABRIC_A, FABRIC_B), known);
+  }
+
+  @Test
+  void commonRegisterOfTheConfigurationPhaseIsReportedButNotStored() {
+    final Set<ChannelIdentifier> known = new HashSet<>();
+
+    final var update = expectUpdate(ClientChannelUpdates.apply(
+        commonRegister("configuration", "fabric:a"), known, CLIENT, null));
+
+    assertEquals(List.of(FABRIC_A), update.channels());
+    assertTrue(known.isEmpty(), "the stored set is replayed to the backend as play channels");
+  }
+
+  @Test
+  void commonRegisterOverTheChannelCapIsRejected() {
+    final int tooMany = ConnectedPlayer.MAX_CLIENTSIDE_PLUGIN_CHANNELS + 1;
+    final String[] ids = new String[tooMany];
+    for (int i = 0; i < tooMany; i++) {
+      ids[i] = "fabric:c" + i;
+    }
+    final Set<ChannelIdentifier> known = new HashSet<>();
+
+    assertTrue(ClientChannelUpdates.apply(commonRegister("play", ids), known, CLIENT, null)
+        .isEmpty());
+    assertTrue(known.isEmpty());
   }
 
   @Test
@@ -234,14 +265,151 @@ class ClientChannelUpdatesTest {
   }
 
   @Test
-  void handleStaysSilentForAnAlreadyKnownChannel() {
+  void handleFiresAgainForAnAlreadyKnownChannelLikeUpstream() {
     final VelocityEventManager events = mock(VelocityEventManager.class);
     final ConnectedPlayer player = playerWith(new HashSet<>(Set.of(FABRIC_A)));
 
     ClientChannelUpdates.handle(serverWith(events), player,
         nulJoined("minecraft:register", "fabric:a"));
 
+    final ArgumentCaptor<Object> event = ArgumentCaptor.forClass(Object.class);
+    verify(events).fireAndForget(event.capture());
+    assertEquals(List.of(FABRIC_A),
+        ((PlayerChannelRegisterEvent) event.getValue()).getChannels());
+  }
+
+  @Test
+  void strictHandleStillThrowsOnAnInvalidRegister() {
+    final VelocityEventManager events = mock(VelocityEventManager.class);
+    final ConnectedPlayer player = playerWith(new HashSet<>());
+
+    assertThrows(RuntimeException.class, () -> ClientChannelUpdates.handle(serverWith(events),
+        player, nulJoined("minecraft:register", "NOT VALID")));
     verify(events, never()).fireAndForget(any());
+  }
+
+  @Test
+  void lenientHandleSwallowsAnInvalidRegister() {
+    final VelocityEventManager events = mock(VelocityEventManager.class);
+    final ConnectedPlayer player = playerWith(new HashSet<>());
+
+    ClientChannelUpdates.handleLenient(serverWith(events), player,
+        nulJoined("minecraft:register", "NOT VALID"));
+
+    verify(events, never()).fireAndForget(any());
+  }
+
+  @Test
+  void configurationHandlerRelaysAnInvalidRegisterInsteadOfDroppingTheConnection() {
+    final VelocityEventManager events = mock(VelocityEventManager.class);
+    final VelocityServer server = serverWith(events);
+    when(server.getChannelRegistrar()).thenReturn(mock(VelocityChannelRegistrar.class));
+    final ConnectedPlayer player = playerWith(new HashSet<>());
+    final VelocityServerConnection backend = mock(VelocityServerConnection.class);
+    final MinecraftConnection backendConnection = mock(MinecraftConnection.class);
+    when(backend.ensureConnected()).thenReturn(backendConnection);
+    when(player.getConnectionInFlight()).thenReturn(backend);
+    final PluginMessagePacket packet = nulJoined("minecraft:register", "NOT VALID");
+
+    assertTrue(new ClientConfigSessionHandler(server, player).handle(packet));
+
+    verify(backendConnection).write(packet);
+    verify(events, never()).fireAndForget(any());
+  }
+
+  @Test
+  void configurationHandlerRelaysARegisterThatOverflowsTheChannelCap() {
+    final VelocityEventManager events = mock(VelocityEventManager.class);
+    final VelocityServer server = serverWith(events);
+    when(server.getChannelRegistrar()).thenReturn(mock(VelocityChannelRegistrar.class));
+    final Set<ChannelIdentifier> full =
+        CappedSet.create(ConnectedPlayer.MAX_CLIENTSIDE_PLUGIN_CHANNELS);
+    for (int i = 0; i < ConnectedPlayer.MAX_CLIENTSIDE_PLUGIN_CHANNELS; i++) {
+      full.add(MinecraftChannelIdentifier.from("fabric:c" + i));
+    }
+    final ConnectedPlayer player = playerWith(full);
+    final VelocityServerConnection backend = mock(VelocityServerConnection.class);
+    final MinecraftConnection backendConnection = mock(MinecraftConnection.class);
+    when(backend.ensureConnected()).thenReturn(backendConnection);
+    when(player.getConnectionInFlight()).thenReturn(backend);
+    final PluginMessagePacket packet = nulJoined("minecraft:register", "fabric:one-more");
+
+    assertTrue(new ClientConfigSessionHandler(server, player).handle(packet));
+
+    verify(backendConnection).write(packet);
+    assertEquals(ConnectedPlayer.MAX_CLIENTSIDE_PLUGIN_CHANNELS, full.size());
+  }
+
+  private static ClientPlaySessionHandler playHandlerWithBackend(
+      final VelocityServer server, final ConnectedPlayer player,
+      final MinecraftConnection backendConnection) {
+    final VelocityServerConnection backend = mock(VelocityServerConnection.class);
+    when(backend.getConnection()).thenReturn(backendConnection);
+    when(backendConnection.getState()).thenReturn(StateRegistry.PLAY);
+    when(player.getConnectedServer()).thenReturn(backend);
+    return new ClientPlaySessionHandler(server, player);
+  }
+
+  @Test
+  void playHandlerReportsEveryChannelOfARegisterAgainAndRelaysIt() {
+    final VelocityEventManager events = mock(VelocityEventManager.class);
+    final Set<ChannelIdentifier> known = new HashSet<>(Set.of(FABRIC_A));
+    final ConnectedPlayer player = playerWith(known);
+    final MinecraftConnection backendConnection = mock(MinecraftConnection.class);
+    final ClientPlaySessionHandler handler =
+        playHandlerWithBackend(serverWith(events), player, backendConnection);
+    final PluginMessagePacket packet = nulJoined("minecraft:register", "fabric:a", "fabric:b");
+
+    assertTrue(handler.handle(packet));
+
+    final ArgumentCaptor<Object> event = ArgumentCaptor.forClass(Object.class);
+    verify(events).fireAndForget(event.capture());
+    assertEquals(List.of(FABRIC_A, FABRIC_B),
+        ((PlayerChannelRegisterEvent) event.getValue()).getChannels());
+    verify(backendConnection).write(packet);
+  }
+
+  @Test
+  void playHandlerStillHandlesUnregisterAndRelaysIt() {
+    final VelocityEventManager events = mock(VelocityEventManager.class);
+    final Set<ChannelIdentifier> known = new HashSet<>(Set.of(FABRIC_A));
+    final ConnectedPlayer player = playerWith(known);
+    final MinecraftConnection backendConnection = mock(MinecraftConnection.class);
+    final ClientPlaySessionHandler handler =
+        playHandlerWithBackend(serverWith(events), player, backendConnection);
+    final PluginMessagePacket packet = nulJoined("minecraft:unregister", "fabric:a");
+
+    assertTrue(handler.handle(packet));
+
+    verify(events).fireAndForget(any(PlayerChannelUnregisterEvent.class));
+    assertTrue(known.isEmpty());
+    verify(backendConnection).write(packet);
+  }
+
+  @Test
+  void playHandlerTracksACommonRegisterSentInGame() {
+    final VelocityEventManager events = mock(VelocityEventManager.class);
+    final Set<ChannelIdentifier> known = new HashSet<>();
+    final ConnectedPlayer player = playerWith(known);
+    final ClientPlaySessionHandler handler =
+        new ClientPlaySessionHandler(serverWith(events), player);
+
+    handler.handle(commonRegister("play", "fabric:a"));
+
+    assertEquals(Set.of(FABRIC_A), known);
+    verify(events).fireAndForget(any(PlayerChannelRegisterEvent.class));
+  }
+
+  @Test
+  void playHandlerStillRejectsAnInvalidRegister() {
+    final VelocityEventManager events = mock(VelocityEventManager.class);
+    final ConnectedPlayer player = playerWith(new HashSet<>());
+    final MinecraftConnection backendConnection = mock(MinecraftConnection.class);
+    final ClientPlaySessionHandler handler =
+        playHandlerWithBackend(serverWith(events), player, backendConnection);
+
+    assertThrows(RuntimeException.class,
+        () -> handler.handle(nulJoined("minecraft:register", "NOT VALID")));
   }
 
   @Test

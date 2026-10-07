@@ -132,10 +132,12 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
 
     // Track the channels the client announces during configuration (Fabric registers them here)
     // so plugins see them before the play phase. This only updates state and fires an event
-    // without waiting for it; the packet itself is relayed below exactly as before. It runs
-    // before the backend check on purpose: a register that arrives before the backend
-    // connection exists is not relayed, but is still remembered and replayed on join.
-    ClientChannelUpdates.handle(server, player, packet);
+    // without waiting for it; the packet itself is relayed below exactly as before, even when
+    // the announcement is invalid or over the cap (lenient: it used to be relayed untouched, and
+    // the backend decides). It runs before the backend check on purpose: a register that arrives
+    // before the backend connection exists is not relayed, but is still remembered and replayed
+    // on join.
+    ClientChannelUpdates.handleLenient(server, player, packet);
 
     if (PluginMessageUtil.isMcBrand(packet)) {
       final String brand = PluginMessageUtil.readBrandMessage(packet.content());

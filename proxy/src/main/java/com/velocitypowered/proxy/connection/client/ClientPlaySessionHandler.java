@@ -308,6 +308,12 @@ public class ClientPlaySessionHandler implements MinecraftSessionHandler {
 
   @Override
   public boolean handle(final PluginMessagePacket packet) {
+    // A Fabric client may add play channels in game with c:register; record them. The packet
+    // then follows the generic path below, as before (it is not a minecraft:(un)register).
+    if (ClientChannelUpdates.isCommonRegister(packet)) {
+      ClientChannelUpdates.handleLenient(server, player, packet);
+    }
+
     // Handling an edge case, when a packet with FML client handshake (state COMPLETE)
     // arrives after JoinGame packet from destination server
     VelocityServerConnection serverConn =
@@ -321,10 +327,7 @@ public class ClientPlaySessionHandler implements MinecraftSessionHandler {
       if (backendConn.getState() != StateRegistry.PLAY) {
         LOGGER.warn("A plugin message was received while the backend server was not "
             + "ready. Channel: {}. Packet discarded.", packet.getChannel());
-      } else if (PluginMessageUtil.isRegister(packet)) {
-        ClientChannelUpdates.handle(server, player, packet);
-        backendConn.write(packet.retain());
-      } else if (PluginMessageUtil.isUnregister(packet)) {
+      } else if (PluginMessageUtil.isRegister(packet) || PluginMessageUtil.isUnregister(packet)) {
         ClientChannelUpdates.handle(server, player, packet);
         backendConn.write(packet.retain());
       } else if (PluginMessageUtil.isMcBrand(packet)) {

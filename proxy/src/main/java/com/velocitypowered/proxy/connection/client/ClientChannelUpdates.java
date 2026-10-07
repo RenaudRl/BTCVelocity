@@ -31,6 +31,8 @@ import io.netty.buffer.ByteBuf;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * Tracks the plugin channels a client announces through (un)register plugin messages, shared by
@@ -40,18 +42,27 @@ import java.util.Optional;
  * <p>Two announcement formats exist:
  * <ul>
  *   <li>{@code minecraft:register} / {@code minecraft:unregister}: channel ids joined by NUL;</li>
- *   <li>{@code c:register} (Fabric API networking, 1.20.2+, sent during configuration):
- *       VarInt version, UTF-8 string phase ({@code play} or {@code configuration}), then a
- *       VarInt-prefixed list of identifier strings. There is no {@code c:unregister}.</li>
+ *   <li>{@code c:register} (Fabric API networking, 1.20.2+, sent in configuration and possibly
+ *       in play): VarInt version, UTF-8 string phase ({@code play} or {@code configuration}),
+ *       then a VarInt-prefixed list of identifier strings. There is no {@code c:unregister}.</li>
  * </ul>
  *
- * <p>A channel the client already announced is never reported twice: the event of a register
- * only carries the channels that were not already known.
+ * <p>As upstream does, every register packet fires its event with <em>all</em> the channels the
+ * packet carries, even those already known (a client re-sends them on each server switch, and a
+ * subscriber may rely on one event per packet): subscribers must be idempotent. The known set
+ * ({@code getClientsideChannels()}) is a set, so it never holds a channel twice. Channels of a
+ * {@code c:register} whose phase is {@code configuration} are reported but not stored, because
+ * the stored set is replayed to the backend as play channels when the player joins.
  */
 final class ClientChannelUpdates {
 
+  private static final Logger LOGGER = LogManager.getLogger(ClientChannelUpdates.class);
+
   /** Channel of the Fabric API common registration packet (version, phase, channels). */
   static final String COMMON_REGISTER_CHANNEL = "c:register";
+
+  /** Phase name of a {@code c:register} that announces the channels used while playing. */
+  static final String PLAY_PHASE = "play";
 
   /** Highest {@code c:register} version this decoder understands. */
   private static final int COMMON_REGISTER_VERSION = 1;
@@ -76,9 +87,13 @@ final class ClientChannelUpdates {
    * A change of the channels registered by a client.
    *
    * @param kind     whether channels were registered or unregistered
-   * @param channels the channels to report (for a register, only the newly known ones)
+   * @param channels every channel the packet carries
    */
   record Update(Kind kind, List<ChannelIdentifier> channels) {
+  }
+
+  /** A decoded {@code c:register}. */
+  private record CommonRegister(String phase, List<ChannelIdentifier> channels) {
   }
 
   /**
@@ -108,22 +123,42 @@ final class ClientChannelUpdates {
   }
 
   /**
+   * Same as {@link #handle} but never throws: an announcement the proxy cannot accept is logged
+   * at debug level and skipped, so that the caller can still relay the packet. Used where the
+   * packet used to be relayed untouched (configuration phase, {@code c:register}).
+   *
+   * @param server the proxy
+   * @param player the client that sent the packet
+   * @param packet the plugin message
+   */
+  static void handleLenient(final VelocityServer server, final ConnectedPlayer player,
+                            final PluginMessagePacket packet) {
+    try {
+      handle(server, player, packet);
+    } catch (RuntimeException e) {
+      LOGGER.debug("Ignoring channel announcement {} from {}: {}", packet.getChannel(), player,
+          e.toString());
+    }
+  }
+
+  /**
    * Computes and applies the state change announced by a plugin message, without any event.
    *
    * @param packet          the plugin message
    * @param known           the channels already known for the client, updated in place
    * @param protocolVersion the client protocol version
    * @param server          the proxy, forwarded to {@link PluginMessageUtil#getChannels}
-   * @return the change to report, empty if the packet is not a channel announcement or does
-   *         not change anything
+   * @return the change to report, empty if the packet is not a channel announcement
    */
   static Optional<Update> apply(final PluginMessagePacket packet,
                                 final Collection<ChannelIdentifier> known,
                                 final ProtocolVersion protocolVersion,
                                 final VelocityServer server) {
     if (PluginMessageUtil.isRegister(packet)) {
-      return register(known, PluginMessageUtil.getChannels(known.size(), packet,
-          protocolVersion, server));
+      final List<ChannelIdentifier> channels = PluginMessageUtil.getChannels(known.size(), packet,
+          protocolVersion, server);
+      known.addAll(channels);
+      return Optional.of(new Update(Kind.REGISTER, ImmutableList.copyOf(channels)));
     }
     if (PluginMessageUtil.isUnregister(packet)) {
       final List<ChannelIdentifier> channels =
@@ -132,42 +167,39 @@ final class ClientChannelUpdates {
       return Optional.of(new Update(Kind.UNREGISTER, ImmutableList.copyOf(channels)));
     }
     if (isCommonRegister(packet) && protocolVersion.noLessThan(ProtocolVersion.MINECRAFT_1_20_2)) {
-      return register(known, decodeCommonRegister(packet.content()));
+      return decodeCommonRegister(packet.content()).map(decoded -> {
+        if (PLAY_PHASE.equals(decoded.phase())) {
+          known.addAll(decoded.channels());
+        }
+        return new Update(Kind.REGISTER, decoded.channels());
+      });
     }
     return Optional.empty();
   }
 
-  private static Optional<Update> register(final Collection<ChannelIdentifier> known,
-                                           final List<ChannelIdentifier> announced) {
-    final ImmutableList.Builder<ChannelIdentifier> added = ImmutableList.builder();
-    for (final ChannelIdentifier channel : announced) {
-      if (known.add(channel)) {
-        added.add(channel);
-      }
-    }
-    final List<ChannelIdentifier> newlyKnown = added.build();
-    return newlyKnown.isEmpty() ? Optional.empty() : Optional.of(new Update(Kind.REGISTER, newlyKnown));
-  }
-
   /**
-   * Decodes the channels of a {@code c:register} payload without consuming the buffer.
-   * An unreadable payload, or a version this proxy does not know, yields no channel instead of
-   * an error: the packet is relayed to the backend untouched either way, and an unknown future
-   * format must not disconnect the client.
+   * Decodes a {@code c:register} payload without consuming the buffer. An unreadable payload, or
+   * a version this proxy does not know, yields nothing instead of an error (logged at debug): the
+   * packet is relayed to the backend untouched either way, and an unknown future format must not
+   * disconnect the client.
    *
    * @param content the packet content, read through a duplicate
-   * @return the announced channels, empty if the payload cannot be decoded
+   * @return the phase and channels, empty if the payload is rejected
    */
-  static List<ChannelIdentifier> decodeCommonRegister(final ByteBuf content) {
+  private static Optional<CommonRegister> decodeCommonRegister(final ByteBuf content) {
     final ByteBuf buf = content.duplicate();
     try {
-      if (ProtocolUtils.readVarInt(buf) != COMMON_REGISTER_VERSION) {
-        return List.of();
+      final int version = ProtocolUtils.readVarInt(buf);
+      if (version != COMMON_REGISTER_VERSION) {
+        LOGGER.debug("Ignoring c:register: unsupported version {}", version);
+        return Optional.empty();
       }
-      ProtocolUtils.readString(buf, COMMON_REGISTER_PHASE_MAX_LENGTH);
+      final String phase = ProtocolUtils.readString(buf, COMMON_REGISTER_PHASE_MAX_LENGTH);
       final int count = ProtocolUtils.readVarInt(buf);
       if (count < 0 || count > ConnectedPlayer.MAX_CLIENTSIDE_PLUGIN_CHANNELS) {
-        return List.of();
+        LOGGER.debug("Ignoring c:register: {} channels (maximum {})", count,
+            ConnectedPlayer.MAX_CLIENTSIDE_PLUGIN_CHANNELS);
+        return Optional.empty();
       }
       final ImmutableList.Builder<ChannelIdentifier> channels =
           ImmutableList.builderWithExpectedSize(count);
@@ -175,10 +207,11 @@ final class ClientChannelUpdates {
         channels.add(MinecraftChannelIdentifier.from(
             ProtocolUtils.readString(buf, COMMON_REGISTER_CHANNEL_MAX_LENGTH)));
       }
-      return channels.build();
+      return Optional.of(new CommonRegister(phase, channels.build()));
     } catch (RuntimeException e) {
       // Truncated buffer, bad VarInt, over-long string or invalid identifier.
-      return List.of();
+      LOGGER.debug("Ignoring c:register: undecodable payload ({})", e.toString());
+      return Optional.empty();
     }
   }
 
