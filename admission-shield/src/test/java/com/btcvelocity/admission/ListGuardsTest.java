@@ -1,0 +1,156 @@
+/*
+ * Copyright (C) 2026 Velocity Contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.btcvelocity.admission;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.net.URI;
+import java.time.Instant;
+import org.junit.jupiter.api.Test;
+
+class ListGuardsTest {
+
+  private static final ListSource SOURCE = new ListSource("dc", IpClass.DATACENTER,
+      URI.create("https://lists.invalid/dc.txt"), "dc.txt");
+
+  private static ListStore.Loaded loaded(final String text) {
+    final ListParser.Result parsed = ListParser.parse(text);
+    return new ListStore.Loaded(SOURCE, parsed.set(), parsed.validLines(), parsed.invalidLines(),
+        Instant.EPOCH);
+  }
+
+  @Test
+  void aSensibleListPassesAndAFirstListHasNothingToBeComparedWith() {
+    final ListParser.Result list = ListParser.parse("203.0.113.0/24\n2001:db8::/32\n");
+
+    assertNull(ListGuards.absoluteRejection(list, 10));
+    assertNull(ListGuards.relativeRejection(list, null));
+  }
+
+  @Test
+  void justUnderAFifthOfIpv4PassesAndOneMoreSlash8DoesNot() {
+    // 51 /8 networks are 19.9 %, 52 are 20.3 %
+    final StringBuilder fiftyOne = new StringBuilder();
+    for (int first = 1; first <= 51; first++) {
+      fiftyOne.append(first).append(".0.0.0/8\n");
+    }
+
+    assertNull(ListGuards.absoluteRejection(ListParser.parse(fiftyOne.toString()), 1000));
+    final String rejection = ListGuards.absoluteRejection(
+        ListParser.parse(fiftyOne + "52.0.0.0/8\n"), 1000);
+    assertNotNull(rejection);
+    assertTrue(rejection.contains("20.3 %"), rejection);
+  }
+
+  @Test
+  void theCeilingOnEntriesIsInclusive() {
+    final ListParser.Result three = ListParser.parse("192.0.2.1\n192.0.2.2\n192.0.2.3\n");
+
+    assertNull(ListGuards.absoluteRejection(three, 3));
+    assertNotNull(ListGuards.absoluteRejection(three, 2));
+  }
+
+  @Test
+  void aListReadOnlyUpToTheCeilingIsRejectedAsTooLongWhatEverItsFirstLinesAre() {
+    final ListParser.Result cut = ListParser.parse("192.0.2.1\n192.0.2.2\n192.0.2.3\n", 2);
+
+    final String rejection = ListGuards.absoluteRejection(cut, 2);
+
+    assertNotNull(rejection);
+    assertTrue(rejection.contains("above the ceiling of 2"), rejection);
+  }
+
+  @Test
+  void theUnreadableLinesQuotedInARejectionCannotForgeOrReorderALogLine() {
+    // Arrange - the lines come from someone else's file: a bidi override and an escape sequence
+    final ListParser.Result garbage =
+        ListParser.parse("a‮evil\nx\u001b[2Jred\nplain-garbage\n");
+
+    // Act
+    final String rejection = ListGuards.absoluteRejection(garbage, 10);
+
+    // Assert
+    assertNotNull(rejection);
+    assertTrue(rejection.codePoints().noneMatch(c -> c == 0x202E || c == 0x1B), rejection);
+    assertTrue(rejection.contains("\\u202E"), rejection);
+    assertTrue(rejection.contains("\\u001B"), rejection);
+  }
+
+  @Test
+  void anIpv6CoverageThatDoublesIsRejected() {
+    final ListStore.Loaded previous = loaded("2001:db8::/48\n2001:db9::/48\n");
+
+    assertNull(ListGuards.relativeRejection(
+        ListParser.parse("2001:db8::/48\n2001:dba::/48\n"), previous));
+    final String rejection = ListGuards.relativeRejection(
+        ListParser.parse("2001:db8::/47\n2001:dba::/47\n"), previous);
+    assertNotNull(rejection);
+    assertTrue(rejection.contains("IPv6 coverage doubled"), rejection);
+  }
+
+  @Test
+  void aFamilyTheVersionInUseDoesNotHaveCannotAppear() {
+    // The review's case: an IPv6 line added to a list that had none skipped the growth test
+    final ListStore.Loaded v4Only = loaded("203.0.113.0/24\n198.51.100.0/24\n");
+    final ListStore.Loaded v6Only = loaded("2001:db8::/32\n2001:db9::/32\n");
+
+    final String v6Appears = ListGuards.relativeRejection(
+        ListParser.parse("203.0.113.0/24\n198.51.100.0/24\n2a01:e00::/26\n"), v4Only);
+    final String v4Appears = ListGuards.relativeRejection(
+        ListParser.parse("2001:db8::/32\n2001:db9::/32\n203.0.113.0/24\n"), v6Only);
+
+    assertNotNull(v6Appears);
+    assertTrue(v6Appears.contains("IPv6 networks appear"), v6Appears);
+    assertNotNull(v4Appears);
+    assertTrue(v4Appears.contains("IPv4 networks appear"), v4Appears);
+    assertNull(ListGuards.relativeRejection(
+        ListParser.parse("203.0.113.0/24\n192.0.2.0/24\n"), v4Only), "same family: fine");
+  }
+
+  @Test
+  void theIpv6CoverageHasAnAbsoluteCeilingWithoutAnyPreviousVersion() {
+    // A /20 is the widest line accepted: 2^-17 of 2000::/3. Twelve of them are under the
+    // ceiling of 0.01 %, fourteen are over it.
+    final String twelve = slash20s(12);
+    final String fourteen = slash20s(14);
+
+    assertNull(ListGuards.absoluteRejection(ListParser.parse(twelve), 1000));
+    final String rejection = ListGuards.absoluteRejection(ListParser.parse(fourteen), 1000);
+    assertNotNull(rejection);
+    assertTrue(rejection.contains("of the IPv6 space"), rejection);
+  }
+
+  private static String slash20s(final int count) {
+    final StringBuilder lines = new StringBuilder();
+    for (int i = 0; i < count; i++) {
+      lines.append(String.format(java.util.Locale.ROOT, "2a01:%x::/20\n", i * 0x1000));
+    }
+    return lines.toString();
+  }
+
+  @Test
+  void anEntryCountMovingByExactlyHalfIsStillAccepted() {
+    final ListStore.Loaded previous = loaded("192.0.2.1\n192.0.2.2\n192.0.2.3\n192.0.2.4\n");
+
+    assertNull(ListGuards.relativeRejection(
+        ListParser.parse("192.0.2.1\n192.0.2.2\n"), previous));
+    assertNotNull(ListGuards.relativeRejection(ListParser.parse("192.0.2.1\n"), previous));
+  }
+}

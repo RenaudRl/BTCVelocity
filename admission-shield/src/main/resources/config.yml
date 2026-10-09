@@ -1,0 +1,138 @@
+# BTC Admission Shield - local anti-VPN.
+#
+# A connection whose address is in a datacenter list or a Tor exit list is refused. Everything is
+# decided in memory from files kept on this proxy. NO player address is ever sent anywhere: the
+# only outbound traffic is the periodic download of the public lists below, which carries no
+# player data. There is no remote API.
+#
+# Every decision that matters (each refusal, each "observed") is written as one key=value line to
+# the logger "btc.admission.journal". The file log4j2-admission-journal.xml, written next to this
+# one on first start, gives that logger its own file, rotated daily and purged after 180 days;
+# it takes effect through -Dlog4j2.configurationFile (see the module README).
+# Each refusal is also told to the staff online, at most one message every 10 seconds.
+#
+# Staff command: /admission why <pseudo|ip>   and   /admission status
+# Permission: btc.admission.staff (the console always has it).
+
+# enforce : refuse listed addresses.  observe : only journal them (dry run), let everybody in.
+mode: enforce
+
+# Addresses Geyser connects from. A Floodgate player connecting from one of these is NOT judged
+# on that address (every Bedrock player shares it): Floodgate's record of the player's real
+# address is judged instead when it can be read; otherwise the player is admitted and the journal
+# says "bedrock, ip reelle inconnue". A connection from one of these that is NOT a Floodgate
+# player is journaled as "geyser-address-not-floodgate", logged as a warning, and judged on the
+# address like any other. Needs Floodgate. IP literals or CIDR, IPv4 or IPv6.
+# EMPTY until the bench has measured the address the proxy sees for a Bedrock player (13.1).
+geyser-addresses: []
+
+# Let in even from a listed address.
+exemptions:
+  # Each entry needs BOTH the name and the UUID, and both must match the authenticated account.
+  # An entry with only one of them is a configuration error: reported, and it exempts nobody.
+  players: []
+  #  - name: SomeStaffMember
+  #    uuid: 00000000-0000-0000-0000-000000000000
+  #  - name: SomePartner
+  #    uuid: 11111111-1111-1111-1111-111111111111
+  # Networks (CIDR or single address), e.g. an office or a partner's fixed connection.
+  networks: []
+  #  - 203.0.113.0/24
+
+# Shown to a refused player, MiniMessage format. {code} is replaced by the cause code
+# (ADM-VPN-DC for datacenter, ADM-VPN-TOR for Tor, ADM-RATE-NET for too many attempts from one
+# network), which is also in the journal line.
+messages:
+  datacenter: "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un réseau d'hébergement ou de VPN. Si vous n'utilisez pas de VPN, contactez le staff avec le code <white>{code}</white>.</gray>"
+  tor: "<red>Connexion refusée.</red>\n<gray>Les connexions depuis le réseau Tor ne sont pas acceptées. Contactez le staff avec le code <white>{code}</white>.</gray>"
+  network-rate: "<red>Connexion refusée.</red>\n<gray>Trop de tentatives de connexion depuis votre réseau. Patientez quelques secondes puis réessayez. Si cela persiste, contactez le staff avec le code <white>{code}</white>.</gray>"
+
+# BOUND ON CONNECTION ATTEMPTS PER NETWORK (Sentinel 13.4). Independent of the lists above.
+# Every pre-login spends one token of its network: an IPv4 /24 or an IPv6 /48 (6to4, Teredo, NAT64
+# and IPv4-mapped addresses are first read as the IPv4 address they carry). A network owns a
+# bucket of `burst` tokens that refills at `attempts` per `window-seconds`; an attempt that finds
+# it empty is over the limit. A refused attempt spends nothing, so the players of a throttled
+# network still get through at the sustained rate while a bot wave is turned away.
+#
+# Why these values: a /24 of a French mobile carrier behind carrier-grade NAT stands for a few
+# hundred subscribers. 10 attempts / 10 s is one per second sustained, far above what such a /24
+# produces in normal play; a burst of 20 lets a group join together or a wave of reconnections
+# after a restart through. A bot wave from one network passes its first 20 attempts and then
+# crawls at one per second. Measure in `observe` before enforcing (task 13.5).
+#
+# NEVER applied to: addresses that are not public (loopback, private, 100.64.0.0/10, link-local,
+# unique-local), `geyser-addresses` (every Bedrock player arrives from it), and
+# `exemptions.networks`. A player exemption (name AND UUID) cannot be checked at the pre-login,
+# where anyone can type any name: an attempt over the limit whose name some exemption carries is
+# not refused there, the decision waits for the login; an authenticated player named by an
+# exemption is then let in, anyone else with that name is refused if the network is still over
+# its limit. In `observe`, nothing is deferred: the attempt is only journaled.
+network-rate:
+  enabled: true
+  # observe : journal the attempts over the limit (decision=observed, code stays none) and let
+  #           them in.  enforce : refuse them (ADM-RATE-NET). The module-wide `mode: observe`
+  #           also holds this bound back. Default observe: the limit is not measured yet.
+  mode: observe
+  attempts: 10
+  window-seconds: 10
+  # At least `attempts`; left out, twice `attempts`.
+  burst: 20
+  # Network size: IPv4 16..32, IPv6 32..64. A shorter prefix groups more players together.
+  ipv4-prefix: 24
+  ipv6-prefix: 48
+  # Networks followed at once (1000..1000000). Beyond it the least recently seen is forgotten, and
+  # a forgotten network starts again with a full bucket: pressure on the table lets attempts
+  # through, it never refuses an innocent network.
+  max-networks: 20000
+
+lists:
+  # How often the lists are downloaded again. A failed download keeps the last valid list.
+  refresh-hours: 24
+  # For the whole download: connection, headers and body.
+  download-timeout-seconds: 30
+  # The largest default list is under 1 MB; a longer download is cut and thrown away.
+  max-download-megabytes: 8
+  # A list is thrown away (the last valid one stays, an ERROR is logged) if it holds more entries
+  # than this (reading stops as soon as it is crossed), covers more than 20 % of the IPv4 space or more than 0.01 % of the IPv6 space
+  # 2000::/3, or, compared with the version in use, moves its entry count by more than 50 %,
+  # doubles its coverage, or brings a family (IPv4, IPv6) the version in use does not have.
+  # A line wider than /8 (IPv4) or /20 (IPv6) is ignored. Private, loopback, CGNAT, link-local and
+  # unique-local addresses are never classified, whatever a list says.
+  max-entries: 500000
+  # A default list with NO previous version (first start, or this directory is not kept between
+  # two starts, as with a recreated CloudNet template) is judged against bounds shipped with the
+  # module: entries and coverage per family, taken from the real lists with a wide margin. Set
+  # to false only if a default list has outgrown them (the ERROR in the log says which bound);
+  # the first load is then judged by the absolute guards alone.
+  embedded-baseline: true
+  # QUARANTINE. A new version of a list that is already in use (it passed the guards above, and is
+  # not byte-identical to the one in use) is NOT put in use at once: it waits this many hours in
+  # <file>.candidate. Meanwhile the version in use keeps deciding, and the new one only watches:
+  # every authenticated player it would refuse IN ADDITION is journaled once as decision=would_refuse
+  # and counted. At the end, if that count is <= quarantine-max-extra-players the new version is
+  # put in use; otherwise it is thrown away, an ERROR is logged and the staff online is told (the
+  # next download starts again). This stops a poisoning that grows by steps, each within the guards.
+  # 0 hours = no quarantine. A restart forgets a quarantine (the next download starts a new one).
+  # The default 0 means one single player the new version would refuse is enough to reject it;
+  # raise it if legitimate new listings keep being held back (a new datacenter range will refuse
+  # the odd VPN user it is meant to refuse).
+  quarantine-hours: 6
+  quarantine-max-extra-players: 0
+  # Files are kept in <this directory>/lists/. A source needs: class (datacenter | tor), an https
+  # url, and a plain file name. Leave this section out to use the three lists below.
+  #  - X4BNet lists_vpn (MIT): networks of hosting providers and VPNs, built from ASNs.
+  #  - FireHOL tor_exits: built from the Tor Project's own exit list, updated every 5 minutes.
+  #    IPv4 only: IPv6 Tor exits are not covered.
+  sources:
+    x4bnet-datacenter-ipv4:
+      class: datacenter
+      url: https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/datacenter/ipv4.txt
+      file: x4bnet-datacenter-ipv4.txt
+    x4bnet-datacenter-ipv6:
+      class: datacenter
+      url: https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/datacenter/ipv6.txt
+      file: x4bnet-datacenter-ipv6.txt
+    firehol-tor-exits:
+      class: tor
+      url: https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/tor_exits.ipset
+      file: firehol-tor-exits.ipset
