@@ -11,7 +11,7 @@ trafic sortant est le téléchargement périodique des listes (X4BNet `lists_vpn
 |---|---|
 | Refus | datacenter (`ADM-VPN-DC`) et Tor (`ADM-VPN-TOR`), code affiché au joueur ; mode `observe` pour un essai à blanc. Trop de tentatives d'un même réseau : `ADM-RATE-NET` (voir plus bas, `observe` par défaut) |
 | Décision | au pré-login ; reportée au login pour une exemption nominative ou un joueur Floodgate. Un refus de pré-login est **ré-appliqué** au login, au cas où un autre plugin l'aurait levé |
-| Exemptions | joueur = pseudo **et** UUID ensemble (un UUID seul est une erreur de configuration) ; réseaux en CIDR **avec `expires` obligatoire**, `reason` conseillé (voir « Exemptions datées ») |
+| Exemptions | joueur = pseudo **et** UUID ensemble (un UUID seul est une erreur de configuration) ; réseaux en CIDR avec `expires` **exigé pour toute nouvelle entrée** (une entrée existante sans date reste honorée, avec un WARN), `reason` conseillé (voir « Exemptions datées ») |
 | ASN | base IP→ASN d'iptoasn.com ; `ADM-VPN-ASN` pour les systèmes de `asn.deny-asns` (vide, `observe` par défaut) ; mots-clés de nom signalés au staff seul (voir « ASN ») |
 | Geyser | `geyser-addresses` **vide par défaut** tant que 13.1 n'a pas mesuré l'adresse vue au proxy. Une connexion venue d'une de ces adresses sans être joueur Floodgate est journalisée `geyser-address-not-floodgate`, signalée en WARN et jugée normalement |
 | Journal | une ligne `key=value` par refus, observation ou exemption, sur le logger `btc.admission.journal` ; `identity=declared` au pré-login, `authenticated` au login |
@@ -62,6 +62,11 @@ Technique de Gate (Minekube) : borner le bloc, pas l'adresse, pour ne pas punir 
   limite en se répartissant sur ses préfixes. Seuls les systèmes **refusés** (`asn.deny-asns`) ou
   **nommés par un mot-clé** (`asn.observe-keywords`) sont groupés : un opérateur résidentiel ou
   mobile est aussi un système, et un seul seau pour ses millions d'abonnés les affamerait tous.
+  **Plafond de part** (`network-rate.max-asn-share-percent`, 1 % par défaut, en `enforce`
+  seulement) : un système qui annonce plus de cette part de l'espace (IPv4, ou IPv6 en /64 de
+  `2000::/3`, le plus grand des deux) n'est pas groupé : un WARN le dit une fois par système et il
+  retombe sur les seaux par préfixe. Cela borne la casse d'un mot-clé trop large ou d'un numéro mal
+  recopié. En `observe`, le groupement reste complet pour que l'essai à blanc le montre.
 - **Visible** : `/admission why <ip>` donne la dernière décision (ligne `basis=rate-network
   code=ADM-RATE-NET`), `/admission status` la configuration, le nombre de réseaux suivis et de
   tentatives au-delà de la limite depuis le démarrage.
@@ -80,15 +85,17 @@ exemptions:
   networks:
     - network: 203.0.113.0/24
       reason: "bureau de l'agence"
-      expires: 2026-12-31                  # OBLIGATOIRE pour un réseau
+      expires: 2026-12-31                  # EXIGÉ pour toute nouvelle entrée réseau
 ```
 
-- Le lendemain de `expires`, l'entrée ne s'applique plus. Dans les 7 jours qui précèdent, le
-  démarrage et `/admission status` la signalent. Une date illisible refuse l'entrée (ERROR : elle
-  n'exempte personne).
-- **Rupture de compatibilité** : l'ancienne forme d'un réseau, la simple chaîne CIDR, est désormais
-  refusée (une adresse change de mains ; une exemption sans fin est une dette). Un joueur sans
-  `expires` n'expire pas (forme d'avant les dates).
+- Le lendemain de `expires`, l'entrée ne s'applique plus (jugé en UTC, quel que soit le fuseau de
+  l'horloge). Dans les 7 jours qui précèdent, le démarrage et `/admission status` la signalent. Une
+  date illisible refuse l'entrée (ERROR : elle n'exempte personne).
+- **Réseau sans date** (forme d'avant les dates, simple chaîne CIDR comprise) : **jamais refusé**,
+  une exemption qui marchait hier marche encore. Il reste honoré, avec un WARN à chaque chargement
+  (« exemption réseau non datée, à dater ») ; `/admission status` le liste comme « non datée ». La
+  règle pour une **nouvelle** entrée est de la dater (une adresse change de mains ; une exemption
+  sans fin est une dette). Un joueur sans `expires` n'expire pas, sans avertissement.
 
 ## ASN (13.2 : `asn`)
 
@@ -108,7 +115,11 @@ même tâche planifiée que les listes X4BNet et FireHOL, avec les mêmes garde-
 - **`observe-keywords`** : mots cherchés (sans casse) dans le nom du système. Une correspondance
   est journalisée (`decision=admitted basis=asn-keyword`, agrégée par minute) et signalée au staff
   en ligne ; **elle ne refuse jamais**. Vide par défaut : à choisir après avoir lu `/admission why`
-  sur de vrais hébergeurs.
+  sur de vrais hébergeurs. Un mot de **moins de 3 caractères** est ignoré avec un WARN (il
+  correspondrait à la moitié du registre). Une valeur seule (`deny-asns: 16276`) vaut une liste d'un
+  élément ; une table à la place d'une liste est signalée et ignorée. Quand la borne groupe par ASN,
+  les systèmes à mot-clé entrent dans les garde-fous de couverture et déclenchent la quarantaine,
+  comme les systèmes refusés.
 - **Journal et `/admission why`** : `asn=<numéro>` et `as_name="<nom>"` (échappé : un nom d'AS est
   une donnée tierce) sur chaque ligne dont l'adresse a un système ; `/admission why` ajoute la ligne
   ASN, le pays et la raison. `/admission status` donne l'âge, le nombre de lignes et d'AS, et une
@@ -116,7 +127,14 @@ même tâche planifiée que les listes X4BNet et FireHOL, avec les mêmes garde-
 - **Garde-fous** (ceux des listes, voir plus bas) : téléchargement borné (32 Mo, 2 M lignes, 256 Mio
   inflatés), échéance d'au moins 120 s, fichier temporaire propre à la tentative, version précédente
   gardée, rejet si le nombre de lignes varie de plus de 50 % ou si la couverture double, ligne de
-  base embarquée à la première charge (`lists.embedded-baseline`). Une ligne illisible est comptée,
+  base embarquée à la première charge (`lists.embedded-baseline`). Les systèmes jugés (refusés, et à
+  mot-clé quand la borne groupe) ne doivent couvrir ni plus de 20 % de l'IPv4 ni plus de 0,01 % de
+  l'IPv6 global (`2000::/3`) ; en IPv6, leur couverture ne peut pas plus que doubler d'une version
+  à l'autre (plancher : un /29), et le nombre de plages IPv6 est jugé à part (±50 %). **Pendant la
+  lecture**, le nombre de systèmes distincts (300 000) et le volume des noms (16 Mio) sont bornés :
+  au-delà, la lecture s'arrête et le fichier est rejeté, sans avoir bâti la base ; un manque de
+  mémoire pendant un rafraîchissement garde l'ancienne base. Ces deux bornes sont des constantes
+  (`AsnParser`), non réglables. Une ligne illisible est comptée,
   jamais fatale ; l'AS 0 (non routé) est écarté ; un nom est nettoyé (caractères de contrôle et de
   direction retirés, 120 caractères au plus). La **quarantaine** (`lists.quarantine-hours`) est celle
   des listes, mais n'ouvre que si `deny-asns` n'est pas vide et qu'une version est déjà en service :
@@ -128,6 +146,11 @@ même tâche planifiée que les listes X4BNet et FireHOL, avec les mêmes garde-
   ~170 ns en IPv4, ~110 ns en IPv6, sans allocation de la base à chaque connexion.
 - **Borne par ASN** : voir `network-rate.group-hosting-by-asn` (désactivée par défaut).
 - **Limite connue** : l'agrégation du journal par minute reste par /24 ou /64, pas par système.
+- **Dette** : `AsnStore` répète en grande partie la mécanique de `ListQuarantine` (attente,
+  jugement en ombre, promotion). À fusionner un jour ; laissé tel quel pour ne pas toucher au
+  chemin des listes en même temps que celui de l'ASN.
+- **Règle du plafond IPv4** : le doublement de couverture IPv4 n'a pas de plancher (une petite
+  base de départ peut être rejetée à tort). Le plafond absolu de 20 % reste le garde-fou.
 
 ## Garde-fous des listes
 
