@@ -176,6 +176,11 @@ public final class AdmissionCommand implements SimpleCommand {
           + AdmissionJournal.value(ending.label())
           + (ending.reason() == null ? "" : " - " + AdmissionJournal.value(ending.reason())));
     }
+    for (Exemptions.Network undated : exemptions.undatedNetworks()) {
+      lines.add("  non datée : réseau " + AdmissionJournal.value(undated.cidr())
+          + (undated.reason() == null ? "" : " - " + AdmissionJournal.value(undated.reason()))
+          + " (à dater avec 'expires: AAAA-MM-JJ')");
+    }
     return lines;
   }
 

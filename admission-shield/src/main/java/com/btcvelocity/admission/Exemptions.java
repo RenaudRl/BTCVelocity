@@ -42,9 +42,11 @@ import org.spongepowered.configurate.ConfigurationNode;
  *
  * <p>An exemption is a hole in the shield, so it is meant to be justified and to end. Every entry
  * may carry a {@code reason} and an {@code expires} date ({@code AAAA-MM-JJ}, the last valid day,
- * UTC). A network exemption <em>must</em> carry one: a fixed address changes hands, a player
- * exemption is bound to an account and may stay. An entry already over when the file is read is
- * ignored with a warning, and one that ends while the proxy runs stops counting that day: the date
+ * UTC). A <em>new</em> network exemption must carry one, as the documentation says: a fixed
+ * address changes hands, a player exemption is bound to an account and may stay. An existing
+ * network entry without a date is never refused for it: it is honoured and reported with a
+ * warning at every load, and listed by {@code /admission status} as undated. An entry already
+ * over when the file is read is ignored with a warning, and one that ends while the proxy runs stops counting that day: the date
  * is judged at each decision, not only at start.
  */
 public final class Exemptions {
@@ -95,10 +97,16 @@ public final class Exemptions {
    * @param cidr the address or CIDR as written in the file
    * @param set the same, ready to look addresses up in
    * @param reason why the network is exempted, or {@code null}
-   * @param expires the last day the exemption holds
+   * @param expires the last day the exemption holds, or {@code null} for an old entry that was
+   *     never dated (still honoured, and reported at every load)
    */
-  public record Network(String cidr, CidrSet set, @Nullable String reason, LocalDate expires) {
+  public record Network(String cidr, CidrSet set, @Nullable String reason,
+      @Nullable LocalDate expires) {
   }
+
+  private static final String UNDATED_WARNING = "exemption réseau non datée, à dater: add"
+      + " 'expires: AAAA-MM-JJ' (the last valid day, UTC). It is still honoured, and reported at"
+      + " every load";
 
   /**
    * An exemption that ends within {@value #NOTICE_DAYS} days, as the staff reads it.
@@ -143,10 +151,11 @@ public final class Exemptions {
   /**
    * Reads the exempted players and networks of a configuration.
    *
-   * <p>A player needs a name and a UUID; a network needs {@code network} and {@code expires}. An
-   * entry that is unsafe as written (incomplete, or with an end date that cannot be read) is
-   * reported to {@code errors} and left out, so that it exempts nobody; an entry that is merely
-   * over is reported to {@code warnings} and left out. The other entries are unaffected.
+   * <p>A player needs a name and a UUID; a network needs {@code network}, and should carry
+   * {@code expires}. An entry that is unsafe as written (incomplete, or with an end date that
+   * cannot be read) is reported to {@code errors} and left out, so that it exempts nobody; an
+   * entry that is merely over is reported to {@code warnings} and left out. A network without an
+   * end date is kept and reported to {@code warnings}. The other entries are unaffected.
    *
    * @param playerNodes the {@code exemptions.players} node
    * @param networkNodes the {@code exemptions.networks} node
@@ -303,6 +312,15 @@ public final class Exemptions {
     return soon;
   }
 
+  /**
+   * The networks exempted with no end date: honoured, but waiting to be dated.
+   *
+   * @return the entries, in file order
+   */
+  public List<Network> undatedNetworks() {
+    return this.networks.stream().filter(n -> n.expires() == null).toList();
+  }
+
   private static void addIfSoon(final List<Expiring> soon, final Kind kind, final String label,
       final @Nullable LocalDate expires, final @Nullable String reason, final LocalDate today,
       final LocalDate horizon) {
@@ -349,38 +367,32 @@ public final class Exemptions {
 
   private static @Nullable Network parseNetwork(final ConfigurationNode entry, final String where,
       final LocalDate today, final Consumer<String> warnings, final Consumer<String> errors) {
-    if (!entry.isMap()) {
-      errors.accept(where + ": '" + entry.getString("") + "' has no end date. A network exemption"
-          + " is written 'network: <address or CIDR>' with 'expires: AAAA-MM-JJ' and, ideally, a"
-          + " 'reason'. Entry REFUSED, it exempts nobody");
-      return null;
-    }
-    final String cidr = entry.node("network").getString("").trim();
+    // The bare form ('203.0.113.0/28') is the old way of writing it, and it is still honoured: a
+    // file that exempted an office yesterday keeps exempting it. The date is required of NEW
+    // entries by the documentation, never enforced by refusing one that exists.
+    final String cidr = (entry.isMap() ? entry.node("network") : entry).getString("").trim();
     if (cidr.isEmpty()) {
       errors.accept(where + ": a network exemption needs 'network' (an address or CIDR) and"
           + " 'expires' (AAAA-MM-JJ). Entry REFUSED, it exempts nobody");
       return null;
     }
-    if (entry.node("expires").virtual() || entry.node("expires").getString("").isBlank()) {
-      errors.accept(where + " (" + cidr + "): no 'expires' date. A network exemption must end:"
-          + " add 'expires: AAAA-MM-JJ' (the last valid day, UTC). Entry REFUSED, it exempts"
-          + " nobody");
-      return null;
-    }
     final LocalDate expires;
     try {
-      expires = expiryOf(entry);
+      expires = entry.isMap() ? expiryOf(entry) : null;
     } catch (DateTimeParseException unreadable) {
       errors.accept(where + " (" + cidr + "): " + badExpiry(entry));
       return null;
     }
     final CidrSet.Builder builder = CidrSet.builder();
     if (!builder.add(cidr)) {
-      warnings.accept(where + ": '" + cidr + "' is not an address or CIDR; ignored");
+      warnings.accept(where + ": '" + AdmissionJournal.value(cidr)
+          + "' is not an address or CIDR; ignored");
       return null;
     }
-    final String reason = reasonOf(entry);
-    if (!isActive(expires, today)) {
+    final String reason = entry.isMap() ? reasonOf(entry) : null;
+    if (expires == null) {
+      warnings.accept(where + " (" + cidr + "): " + UNDATED_WARNING);
+    } else if (!isActive(expires, today)) {
       warnings.accept(where + " (" + cidr + "): ended on " + expires + describe(reason)
           + "; ignored. Remove it from the file, or give it a later 'expires'");
       return null;

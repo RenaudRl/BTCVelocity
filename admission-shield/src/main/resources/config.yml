@@ -45,8 +45,10 @@ exemptions:
   #  - name: SomePartner
   #    uuid: 11111111-1111-1111-1111-111111111111
   # Networks (CIDR or single address), e.g. an office or a partner's fixed connection. A fixed
-  # address changes hands, so `expires` is MANDATORY here: an entry without it (the bare form
-  # `- 203.0.113.0/24` included) is refused with an ERROR, and the other entries still load.
+  # address changes hands, so `expires` is REQUIRED for every NEW entry here. An entry that already
+  # exists without it (the bare form `- 203.0.113.0/24` included) is never refused: it keeps
+  # exempting, with a WARN "exemption réseau non datée, à dater" at every load, and
+  # /admission status lists it as "non datée". Date it to silence the warning.
   networks: []
   #  - network: 203.0.113.0/24
   #    reason: bureau du partenaire

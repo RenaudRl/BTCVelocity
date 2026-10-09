@@ -176,7 +176,7 @@ class ExemptionDatesTest {
   }
 
   @Test
-  void aNetworkWithoutEndDateIsRefusedWithAClearErrorAndTheRestStillLoads() throws IOException {
+  void aNetworkWithoutEndDateIsStillHonouredWithAWarningToDateIt() throws IOException {
     final AdmissionConfig config = parse("""
         exemptions:
           networks:
@@ -187,25 +187,55 @@ class ExemptionDatesTest {
               expires: 2026-12-31
         """);
 
-    assertEquals(1, this.errors.size(), this.errors.toString());
-    assertTrue(this.errors.getFirst().contains("exemptions.networks[0]"), this.errors.getFirst());
-    assertTrue(this.errors.getFirst().contains("expires"), this.errors.getFirst());
-    assertTrue(this.errors.getFirst().contains("AAAA-MM-JJ"), this.errors.getFirst());
-    assertEquals(Action.REFUSE, preLogin(config, OFFICE).action(), "the refused entry exempts nobody");
-    assertEquals(Basis.EXEMPT_NETWORK, preLogin(config, OTHER_HOST).basis(),
-        "one bad entry does not take the others down");
+    assertEquals(List.of(), this.errors, "an entry that exists is never refused for its missing date");
+    assertEquals(1, this.warnings.size(), this.warnings.toString());
+    assertTrue(this.warnings.getFirst().contains("exemptions.networks[0]"), this.warnings.getFirst());
+    assertTrue(this.warnings.getFirst().contains("203.0.113.0/28"), this.warnings.getFirst());
+    assertTrue(this.warnings.getFirst().contains("non datée"), this.warnings.getFirst());
+    assertTrue(this.warnings.getFirst().contains("AAAA-MM-JJ"), this.warnings.getFirst());
+    assertEquals(Basis.EXEMPT_NETWORK, preLogin(config, OFFICE).basis());
+    assertEquals(Basis.EXEMPT_NETWORK, preLogin(config, OTHER_HOST).basis());
+    assertNull(config.exemptions().networks().getFirst().expires());
+    assertEquals(2, config.exemptions().activeNetworks());
   }
 
   @Test
-  void aBareNetworkStringIsRefusedLikeAnEntryWithoutEndDate() throws IOException {
+  void anUndatedNetworkNeverLapsAndIsNeverListedAsEndingSoon() throws IOException {
+    final AdmissionConfig config = parse("""
+        exemptions:
+          networks:
+            - network: 203.0.113.0/28
+        """);
+    this.clock.advance(Duration.ofDays(3650));
+
+    assertEquals(Basis.EXEMPT_NETWORK, preLogin(config, OFFICE).basis());
+    assertEquals(List.of(), config.exemptions().expiringSoon());
+    assertEquals(1, config.exemptions().undatedNetworks().size());
+  }
+
+  @Test
+  void aBareNetworkStringIsHonouredLikeAnEntryWithoutEndDate() throws IOException {
     final AdmissionConfig config = parse("""
         exemptions:
           networks: ['203.0.113.0/28']
         """);
 
-    assertEquals(1, this.errors.size(), this.errors.toString());
-    assertTrue(this.errors.getFirst().contains("expires"), this.errors.getFirst());
-    assertEquals(Action.REFUSE, preLogin(config, OFFICE).action());
+    assertEquals(List.of(), this.errors);
+    assertEquals(1, this.warnings.size(), this.warnings.toString());
+    assertTrue(this.warnings.getFirst().contains("non datée"), this.warnings.getFirst());
+    assertEquals(Basis.EXEMPT_NETWORK, preLogin(config, OFFICE).basis());
+  }
+
+  @Test
+  void aBareValueThatIsNotANetworkIsStillReportedAndIgnored() throws IOException {
+    final AdmissionConfig config = parse("""
+        exemptions:
+          networks: ['not-a-network']
+        """);
+
+    assertEquals(0, config.exemptions().networks().size());
+    assertEquals(1, this.warnings.size(), this.warnings.toString());
+    assertTrue(this.warnings.getFirst().contains("not-a-network"), this.warnings.getFirst());
   }
 
   @Test
@@ -317,7 +347,28 @@ class ExemptionDatesTest {
   }
 
   @Test
-  void theFileLoaderLogsAnExpiredEntryAtWarnAndAnUndatedNetworkAtError(
+  void theStatusListsAnUndatedNetworkAsSuch() throws IOException {
+    final AdmissionConfig config = parse("""
+        exemptions:
+          networks:
+            - network: 203.0.113.0/28
+              reason: bureau du partenaire
+            - network: 198.51.100.0/24
+              expires: 2026-12-31
+        """);
+
+    final List<String> lines = AdmissionCommand.exemptionStatus(config.exemptions());
+
+    assertTrue(lines.getFirst().contains("2 réseau"), lines.toString());
+    assertTrue(lines.stream().anyMatch(line -> line.contains("non datée")
+        && line.contains("203.0.113.0/28") && line.contains("bureau du partenaire")),
+        lines.toString());
+    assertEquals(1, lines.stream().filter(line -> line.contains("non datée")).count(),
+        "the dated network is not listed as undated");
+  }
+
+  @Test
+  void theFileLoaderLogsAnExpiredEntryAndAnUndatedNetworkAtWarnAndKeepsTheNetworkHonoured(
       @org.junit.jupiter.api.io.TempDir final java.nio.file.Path directory) throws IOException {
     final java.nio.file.Path file = directory.resolve("config.yml");
     java.nio.file.Files.writeString(file, """
@@ -334,8 +385,9 @@ class ExemptionDatesTest {
     final AdmissionConfig config = AdmissionConfig.loadOrCreate(file, log.logger());
 
     assertTrue(log.has("WARN", "2020-01-01"), log.lines().toString());
-    assertTrue(log.has("ERROR", "expires"), log.lines().toString());
-    assertEquals(0, config.exemptions().activeCount());
+    assertTrue(log.has("WARN", "non datée"), log.lines().toString());
+    assertEquals(false, log.has("ERROR", "expires"), log.lines().toString());
+    assertEquals(1, config.exemptions().activeCount());
   }
 
   @Test
