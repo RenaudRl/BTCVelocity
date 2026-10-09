@@ -33,7 +33,8 @@ import org.slf4j.Logger;
  * comes back as something that is not a gzip table (an HTML error page, say), or is judged
  * implausible is thrown away and the last good version stays, in the file and in memory. A new
  * version waits in quarantine only when it can refuse somebody: the version in use is replaced, and
- * {@code asn.deny-asns} is not empty. Otherwise it is put in use at once.
+ * the module can refuse somebody on a system ({@link AsnStore#canRefuseAnybody}). Otherwise it is
+ * put in use at once.
  *
  * <p>Privacy: this class fetches one public URL. No player address is part of any request.
  */
@@ -104,7 +105,7 @@ public final class AsnRefresher {
             + " the last valid one.", settings.url(), rejection);
         return false;
       }
-      if (shouldWait(settings, part, target)) {
+      if (shouldWait(part, target)) {
         final Path candidate = directory.resolve(AsnSettings.FILE_NAME + AsnStore.CANDIDATE_SUFFIX);
         ListRefresher.moveInPlace(part, candidate);
         this.store.hold(parsed, candidate, this.quarantine);
@@ -124,8 +125,8 @@ public final class AsnRefresher {
   }
 
   /** A changed version waits when it could refuse somebody; an unchanged one never does. */
-  private boolean shouldWait(final AsnSettings settings, final Path part, final Path target) {
-    if (this.quarantine.isZero() || settings.denyAsns().isEmpty() || !this.store.isLoaded()) {
+  private boolean shouldWait(final Path part, final Path target) {
+    if (this.quarantine.isZero() || !this.store.canRefuseAnybody() || !this.store.isLoaded()) {
       return false;
     }
     try {

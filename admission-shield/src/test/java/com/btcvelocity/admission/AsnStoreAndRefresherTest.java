@@ -19,6 +19,8 @@ package com.btcvelocity.admission;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -290,6 +292,71 @@ class AsnStoreAndRefresherTest {
     refresher.refresh();
 
     assertEquals(1, downloads.size());
+  }
+
+  // --- systems named by a keyword ---------------------------------------------------------------
+
+  private AsnStore storeGuardingKeywords(final boolean guard) {
+    return new AsnStore(this.directory, this.log.logger(), this.clock,
+        settings("asn:\n  observe-keywords: [hosting]\n"), false, guard);
+  }
+
+  @Test
+  void aKeywordSystemStretchedOverTheInternetIsRefusedOnlyWhenTheBoundGroupsBySystem() {
+    final AsnParser.Result world = AsnParser.parse(
+        "16.0.0.0\t127.255.255.255\t64500\tUS\tBig Hosting Inc\n" + file(10), 1_000_000);
+
+    final String guarded = storeGuardingKeywords(true).rejectionOf(world);
+    final String notGuarded = storeGuardingKeywords(false).rejectionOf(world);
+
+    assertNotNull(guarded);
+    assertTrue(guarded.contains("IPv4"), guarded);
+    assertNull(notGuarded, "nothing groups by system, so no bucket can swallow the internet");
+  }
+
+  @Test
+  void aKeywordSystemWhoseCoverageDoubledIsRefusedAgainstTheVersionInUse() throws IOException {
+    final String doubled = "192.0.2.0\t192.0.3.255\t64496\tNL\tAlpha Hosting BV\n"
+        + file(10).substring(file(10).indexOf("198.51."));
+    for (boolean guard : new boolean[] {true, false}) {
+      writeFile(file(10));
+      final AsnStore store = storeGuardingKeywords(guard);
+      store.loadAtStart();
+
+      final String why = store.rejectionOf(AsnParser.parse(doubled, 1_000_000));
+
+      if (guard) {
+        assertNotNull(why);
+        assertTrue(why.contains("doubled"), why);
+      } else {
+        assertNull(why);
+      }
+    }
+  }
+
+  @Test
+  void aChangedVersionWaitsInQuarantineWhenKeywordSystemsAreGuardedEvenWithNothingDenied()
+      throws IOException {
+    writeFile(file(10));
+    final AsnStore guarded = storeGuardingKeywords(true);
+    guarded.loadAtStart();
+
+    refresher(guarded, serving(file(12)), Duration.ofHours(6)).refresh();
+
+    assertTrue(guarded.holds());
+    assertEquals(10, guarded.current().orElseThrow().validLines());
+  }
+
+  @Test
+  void aChangedVersionIsPutInUseAtOnceWhenKeywordsOnlyObserve() throws IOException {
+    writeFile(file(10));
+    final AsnStore observing = storeGuardingKeywords(false);
+    observing.loadAtStart();
+
+    refresher(observing, serving(file(12)), Duration.ofHours(6)).refresh();
+
+    assertFalse(observing.holds());
+    assertEquals(12, observing.current().orElseThrow().validLines());
   }
 
   @Test

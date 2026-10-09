@@ -24,6 +24,7 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -96,6 +97,7 @@ public final class AsnStore implements AsnLookup {
   private final Clock clock;
   private final AsnSettings settings;
   private final boolean useBaseline;
+  private final boolean guardKeywordSystems;
   private final Object writeLock = new Object();
   private volatile @Nullable Loaded loaded;
   private volatile @Nullable Entry waiting;
@@ -125,11 +127,31 @@ public final class AsnStore implements AsnLookup {
    */
   public AsnStore(final Path directory, final Logger logger, final Clock clock,
       final AsnSettings settings, final boolean useBaseline) {
+    this(directory, logger, clock, settings, useBaseline, false);
+  }
+
+  /**
+   * Creates an empty store.
+   *
+   * @param directory where the database file is kept (the list directory)
+   * @param logger where problems are reported
+   * @param clock the source of "loaded at"
+   * @param settings the {@code asn} section: the ceiling on rows and the denied systems
+   * @param useBaseline whether a database with no previous version is judged against
+   *     {@link AsnGuards#EMBEDDED}
+   * @param guardKeywordSystems whether the systems named by {@code asn.observe-keywords} are held
+   *     to the same coverage limits as the denied ones, and to the quarantine: true when the rate
+   *     bound groups hosting systems into one bucket, where a system the file stretches over the
+   *     internet would starve everybody in it
+   */
+  public AsnStore(final Path directory, final Logger logger, final Clock clock,
+      final AsnSettings settings, final boolean useBaseline, final boolean guardKeywordSystems) {
     this.directory = directory;
     this.logger = logger;
     this.clock = clock;
     this.settings = settings;
     this.useBaseline = useBaseline;
+    this.guardKeywordSystems = guardKeywordSystems;
   }
 
   /**
@@ -198,16 +220,43 @@ public final class AsnStore implements AsnLookup {
    * @return why it is refused, or {@code null} if it passes
    */
   public @Nullable String rejectionOf(final AsnParser.Result candidate) {
-    final Set<Long> denied = this.settings.denyAsns();
-    final String absolute = AsnGuards.absoluteRejection(candidate, this.settings.maxRows(), denied);
+    final Set<Long> guarded = guardedSystems(candidate.database());
+    final String absolute = AsnGuards.absoluteRejection(candidate, this.settings.maxRows(), guarded);
     if (absolute != null) {
       return absolute;
     }
     final Loaded previous = this.loaded;
     if (previous != null) {
-      return AsnGuards.relativeRejection(candidate.database(), previous.database(), denied);
+      final Set<Long> both = new HashSet<>(guarded);
+      both.addAll(guardedSystems(previous.database()));
+      return AsnGuards.relativeRejection(candidate.database(), previous.database(), both);
     }
     return this.useBaseline ? AsnGuards.EMBEDDED.rejection(candidate.database()) : null;
+  }
+
+  /**
+   * The systems whose coverage the guards bound in this version of the file: the denied ones and,
+   * when the rate bound groups by system, those named by a keyword.
+   */
+  private Set<Long> guardedSystems(final AsnDatabase database) {
+    if (!this.guardKeywordSystems || this.settings.observeKeywords().isEmpty()) {
+      return this.settings.denyAsns();
+    }
+    final Set<Long> guarded = new HashSet<>(this.settings.denyAsns());
+    guarded.addAll(database.systemsWhere(info -> this.settings.isHosting(info)));
+    return guarded;
+  }
+
+  /**
+   * Whether a new version of the file could make the module refuse somebody, and so is worth
+   * watching in quarantine: a system is denied, or systems named by a keyword are grouped into one
+   * bucket of the rate bound.
+   *
+   * @return {@code true} if a wrong file could cost players a connection
+   */
+  public boolean canRefuseAnybody() {
+    return !this.settings.denyAsns().isEmpty()
+        || this.guardKeywordSystems && !this.settings.observeKeywords().isEmpty();
   }
 
   /**

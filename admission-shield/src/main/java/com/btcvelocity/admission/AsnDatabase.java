@@ -21,9 +21,11 @@ import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * An immutable IP-to-ASN table: sorted, disjoint address ranges, each owned by an autonomous
@@ -207,6 +209,24 @@ public final class AsnDatabase {
    */
   public int systemCount() {
     return this.asNumber.length;
+  }
+
+  /**
+   * The numbers of the systems this database holds that a predicate picks, for example those whose
+   * name holds a keyword.
+   *
+   * @param wanted tells whether a system is one to pick
+   * @return their AS numbers
+   */
+  public Set<Long> systemsWhere(final Predicate<Info> wanted) {
+    final Set<Long> picked = new HashSet<>();
+    for (int i = 0; i < this.asNumber.length; i++) {
+      final Info info = infoOf(i);
+      if (wanted.test(info)) {
+        picked.add(info.number());
+      }
+    }
+    return picked;
   }
 
   /**

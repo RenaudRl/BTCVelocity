@@ -165,7 +165,8 @@ public final class BtcAdmissionShieldPlugin {
     this.asnAlerts = StaffAlerts.forAsnKeywords(this.clock, this::tellStaff);
     this.store = store;
     final AsnStore asn = new AsnStore(this.dataDirectory.resolve("lists"), this.logger, this.clock,
-        settings.asn(), settings.embeddedBaseline());
+        settings.asn(), settings.embeddedBaseline(),
+        settings.networkRate().enabled() && settings.networkRate().groupHostingByAsn());
     if (settings.asn().enabled()) {
       asn.loadAtStart();
     }
