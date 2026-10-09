@@ -59,7 +59,7 @@ public final class ListGuards {
   private static final double MAX_COVERAGE_GROWTH = 2.0;
 
   /** 2000::/3 counted in /64 networks, the unit of {@link CidrSet#ipv6Slash64Count()}. */
-  private static final double GLOBAL_UNICAST_SLASH64 = Math.scalb(1.0, 61);
+  static final double GLOBAL_UNICAST_SLASH64 = Math.scalb(1.0, 61);
 
   private ListGuards() {
   }

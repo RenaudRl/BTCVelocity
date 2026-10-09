@@ -134,6 +134,86 @@ class AsnGuardsTest {
         "with nothing denied there is no coverage to watch");
   }
 
+  /** {@code count} IPv6 rows of a /48 each, system {@code first + i}, the first {@code denied} 666. */
+  private static String v6File(final int count, final int denied) {
+    final StringBuilder text = new StringBuilder();
+    for (int i = 0; i < count; i++) {
+      final String block = "2a00:" + Integer.toHexString(i + 1) + ":0";
+      final long system = i < denied ? 666 : 5000L + i;
+      text.append(block).append("::\t").append(block).append(":ffff:ffff:ffff:ffff:ffff\t")
+          .append(system).append("\tFR\tV6 ").append(system).append('\n');
+    }
+    return text.toString();
+  }
+
+  @Test
+  void aFileThatGivesTheDeniedSystemsTheWholeIpv6SpaceIsRefused() {
+    final String everything = "2000::\t3fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff\t666\tUS\tHuge\n";
+    final String oneRegistryBlock = "2001:db8::\t2001:db8:ffff:ffff:ffff:ffff:ffff:ffff\t666\tUS\tOk\n";
+
+    final String why = AsnGuards.absoluteRejection(parsed(file(5, 0) + everything), CEILING,
+        Set.of(666L));
+    assertNotNull(why);
+    assertTrue(why.contains("IPv6"), why);
+    assertNull(AsnGuards.absoluteRejection(parsed(file(5, 0) + oneRegistryBlock), CEILING,
+        Set.of(666L)), "an ordinary /32 is nothing");
+    assertNull(AsnGuards.absoluteRejection(parsed(file(5, 0) + everything), CEILING, Set.of()),
+        "with nothing denied the share does not matter");
+  }
+
+  @Test
+  void aSlash16OfIpv6ForTheDeniedSystemsIsRefusedToo() {
+    // 2^(-13) of 2000::/3: 0.0122 %, above the 0.01 % an address list may cover.
+    final String slash16 = "2a00::\t2a00:ffff:ffff:ffff:ffff:ffff:ffff:ffff\t666\tUS\tBig\n";
+
+    final String why = AsnGuards.absoluteRejection(parsed(file(5, 0) + slash16), CEILING,
+        Set.of(666L));
+
+    assertNotNull(why);
+    assertTrue(why.contains("IPv6"), why);
+  }
+
+  @Test
+  void deniedIpv6CoverageThatGrewPastTwiceItsFloorOrItsBaseIsRefused() {
+    final String slash27 = "2a00::\t2a00:1f:ffff:ffff:ffff:ffff:ffff:ffff\t666\tUS\tBig\n";
+    final String slash29 = "2a00::\t2a00:7:ffff:ffff:ffff:ffff:ffff:ffff\t666\tUS\tBig\n";
+    final String slash24 = "2a00::\t2a00:ff:ffff:ffff:ffff:ffff:ffff:ffff\t666\tUS\tBig\n";
+    final AsnDatabase none = parsed(file(100, 0)).database();
+    final AsnDatabase someDenied = parsed(file(100, 0) + slash29).database();
+
+    assertNull(AsnGuards.relativeRejection(parsed(file(100, 0) + slash29).database(), none,
+        Set.of(666L)), "a first /29 is what a registry hands out");
+    final String appeared = AsnGuards.relativeRejection(
+        parsed(file(100, 0) + slash27).database(), none, Set.of(666L));
+    assertNotNull(appeared);
+    assertTrue(appeared.contains("IPv6"), appeared);
+    final String grew = AsnGuards.relativeRejection(
+        parsed(file(100, 0) + slash24).database(), someDenied, Set.of(666L));
+    assertNotNull(grew);
+    assertTrue(grew.contains("IPv6"), grew);
+    assertNull(AsnGuards.relativeRejection(parsed(file(100, 0) + slash24).database(),
+        someDenied, Set.of()), "with nothing denied there is no coverage to watch");
+  }
+
+  @Test
+  void aFileThatEmptiesOrDoublesTheIpv6RangesIsRefusedWhateverTheTotalSays() {
+    // 100 IPv4 rows and 60 IPv6 rows before: the IPv6 half can vanish while the total moves 37 %.
+    final AsnDatabase before = parsed(file(100, 0) + v6File(60, 0)).database();
+
+    assertNull(AsnGuards.relativeRejection(parsed(file(100, 0) + v6File(70, 0)).database(),
+        before, Set.of()));
+    final String gone = AsnGuards.relativeRejection(parsed(file(100, 0)).database(), before,
+        Set.of());
+    final String halved = AsnGuards.relativeRejection(
+        parsed(file(100, 0) + v6File(20, 0)).database(), before, Set.of());
+    final String tripled = AsnGuards.relativeRejection(
+        parsed(file(100, 0) + v6File(120, 0)).database(), before, Set.of());
+    assertNotNull(gone);
+    assertTrue(gone.contains("IPv6"), gone);
+    assertNotNull(halved);
+    assertNotNull(tripled);
+  }
+
   @Test
   void theEmbeddedBaselineAcceptsTheFigureOfTheRealFileAndRefusesAnythingFarFromIt() {
     final AsnGuards.Baseline baseline = AsnGuards.EMBEDDED;

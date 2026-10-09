@@ -219,10 +219,7 @@ public final class AsnDatabase {
     if (systems.isEmpty()) {
       return 0;
     }
-    final boolean[] wanted = new boolean[this.asNumber.length];
-    for (int i = 0; i < wanted.length; i++) {
-      wanted[i] = systems.contains(Integer.toUnsignedLong(this.asNumber[i]));
-    }
+    final boolean[] wanted = wantedFlags(systems);
     long total = 0;
     for (int i = 0; i < this.v4Start.length; i++) {
       if (wanted[this.v4As[i]]) {
@@ -230,6 +227,40 @@ public final class AsnDatabase {
       }
     }
     return total;
+  }
+
+  /**
+   * How many IPv6 /64 networks the given systems announce. A /64 is the unit of
+   * {@link ListGuards}; the count is a {@code double} because the whole address space is 2<sup>64</sup>
+   * of them, more than a {@code long} holds.
+   *
+   * @param systems AS numbers
+   * @return the number of /64 networks, overlaps counted once (ranges are disjoint)
+   */
+  public double ipv6Slash64Of(final Set<Long> systems) {
+    if (systems.isEmpty()) {
+      return 0;
+    }
+    final boolean[] wanted = wantedFlags(systems);
+    double total = 0;
+    for (int i = 0; i < this.v6StartHi.length; i++) {
+      if (wanted[this.v6As[i]]) {
+        total += unsignedToDouble(this.v6EndHi[i] - this.v6StartHi[i]) + 1.0;
+      }
+    }
+    return total;
+  }
+
+  private boolean[] wantedFlags(final Set<Long> systems) {
+    final boolean[] wanted = new boolean[this.asNumber.length];
+    for (int i = 0; i < wanted.length; i++) {
+      wanted[i] = systems.contains(Integer.toUnsignedLong(this.asNumber[i]));
+    }
+    return wanted;
+  }
+
+  private static double unsignedToDouble(final long value) {
+    return value >= 0 ? (double) value : (double) (value >>> 1) * 2.0 + (value & 1);
   }
 
   /**

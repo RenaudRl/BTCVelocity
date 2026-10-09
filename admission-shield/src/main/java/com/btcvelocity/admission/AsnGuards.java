@@ -28,10 +28,11 @@ import org.jspecify.annotations.Nullable;
  * <ul>
  *   <li><b>absolute</b>: read past the row ceiling, no valid line, more unreadable lines than valid
  *       ones (an error page), no autonomous system at all, or the denied systems covering more than
- *       {@value ListGuards#MAX_IPV4_SHARE_PERCENT} % of the IPv4 space;</li>
- *   <li><b>relative</b>, against the version in use: a row count that moved by more than
- *       {@value ListGuards#MAX_ENTRY_VARIATION_PERCENT} %, or a denied IPv4 coverage that
- *       doubled;</li>
+ *       {@value ListGuards#MAX_IPV4_SHARE_PERCENT} % of the IPv4 space, or more than
+ *       {@value ListGuards#MAX_IPV6_SHARE_PERCENT} % of the IPv6 space {@code 2000::/3};</li>
+ *   <li><b>relative</b>, against the version in use: a row count, or an IPv6 range count, that
+ *       moved by more than {@value ListGuards#MAX_ENTRY_VARIATION_PERCENT} %, or a denied IPv4 or
+ *       IPv6 coverage that doubled;</li>
  *   <li><b>baseline</b>, for a first load with nothing to compare with: counts within a wide margin
  *       of the real file of 2026-10-09.</li>
  * </ul>
@@ -98,6 +99,14 @@ public final class AsnGuards {
 
   private static final double MAX_COVERAGE_GROWTH = 2.0;
 
+  /**
+   * A /29, in /64 networks: the largest block a registry hands one operator in one go. The IPv6
+   * coverage of the denied systems may reach twice this from nothing, so that a system that starts
+   * announcing IPv6 does not get every later file refused; beyond it, twice what it had is the
+   * limit, as for IPv4.
+   */
+  private static final double IPV6_GROWTH_FLOOR_SLASH64 = Math.scalb(1.0, 35);
+
   private AsnGuards() {
   }
 
@@ -133,6 +142,13 @@ public final class AsnGuards {
           "the denied systems cover %.1f %% of the IPv4 space (limit %d %%)", share,
           ListGuards.MAX_IPV4_SHARE_PERCENT);
     }
+    final double share6 = 100.0 * candidate.database().ipv6Slash64Of(denied)
+        / ListGuards.GLOBAL_UNICAST_SLASH64;
+    if (share6 > ListGuards.MAX_IPV6_SHARE_PERCENT) {
+      return String.format(Locale.ROOT,
+          "the denied systems cover %.5f %% of the IPv6 space 2000::/3 (limit %s %%)", share6,
+          ListGuards.MAX_IPV6_SHARE_PERCENT);
+    }
     return null;
   }
 
@@ -155,11 +171,40 @@ public final class AsnGuards {
             ListGuards.MAX_ENTRY_VARIATION_PERCENT);
       }
     }
+    final String ipv6Ranges = ipv6RangesRejection(candidate, previous);
+    if (ipv6Ranges != null) {
+      return ipv6Ranges;
+    }
     final long old = previous.ipv4AddressesOf(denied);
     final long now = candidate.ipv4AddressesOf(denied);
     if (old > 0 && now >= MAX_COVERAGE_GROWTH * old) {
       return "the IPv4 coverage of the denied systems doubled (" + old + " to " + now
           + " addresses)";
+    }
+    final double old6 = previous.ipv6Slash64Of(denied);
+    final double now6 = candidate.ipv6Slash64Of(denied);
+    if (now6 >= MAX_COVERAGE_GROWTH * Math.max(old6, IPV6_GROWTH_FLOOR_SLASH64)) {
+      return String.format(Locale.ROOT, "the IPv6 coverage of the denied systems doubled"
+          + " (%.0f to %.0f /64 networks)", old6, now6);
+    }
+    return null;
+  }
+
+  /**
+   * The row count of the whole file hides the IPv6 half: it is a quarter of the rows, so it can
+   * vanish while the total moves by a third. Its range count is judged by itself.
+   */
+  private static @Nullable String ipv6RangesRejection(final AsnDatabase candidate,
+      final AsnDatabase previous) {
+    final double before = previous.ipv6RangeCount();
+    if (before <= 0) {
+      return null;
+    }
+    final double variation = 100.0 * Math.abs(candidate.ipv6RangeCount() - before) / before;
+    if (variation > ListGuards.MAX_ENTRY_VARIATION_PERCENT) {
+      return String.format(Locale.ROOT, "IPv6 ranges moved from %d to %d (%.0f %%, limit %d %%)",
+          previous.ipv6RangeCount(), candidate.ipv6RangeCount(), variation,
+          ListGuards.MAX_ENTRY_VARIATION_PERCENT);
     }
     return null;
   }
