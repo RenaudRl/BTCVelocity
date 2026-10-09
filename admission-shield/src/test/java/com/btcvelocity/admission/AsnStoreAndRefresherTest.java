@@ -153,13 +153,21 @@ class AsnStoreAndRefresherTest {
         new java.util.concurrent.atomic.AtomicLong();
     final java.util.concurrent.ExecutorService pool =
         java.util.concurrent.Executors.newFixedThreadPool(readers);
+    // Swaps wait for every reader: a slow pool start would otherwise leave nothing to test.
+    final java.util.concurrent.CountDownLatch started =
+        new java.util.concurrent.CountDownLatch(readers);
     final List<java.util.concurrent.Future<String>> verdicts = new ArrayList<>();
     try {
       for (int i = 0; i < readers; i++) {
         verdicts.add(pool.submit(() -> {
+          boolean counted = false;
           while (swapping.get()) {
             final Optional<AsnDatabase.Info> info = store.lookup(ALPHA);
             lookups.incrementAndGet();
+            if (!counted) {
+              counted = true;
+              started.countDown();
+            }
             if (info.isEmpty()) {
               return "a lookup found nothing in the middle of a swap";
             }
@@ -176,6 +184,8 @@ class AsnStoreAndRefresherTest {
           return "";
         }));
       }
+      assertTrue(started.await(30, java.util.concurrent.TimeUnit.SECONDS),
+          "every reader ran a first lookup");
       for (int i = 0; i < swaps; i++) {
         store.install(i % 2 == 0 ? second : first);
       }
