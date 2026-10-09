@@ -11,7 +11,8 @@ trafic sortant est le téléchargement périodique des listes (X4BNet `lists_vpn
 |---|---|
 | Refus | datacenter (`ADM-VPN-DC`) et Tor (`ADM-VPN-TOR`), code affiché au joueur ; mode `observe` pour un essai à blanc. Trop de tentatives d'un même réseau : `ADM-RATE-NET` (voir plus bas, `observe` par défaut) |
 | Décision | au pré-login ; reportée au login pour une exemption nominative ou un joueur Floodgate. Un refus de pré-login est **ré-appliqué** au login, au cas où un autre plugin l'aurait levé |
-| Exemptions | joueur = pseudo **et** UUID ensemble (un UUID seul est une erreur de configuration) ; réseaux en CIDR |
+| Exemptions | joueur = pseudo **et** UUID ensemble (un UUID seul est une erreur de configuration) ; réseaux en CIDR **avec `expires` obligatoire**, `reason` conseillé (voir « Exemptions datées ») |
+| ASN | base IP→ASN d'iptoasn.com ; `ADM-VPN-ASN` pour les systèmes de `asn.deny-asns` (vide, `observe` par défaut) ; mots-clés de nom signalés au staff seul (voir « ASN ») |
 | Geyser | `geyser-addresses` **vide par défaut** tant que 13.1 n'a pas mesuré l'adresse vue au proxy. Une connexion venue d'une de ces adresses sans être joueur Floodgate est journalisée `geyser-address-not-floodgate`, signalée en WARN et jugée normalement |
 | Journal | une ligne `key=value` par refus, observation ou exemption, sur le logger `btc.admission.journal` ; `identity=declared` au pré-login, `authenticated` au login |
 | Staff | `/admission why <pseudo\|ip>`, `/admission status` (`btc.admission.staff`) ; alerte en jeu à chaque refus, au plus un message toutes les 10 s |
@@ -55,12 +56,78 @@ Technique de Gate (Minekube) : borner le bloc, pas l'adresse, pour ne pas punir 
   événements Velocity sont concurrents) ; un seau inactif ne demande aucune minuterie.
 - **Un refus de pré-login levé par un autre plugin** est rattrapé par le `PostLoginEvent` (filet
   existant), pas ré-appliqué au login : il n'y a pas d'état à rejouer sans re-dépenser un jeton.
-- **Pas de borne par ASN** : GeoLite2 n'est pas décidé. Point d'extension :
-  `NetworkRateLimiter.Grouping` (adresse publique → clé de réseau) ; une borne par ASN serait une
-  seconde instance avec son propre `Grouping` et ses propres réglages.
+- **Borne par ASN, désactivée par défaut** : `network-rate.group-hosting-by-asn: true` compte
+  comme un seul réseau les adresses d'un système d'hébergement (`NetworkRateLimiter.Grouping
+  .byHostingAsn`, clé `AS<numéro>`), pour qu'une vague louée chez un hébergeur ne passe pas sous la
+  limite en se répartissant sur ses préfixes. Seuls les systèmes **refusés** (`asn.deny-asns`) ou
+  **nommés par un mot-clé** (`asn.observe-keywords`) sont groupés : un opérateur résidentiel ou
+  mobile est aussi un système, et un seul seau pour ses millions d'abonnés les affamerait tous.
 - **Visible** : `/admission why <ip>` donne la dernière décision (ligne `basis=rate-network
   code=ADM-RATE-NET`), `/admission status` la configuration, le nombre de réseaux suivis et de
   tentatives au-delà de la limite depuis le démarrage.
+
+## Exemptions datées et justifiées
+
+Une exemption est un trou dans le bouclier : elle dit pourquoi elle existe et quand elle finit.
+
+```yaml
+exemptions:
+  players:
+    - name: Alice
+      uuid: 00000000-0000-0000-0000-000000000001
+      reason: "staff, accès de test"      # facultatif, journalisé
+      expires: 2026-12-31                  # facultatif pour un joueur : dernier jour valide (UTC)
+  networks:
+    - network: 203.0.113.0/24
+      reason: "bureau de l'agence"
+      expires: 2026-12-31                  # OBLIGATOIRE pour un réseau
+```
+
+- Le lendemain de `expires`, l'entrée ne s'applique plus. Dans les 7 jours qui précèdent, le
+  démarrage et `/admission status` la signalent. Une date illisible refuse l'entrée (ERROR : elle
+  n'exempte personne).
+- **Rupture de compatibilité** : l'ancienne forme d'un réseau, la simple chaîne CIDR, est désormais
+  refusée (une adresse change de mains ; une exemption sans fin est une dette). Un joueur sans
+  `expires` n'expire pas (forme d'avant les dates).
+
+## ASN (13.2 : `asn`)
+
+**Source** : [iptoasn.com](https://iptoasn.com), fichier `ip2asn-combined.tsv.gz`, domaine public
+(licence **PDDL**). Aucune adresse de joueur ne sort : seul le fichier public est téléchargé, dans la
+même tâche planifiée que les listes X4BNet et FireHOL, avec les mêmes garde-fous.
+
+- **Rôle** : donner à chaque adresse son système autonome (numéro, nom, pays) pour trois usages :
+  refuser des systèmes nommés, signaler des noms suspects, grouper la borne de débit.
+- **Réglages** (`asn`) : `enabled: true`, `mode: observe`, `deny-asns: []`, `observe-keywords: []`,
+  `url`, `max-download-megabytes: 32`, `max-rows: 2000000`. Par défaut **rien n'est refusé ni
+  signalé** : la base sert d'abord à `/admission why` et au journal.
+- **`deny-asns`** : numéros (`64496` ou `AS64496`). Refus `ADM-VPN-ASN` (texte réglable,
+  `messages.asn`). `observe` journalise `decision=observed` et laisse entrer ; `enforce` refuse. Le
+  `mode: observe` du module entier retient aussi ce refus. Les exemptions s'appliquent comme pour
+  une liste.
+- **`observe-keywords`** : mots cherchés (sans casse) dans le nom du système. Une correspondance
+  est journalisée (`decision=admitted basis=asn-keyword`, agrégée par minute) et signalée au staff
+  en ligne ; **elle ne refuse jamais**. Vide par défaut : à choisir après avoir lu `/admission why`
+  sur de vrais hébergeurs.
+- **Journal et `/admission why`** : `asn=<numéro>` et `as_name="<nom>"` (échappé : un nom d'AS est
+  une donnée tierce) sur chaque ligne dont l'adresse a un système ; `/admission why` ajoute la ligne
+  ASN, le pays et la raison. `/admission status` donne l'âge, le nombre de lignes et d'AS, et une
+  éventuelle version en quarantaine.
+- **Garde-fous** (ceux des listes, voir plus bas) : téléchargement borné (32 Mo, 2 M lignes, 256 Mio
+  inflatés), échéance d'au moins 120 s, fichier temporaire propre à la tentative, version précédente
+  gardée, rejet si le nombre de lignes varie de plus de 50 % ou si la couverture double, ligne de
+  base embarquée à la première charge (`lists.embedded-baseline`). Une ligne illisible est comptée,
+  jamais fatale ; l'AS 0 (non routé) est écarté ; un nom est nettoyé (caractères de contrôle et de
+  direction retirés, 120 caractères au plus). La **quarantaine** (`lists.quarantine-hours`) est celle
+  des listes, mais n'ouvre que si `deny-asns` n'est pas vide et qu'une version est déjà en service :
+  sans refus possible, il n'y a rien à retenir.
+- **Mémoire et vitesse** (fichier réel du 09/10/2026 : 722 982 lignes, 87 182 systèmes, 9,0 Mo gzip,
+  45,8 Mo décompressé) : tableaux primitifs triés, plages contiguës du même AS fusionnées
+  (405 248 plages IPv4 + 97 508 IPv6), recherche par dichotomie. **10,5 Mio de tableaux (~11,0 Mo
+  comptés par `approximateBytes`), ~13,7 Mio de tas retenus** mesurés ; analyse ~1,5 s ; recherche
+  ~170 ns en IPv4, ~110 ns en IPv6, sans allocation de la base à chaque connexion.
+- **Borne par ASN** : voir `network-rate.group-hosting-by-asn` (désactivée par défaut).
+- **Limite connue** : l'agrégation du journal par minute reste par /24 ou /64, pas par système.
 
 ## Garde-fous des listes
 
@@ -141,8 +208,8 @@ pour ce rapprochement.
 
 ## Hors périmètre
 
-GeoLite2 ASN (licence MaxMind à trancher) et donc toute borne par ASN, vérification anti-bot en
-limbo (Sonar, 13.3), débit Bedrock borné en amont de Geyser (13.4, autre moitié).
+Vérification anti-bot en limbo (Sonar, 13.3), débit Bedrock borné en amont de Geyser (13.4, autre
+moitié). GeoLite2 est écarté (licence) : la base ASN vient d'iptoasn.com.
 
 > **À valider au banc (13.5)** : que les valeurs par défaut absorbent une vague SoulFire de 50 à
 > 200 bots sans toucher un Java et un Bedrock réels ; combien de pré-logins un joueur légitime
