@@ -31,6 +31,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.GZIPInputStream;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Reads the iptoasn.com {@code ip2asn-combined.tsv.gz} file: one range per line, five tab-separated
@@ -38,9 +39,11 @@ import java.util.zip.GZIPInputStream;
  * the same file, each family in ascending order. AS 0 stands for space that is not routed
  * (country {@code None}, description {@code Not routed}).
  *
- * <p>The file is someone else's, so reading is bounded three ways: a line longer than
+ * <p>The file is someone else's, so reading is bounded: a line longer than
  * {@value #MAX_LINE_CHARS} characters is a bad line (it is never held whole), at most
- * {@code maxRows} lines are read, and the compressed stream may not inflate beyond
+ * {@code maxRows} lines are read, at most {@value #MAX_SYSTEMS} distinct systems and
+ * {@value #MAX_NAME_BYTES} bytes of names are kept (reading stops at the first one past, before
+ * the memory is spent), and the compressed stream may not inflate beyond
  * {@value #MAX_DECOMPRESSED_BYTES} bytes. A line that is not five well-formed columns, or whose
  * range does not come after the previous one of its family, is counted and remembered as a sample,
  * never fatal: the guards of {@link AsnGuards} decide whether the file as a whole is worth keeping.
@@ -55,6 +58,12 @@ public final class AsnParser {
    * not growth.
    */
   static final long MAX_DECOMPRESSED_BYTES = 256L * 1024 * 1024;
+
+  /** Real file: 87 182 systems (October 2026); the baseline of a first load stops at 245 000. */
+  static final int MAX_SYSTEMS = 300_000;
+
+  /** Real file: about 2 MB of names; names are cut at 120 characters, up to 4 bytes each. */
+  static final long MAX_NAME_BYTES = 16L * 1024 * 1024;
 
   private static final int COLUMNS = 5;
   private static final int MAX_SAMPLES = 3;
@@ -74,9 +83,25 @@ public final class AsnParser {
    * @param invalidSamples the first few rejected lines, shortened, for the log
    * @param truncated whether reading stopped because the file went past the line ceiling: the
    *     counts then stop at that point, and the file is not to be trusted
+   * @param exceeded why reading stopped because the file named too many distinct systems or too
+   *     many bytes of names, or {@code null}; the file is not to be trusted either
    */
   public record Result(AsnDatabase database, int validLines, int invalidLines,
-      List<String> invalidSamples, boolean truncated) {
+      List<String> invalidSamples, boolean truncated, @Nullable String exceeded) {
+
+    /**
+     * A result that stayed within the ceilings on systems and names.
+     *
+     * @param database the ranges that were understood
+     * @param validLines how many lines were accepted
+     * @param invalidLines how many lines were rejected
+     * @param invalidSamples the first few rejected lines, shortened
+     * @param truncated whether reading stopped at the line ceiling
+     */
+    public Result(final AsnDatabase database, final int validLines, final int invalidLines,
+        final List<String> invalidSamples, final boolean truncated) {
+      this(database, validLines, invalidLines, invalidSamples, truncated, null);
+    }
 
     /**
      * The rejected lines as a log may carry them: control and formatting characters are escaped,
@@ -97,8 +122,13 @@ public final class AsnParser {
    * @return what was found
    */
   public static Result parse(final String text, final int maxRows) {
+    return parse(text, maxRows, MAX_SYSTEMS, MAX_NAME_BYTES);
+  }
+
+  static Result parse(final String text, final int maxRows, final int maxSystems,
+      final long maxNameBytes) {
     try (Reader reader = new StringReader(text)) {
-      return parseLines(reader, maxRows);
+      return parseLines(reader, maxRows, maxSystems, maxNameBytes);
     } catch (IOException impossible) {
       throw new IllegalStateException("a string reader does not fail", impossible);
     }
@@ -122,11 +152,12 @@ public final class AsnParser {
       final long maxInflatedBytes) throws IOException {
     final InputStream inflated = new Capped(new GZIPInputStream(compressed), maxInflatedBytes);
     try (Reader reader = new InputStreamReader(inflated, StandardCharsets.UTF_8)) {
-      return parseLines(reader, maxRows);
+      return parseLines(reader, maxRows, MAX_SYSTEMS, MAX_NAME_BYTES);
     }
   }
 
-  private static Result parseLines(final Reader source, final int maxRows) throws IOException {
+  private static Result parseLines(final Reader source, final int maxRows, final int maxSystems,
+      final long maxNameBytes) throws IOException {
     final AsnDatabase.Builder builder = AsnDatabase.builder();
     final List<String> samples = new ArrayList<>(MAX_SAMPLES);
     final Lines lines = new Lines(source);
@@ -143,6 +174,10 @@ public final class AsnParser {
       }
       if (!lines.lastWasCut() && addRow(builder, line)) {
         valid++;
+        final String exceeded = exceeded(builder, maxSystems, maxNameBytes);
+        if (exceeded != null) {
+          return new Result(builder.build(), valid, invalid, List.copyOf(samples), false, exceeded);
+        }
       } else {
         invalid++;
         if (samples.size() < MAX_SAMPLES) {
@@ -151,6 +186,22 @@ public final class AsnParser {
       }
     }
     return new Result(builder.build(), valid, invalid, List.copyOf(samples), false);
+  }
+
+  /**
+   * Memory before judgement: a hostile file names a new system on every line, and each one costs a
+   * map entry and its name. The ceilings are far above the real file (87 182 systems, about 2 MB of
+   * names in October 2026), so they stop a flood without ever meeting growth.
+   */
+  private static @Nullable String exceeded(final AsnDatabase.Builder builder,
+      final int maxSystems, final long maxNameBytes) {
+    if (builder.systemCount() > maxSystems) {
+      return "more than " + maxSystems + " distinct autonomous systems; not read further";
+    }
+    if (builder.nameBytes() > maxNameBytes) {
+      return "more than " + maxNameBytes + " bytes of system names; not read further";
+    }
+    return null;
   }
 
   private static boolean addRow(final AsnDatabase.Builder builder, final String line) {

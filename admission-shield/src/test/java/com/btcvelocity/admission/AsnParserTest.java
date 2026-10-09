@@ -19,6 +19,8 @@ package com.btcvelocity.admission;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -71,6 +73,58 @@ class AsnParserTest {
     assertEquals(64496, database.lookup(address("2001:db8::77")).orElseThrow().number());
     assertTrue(database.lookup(address("0.1.2.3")).isEmpty(), "unrouted");
     assertTrue(database.lookup(address("1.0.2.0")).isEmpty(), "unrouted");
+  }
+
+  /** {@code count} rows of one /24 each, every one a system of its own with a {@code nameLength} name. */
+  private static String manySystems(final int count, final int nameLength) {
+    final StringBuilder text = new StringBuilder();
+    for (int i = 0; i < count; i++) {
+      text.append("10.").append(i / 256).append('.').append(i % 256).append(".0\t10.")
+          .append(i / 256).append('.').append(i % 256).append(".255\t").append(1000 + i)
+          .append("\tFR\t").append("N".repeat(nameLength)).append('\n');
+    }
+    return text.toString();
+  }
+
+  @Test
+  void theNumberOfDistinctSystemsIsCappedWhileReadingNotAfterwards() {
+    final AsnParser.Result result = AsnParser.parse(manySystems(50, 10), 1000, 5, 1_000_000);
+
+    assertNotNull(result.exceeded());
+    assertTrue(result.exceeded().contains("autonomous systems"), result.exceeded());
+    assertTrue(result.validLines() <= 6, "reading stopped at the first system past the cap: "
+        + result.validLines());
+    assertTrue(result.database().systemCount() <= 6, "and nothing more was kept");
+  }
+
+  @Test
+  void theBytesOfNamesAreCappedWhileReading() {
+    // 50 systems of 100 bytes of name each would be 5 000 bytes; the cap is 450.
+    final AsnParser.Result result = AsnParser.parse(manySystems(50, 100), 1000, 1000, 450);
+
+    assertNotNull(result.exceeded());
+    assertTrue(result.exceeded().contains("name"), result.exceeded());
+    assertTrue(result.validLines() <= 5, "stopped on the fifth name: " + result.validLines());
+  }
+
+  @Test
+  void manyRowsOfFewSystemsAreNotCapped() {
+    final StringBuilder text = new StringBuilder();
+    for (int i = 0; i < 200; i++) {
+      text.append("11.0.").append(i).append(".0\t11.0.").append(i).append(".127\t")
+          .append(64496 + i % 3).append("\tFR\tSame names\n");
+    }
+
+    final AsnParser.Result result = AsnParser.parse(text.toString(), 1000, 5, 1_000);
+
+    assertNull(result.exceeded());
+    assertEquals(200, result.validLines());
+    assertEquals(3, result.database().systemCount());
+  }
+
+  @Test
+  void aFileWithinTheCeilingsSetsNoFlag() {
+    assertNull(AsnParser.parse(SAMPLE, 1000).exceeded());
   }
 
   @Test

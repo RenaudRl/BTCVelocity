@@ -81,6 +81,21 @@ class AsnGuardsTest {
   }
 
   @Test
+  void aFileThatWentPastTheSystemOrNameCeilingIsRefusedWithItsReason() {
+    final StringBuilder text = new StringBuilder();
+    for (int i = 0; i < 30; i++) {
+      text.append("10.0.").append(i).append(".0\t10.0.").append(i).append(".255\t").append(1000 + i)
+          .append("\tFR\tName ").append(i).append('\n');
+    }
+
+    final String why = AsnGuards.absoluteRejection(AsnParser.parse(text.toString(), 1000, 10, 1_000_000),
+        CEILING, Set.of());
+
+    assertNotNull(why);
+    assertTrue(why.contains("autonomous systems"), why);
+  }
+
+  @Test
   void aFileWhereNothingIsRoutedIsRefused() {
     final String why = AsnGuards.absoluteRejection(
         parsed("1.0.0.0\t1.0.0.255\t0\tNone\tNot routed\n"), CEILING, Set.of());

@@ -235,6 +235,33 @@ class AsnStoreAndRefresherTest {
   }
 
   @Test
+  void anOutOfMemoryDuringARefreshKeepsThePreviousVersionAndTheNextRefreshStillRuns()
+      throws IOException {
+    writeFile(file(10));
+    final AsnStore store = store(AsnSettings.defaults());
+    store.loadAtStart();
+    final boolean[] exhausted = {true};
+    final AsnRefresher refresher = refresher(store, (url, destination) -> {
+      if (exhausted[0]) {
+        throw new OutOfMemoryError("Java heap space");
+      }
+      Files.write(destination, gzip(file(12)));
+    }, Duration.ZERO);
+
+    final boolean replaced = refresher.refresh();
+
+    assertFalse(replaced);
+    assertEquals(10, store.current().orElseThrow().validLines());
+    assertTrue(this.log.has("ERROR", "could not be refreshed"), this.log.lines().toString());
+    try (var leftovers = Files.newDirectoryStream(this.directory, "*.part")) {
+      assertFalse(leftovers.iterator().hasNext());
+    }
+    exhausted[0] = false;
+    assertTrue(refresher.refresh(), "the refresh is not left marked as running");
+    assertEquals(12, store.current().orElseThrow().validLines());
+  }
+
+  @Test
   void anErrorPageIsThrownAwayAndNoTemporaryFileStaysBehind() throws IOException {
     writeFile(file(10));
     final AsnStore store = store(AsnSettings.defaults());

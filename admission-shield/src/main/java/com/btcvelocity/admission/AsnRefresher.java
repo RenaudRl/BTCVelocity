@@ -112,7 +112,10 @@ public final class AsnRefresher {
         return false;
       }
       ListRefresher.moveInPlace(part, target);
-    } catch (IOException | RuntimeException failure) {
+    } catch (IOException | RuntimeException | OutOfMemoryError failure) {
+      // The out-of-memory case is caught on purpose: a file that does not fit must cost the
+      // refresh, not the proxy, and the version already in memory is what keeps deciding. The
+      // half-built tables are unreachable as soon as this method leaves the try.
       this.logger.error("The IP-to-ASN database could not be refreshed from {}: {}. Keeping the"
           + " last valid one.", settings.url(), failure.toString());
       return false;

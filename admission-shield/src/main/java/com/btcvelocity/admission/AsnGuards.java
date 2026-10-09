@@ -124,6 +124,9 @@ public final class AsnGuards {
       return "more than " + maxRows + " rows, above the ceiling of " + maxRows
           + " (asn.max-rows); not read further";
     }
+    if (candidate.exceeded() != null) {
+      return candidate.exceeded();
+    }
     if (candidate.validLines() == 0) {
       return "no valid row, " + candidate.invalidLines() + " unreadable lines, first "
           + candidate.printableSamples();

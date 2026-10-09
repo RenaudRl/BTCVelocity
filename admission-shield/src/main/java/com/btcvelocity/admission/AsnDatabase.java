@@ -475,6 +475,24 @@ public final class AsnDatabase {
     }
 
     /**
+     * How many distinct systems were added so far.
+     *
+     * @return the number of systems
+     */
+    public int systemCount() {
+      return this.asSize;
+    }
+
+    /**
+     * How many bytes of system names were kept so far.
+     *
+     * @return the size of the names, in UTF-8
+     */
+    public long nameBytes() {
+      return this.nameOffset[this.asSize];
+    }
+
+    /**
      * Freezes what was added.
      *
      * @return the database

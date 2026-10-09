@@ -303,7 +303,7 @@ public final class AsnStore implements AsnLookup {
     final AsnParser.Result result;
     try {
       result = AsnParser.parseGzip(file, this.settings.maxRows());
-    } catch (IOException | RuntimeException unreadable) {
+    } catch (IOException | RuntimeException | OutOfMemoryError unreadable) {
       this.logger.error("The IP-to-ASN database could not be read from {}: {}. Keeping the"
           + " previous one.", file, unreadable.toString());
       return false;
