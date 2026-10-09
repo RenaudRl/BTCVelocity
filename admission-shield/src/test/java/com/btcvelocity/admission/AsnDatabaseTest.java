@@ -197,6 +197,40 @@ class AsnDatabaseTest {
   }
 
   @Test
+  void theIpv6NetworksOfSomeSystemsAreCountedInSlash64s() {
+    final AsnDatabase.Builder builder = AsnDatabase.builder();
+    builder.addIpv6(0x2001_0db8_0000_0000L, 0L, 0x2001_0db8_ffff_ffffL, -1L, 64496, "NL", "A /32");
+    builder.addIpv6(0xfe00_0000_0000_0000L, 0L, 0xfe00_0000_0000_0000L, 0xffffL, 64497, "NL",
+        "One /64");
+    // High half above 2^63: a signed subtraction would go negative here.
+    builder.addIpv6(0xff00_0000_0000_0000L, 0L, -1L, -1L, 64498, "NL", "A /8");
+    final AsnDatabase database = builder.build();
+
+    assertEquals(Math.scalb(1.0, 32), database.ipv6Slash64Of(Set.of(64496L)));
+    assertEquals(1.0, database.ipv6Slash64Of(Set.of(64497L)));
+    assertEquals(Math.scalb(1.0, 56), database.ipv6Slash64Of(Set.of(64498L)));
+    assertEquals(Math.scalb(1.0, 32) + 1.0, database.ipv6Slash64Of(Set.of(64496L, 64497L)));
+    assertEquals(0.0, database.ipv6Slash64Of(Set.of()));
+  }
+
+  @Test
+  void theSystemsCoveringMoreThanAShareOfTheSpaceAreFoundInBothFamilies() {
+    final AsnDatabase.Builder builder = AsnDatabase.builder();
+    // 16.0.0.0/6 is 2^26 addresses: 1.56 % of IPv4.
+    builder.addIpv4(ip(16, 0, 0, 0), ip(19, 255, 255, 255), 100, "US", "Wide v4");
+    builder.addIpv4(ip(20, 0, 0, 0), ip(20, 0, 0, 255), 200, "US", "Narrow");
+    // 2^55 /64 networks: 1.56 % of 2000::/3.
+    builder.addIpv6(0x2000_0000_0000_0000L, 0L, 0x207f_ffff_ffff_ffffL, -1L, 300, "US", "Wide v6");
+    builder.addIpv6(0x2a00_0000_0000_0000L, 0L, 0x2a00_0000_ffff_ffffL, -1L, 400, "US", "A /32");
+    final AsnDatabase database = builder.build();
+
+    assertEquals(Set.of(100L, 300L), database.systemsCoveringMoreThan(1.0));
+    assertEquals(Set.of(), database.systemsCoveringMoreThan(2.0));
+    assertEquals(Set.of(100L, 200L, 300L, 400L), database.systemsCoveringMoreThan(0.00000001),
+        "any share above a hundred-millionth of a percent");
+  }
+
+  @Test
   void aSystemWithoutACountryReportsAnEmptyOne() {
     final AsnDatabase.Builder builder = AsnDatabase.builder();
     builder.addIpv4(FIRST_A, LAST_A, 64496, "", "Nowhere");

@@ -97,6 +97,22 @@ class AsnSettingsTest {
   }
 
   @Test
+  void theShareOfTheSpaceOneGroupMayHoldIsReadAndBounded() throws IOException {
+    final List<String> warnings = new ArrayList<>();
+
+    assertEquals(1.0, AdmissionConfig.defaults().networkRate().maxAsnSharePercent());
+    assertEquals(0.5, parse("network-rate:\n  max-asn-share-percent: 0.5\n", warnings)
+        .networkRate().maxAsnSharePercent());
+    assertEquals(List.of(), warnings);
+    assertEquals(1.0, parse("network-rate:\n  max-asn-share-percent: 0\n", warnings)
+        .networkRate().maxAsnSharePercent());
+    assertEquals(1.0, parse("network-rate:\n  max-asn-share-percent: 150\n", warnings)
+        .networkRate().maxAsnSharePercent());
+    assertEquals(2, warnings.size(), warnings.toString());
+    assertTrue(warnings.get(0).contains("network-rate.max-asn-share-percent"), warnings.get(0));
+  }
+
+  @Test
   void anAsNumberBeyondThirtyTwoBitsOrNotANumberIsReportedAndIgnored() throws IOException {
     final List<String> warnings = new ArrayList<>();
 

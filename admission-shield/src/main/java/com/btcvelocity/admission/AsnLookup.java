@@ -35,4 +35,17 @@ public interface AsnLookup {
    *     database is not loaded
    */
   Optional<AsnDatabase.Info> lookup(InetAddress address);
+
+  /**
+   * Whether a system announces more than a share of the address space, in the database now in use.
+   * Told apart from {@link #lookup} so that the rate bound can refuse to put a system that the file
+   * has stretched over the internet into one bucket.
+   *
+   * @param asNumber the system
+   * @param percent the share, in percent, of IPv4 or of IPv6 {@code 2000::/3}
+   * @return {@code true} if the system announces more; {@code false} for a lookup that cannot say
+   */
+  default boolean coversMoreThan(final long asNumber, final double percent) {
+    return false;
+  }
 }

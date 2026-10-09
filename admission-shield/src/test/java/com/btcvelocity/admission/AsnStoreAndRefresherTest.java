@@ -115,6 +115,25 @@ class AsnStoreAndRefresherTest {
   }
 
   @Test
+  void theStoreSaysWhichSystemsAnnounceMoreThanAShareAndFollowsTheDatabaseSwap()
+      throws IOException {
+    final String wide = "16.0.0.0\t19.255.255.255\t64500\tUS\tBig Hosting Inc\n";
+    writeFile(wide + file(10));
+    final AsnStore store = store(AsnSettings.defaults());
+    assertFalse(store.coversMoreThan(64500, 1.0), "nothing loaded, nothing known");
+
+    store.loadAtStart();
+
+    assertTrue(store.coversMoreThan(64500, 1.0));
+    assertFalse(store.coversMoreThan(64496, 1.0));
+    assertFalse(store.coversMoreThan(64500, 2.0));
+
+    writeFile(file(10));
+    assertTrue(store.reload());
+    assertFalse(store.coversMoreThan(64500, 1.0), "the new database does not know the system");
+  }
+
+  @Test
   void aNonPublicAddressIsNeverGivenASystem() throws IOException {
     writeFile("10.0.0.0\t10.0.0.255\t64496\tNL\tPrivately announced\n");
     final AsnStore store = store(AsnSettings.defaults());

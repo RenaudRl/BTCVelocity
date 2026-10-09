@@ -230,6 +230,33 @@ public final class AsnDatabase {
   }
 
   /**
+   * The systems that announce more than a share of the address space, IPv4 or IPv6 (the global
+   * unicast space {@code 2000::/3}, as {@link ListGuards} measures it).
+   *
+   * @param percent the share, in percent
+   * @return their AS numbers
+   */
+  public Set<Long> systemsCoveringMoreThan(final double percent) {
+    final double[] v4Share = new double[this.asNumber.length];
+    for (int i = 0; i < this.v4Start.length; i++) {
+      v4Share[this.v4As[i]] += unflip(this.v4End[i]) - unflip(this.v4Start[i]) + 1.0;
+    }
+    final double[] v6Share = new double[this.asNumber.length];
+    for (int i = 0; i < this.v6StartHi.length; i++) {
+      v6Share[this.v6As[i]] += unsignedToDouble(this.v6EndHi[i] - this.v6StartHi[i]) + 1.0;
+    }
+    final Set<Long> wide = new HashSet<>();
+    for (int i = 0; i < this.asNumber.length; i++) {
+      final double share = Math.max(100.0 * v4Share[i] / ListGuards.IPV4_ADDRESSES,
+          100.0 * v6Share[i] / ListGuards.GLOBAL_UNICAST_SLASH64);
+      if (share > percent) {
+        wide.add(Integer.toUnsignedLong(this.asNumber[i]));
+      }
+    }
+    return wide;
+  }
+
+  /**
    * How many IPv4 addresses the given systems announce.
    *
    * @param systems AS numbers

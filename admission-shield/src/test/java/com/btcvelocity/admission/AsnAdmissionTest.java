@@ -299,6 +299,97 @@ class AsnAdmissionTest {
     assertNotEquals(Action.ADMIT, grouped.decideRate(Attempt.claimed("B", HOSTING_B)).action());
   }
 
+  // --- a system stretched over the internet is never one bucket ---------------------------------
+
+  /** AS 64500 announces 16.0.0.0/6, 1.56 % of IPv4; AS 64496 is a small hosting provider. */
+  private static AsnLookup widespread() {
+    final AsnDatabase parsed = AsnParser.parse("""
+        16.0.0.0\t19.255.255.255\t64500\tUS\tBig Hosting Inc
+        192.0.2.0\t192.0.2.255\t64496\tNL\tAlpha Hosting BV
+        203.0.113.0\t203.0.113.255\t64496\tNL\tAlpha Hosting BV
+        """, 1000).database();
+    return new AsnLookup() {
+      @Override
+      public Optional<AsnDatabase.Info> lookup(final InetAddress address) {
+        return parsed.lookup(address);
+      }
+
+      @Override
+      public boolean coversMoreThan(final long asNumber, final double percent) {
+        return parsed.systemsCoveringMoreThan(percent).contains(asNumber);
+      }
+    };
+  }
+
+  private AdmissionEngine groupingEngine(final String rateMode, final String extraRate) {
+    return new AdmissionEngine(config("""
+        network-rate:
+          mode: %s
+          attempts: 1
+          burst: 1
+          window-seconds: 1000
+          group-hosting-by-asn: true
+          %s
+        asn:
+          observe-keywords: [hosting]
+        """.formatted(rateMode, extraRate)), NO_LIST, NO_LIST, new ManualClock(), widespread(),
+        AsnLookup.NONE, this.log.logger());
+  }
+
+  private final RecordingLogger log = new RecordingLogger();
+
+  @Test
+  void inEnforceASystemThatHoldsMoreThanAShareOfTheSpaceIsLeftToTheirPrefixes() {
+    final AdmissionEngine engine = groupingEngine("enforce", "");
+
+    assertEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("A", ip("16.1.2.3"))).action());
+    assertEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("B", ip("17.1.2.3"))).action(),
+        "another /24 of a system that announces 1.56 % of the internet: its own bucket");
+    assertNotEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("C", ip("16.1.2.9"))).action(),
+        "the /24 itself is still bounded");
+    assertTrue(this.log.has("WARN", "AS64500"), this.log.lines().toString());
+  }
+
+  @Test
+  void aSmallHostingSystemIsStillGroupedInEnforce() {
+    final AdmissionEngine engine = groupingEngine("enforce", "");
+
+    assertEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("A", HOSTING_A)).action());
+    assertNotEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("B", HOSTING_B)).action());
+    assertFalse(this.log.has("WARN", "AS64496"), this.log.lines().toString());
+  }
+
+  @Test
+  void aWideSystemIsReportedOncePerSystemNotOncePerConnection() {
+    final AdmissionEngine engine = groupingEngine("enforce", "");
+
+    for (int i = 0; i < 5; i++) {
+      engine.decideRate(Attempt.claimed("P" + i, ip("16.9." + i + ".1")));
+    }
+
+    assertEquals(1, this.log.lines().stream().filter(line -> line.contains("AS64500")).count(),
+        this.log.lines().toString());
+  }
+
+  @Test
+  void inObserveTheGroupingIsOnlyCountedSoTheShareLimitIsNotHeld() {
+    final AdmissionEngine engine = groupingEngine("observe", "");
+
+    assertEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("A", ip("16.1.2.3"))).action());
+    assertNotEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("B", ip("17.1.2.3"))).action(),
+        "observed: it would have been the same wave");
+    assertFalse(this.log.has("WARN", "AS64500"), this.log.lines().toString());
+  }
+
+  @Test
+  void theShareLimitIsTunable() {
+    final AdmissionEngine engine = groupingEngine("enforce", "max-asn-share-percent: 5");
+
+    assertEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("A", ip("16.1.2.3"))).action());
+    assertNotEquals(Action.ADMIT, engine.decideRate(Attempt.claimed("B", ip("17.1.2.3"))).action(),
+        "1.56 % is under 5 %: grouped");
+  }
+
   @Test
   void theGroupingKeyOfASystemCannotBeAPrefixKey() {
     final NetworkRateLimiter.Grouping grouping = NetworkRateLimiter.Grouping.byHostingAsn(

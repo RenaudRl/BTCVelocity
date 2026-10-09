@@ -53,6 +53,10 @@ import org.spongepowered.configurate.ConfigurationNode;
  *     system instead of one per /24: a wave spread over a provider's many networks is then
  *     counted as the one wave it is. Off by default; it needs the ASN database, and an address the
  *     database does not know, or a system that is not hosting, keeps its prefix
+ * @param maxAsnSharePercent in {@code enforce}, the most of the address space (percent, IPv4 or
+ *     IPv6) a system may announce and still be grouped into one bucket: a file that stretches a
+ *     "hosting" system over the internet would otherwise starve everybody in it. A system above it
+ *     keeps its prefix, with a warning
  */
 public record NetworkRateSettings(
     boolean enabled,
@@ -64,7 +68,30 @@ public record NetworkRateSettings(
     int ipv6Prefix,
     int maxNetworks,
     String message,
-    boolean groupHostingByAsn) {
+    boolean groupHostingByAsn,
+    double maxAsnSharePercent) {
+
+  /**
+   * Creates settings with the default share a grouped system may hold.
+   *
+   * @param enabled whether attempts are counted at all
+   * @param mode {@code observe} or {@code enforce}
+   * @param attempts the sustained attempts allowed per {@code window}
+   * @param window the span {@code attempts} is counted over
+   * @param burst the most attempts a quiet network may make at once
+   * @param ipv4Prefix the IPv4 prefix length that makes a network
+   * @param ipv6Prefix the IPv6 prefix length that makes a network
+   * @param maxNetworks the most networks followed at once
+   * @param message the MiniMessage text shown to a refused player
+   * @param groupHostingByAsn whether hosting systems share one bucket each
+   */
+  public NetworkRateSettings(final boolean enabled, final AdmissionConfig.Mode mode,
+      final int attempts, final Duration window, final int burst, final int ipv4Prefix,
+      final int ipv6Prefix, final int maxNetworks, final String message,
+      final boolean groupHostingByAsn) {
+    this(enabled, mode, attempts, window, burst, ipv4Prefix, ipv6Prefix, maxNetworks, message,
+        groupHostingByAsn, DEFAULT_MAX_ASN_SHARE_PERCENT);
+  }
 
   /**
    * Creates settings that group by prefix only.
@@ -85,6 +112,9 @@ public record NetworkRateSettings(
     this(enabled, mode, attempts, window, burst, ipv4Prefix, ipv6Prefix, maxNetworks, message,
         false);
   }
+
+  /** One system announcing a hundredth of the internet is not a hosting provider's wave. */
+  static final double DEFAULT_MAX_ASN_SHARE_PERCENT = 1.0;
 
   static final int DEFAULT_ATTEMPTS = 10;
   static final int DEFAULT_WINDOW_SECONDS = 10;
@@ -138,7 +168,18 @@ public record NetworkRateSettings(
         within(section, "max-networks", DEFAULT_MAX_NETWORKS, MIN_MAX_NETWORKS, MAX_MAX_NETWORKS,
             warnings),
         message,
-        section.node("group-hosting-by-asn").getBoolean(false));
+        section.node("group-hosting-by-asn").getBoolean(false),
+        parseShare(section.node("max-asn-share-percent").getDouble(DEFAULT_MAX_ASN_SHARE_PERCENT),
+            warnings));
+  }
+
+  private static double parseShare(final double value, final Consumer<String> warnings) {
+    if (value > 0 && value <= 100) {
+      return value;
+    }
+    warnings.accept("network-rate.max-asn-share-percent: " + value + " is outside ]0, 100]; using "
+        + DEFAULT_MAX_ASN_SHARE_PERCENT);
+    return DEFAULT_MAX_ASN_SHARE_PERCENT;
   }
 
   private static AdmissionConfig.Mode parseMode(final String value,

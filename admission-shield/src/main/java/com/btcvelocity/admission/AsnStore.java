@@ -101,6 +101,7 @@ public final class AsnStore implements AsnLookup {
   private final Object writeLock = new Object();
   private volatile @Nullable Loaded loaded;
   private volatile @Nullable Entry waiting;
+  private volatile @Nullable Wide wide;
 
   /**
    * Creates an empty store that judges a first load against the embedded baseline.
@@ -203,6 +204,25 @@ public final class AsnStore implements AsnLookup {
   public Optional<AsnDatabase.Info> lookup(final InetAddress address) {
     final Loaded current = this.loaded;
     return current == null ? Optional.empty() : lookupIn(current.database(), address);
+  }
+
+  /** The systems found above a share in one database, kept until the database or the share moves. */
+  private record Wide(AsnDatabase database, double percent, Set<Long> systems) {
+  }
+
+  @Override
+  public boolean coversMoreThan(final long asNumber, final double percent) {
+    final Loaded current = this.loaded;
+    if (current == null) {
+      return false;
+    }
+    Wide wide = this.wide;
+    if (wide == null || wide.database() != current.database() || wide.percent() != percent) {
+      wide = new Wide(current.database(), percent,
+          current.database().systemsCoveringMoreThan(percent));
+      this.wide = wide;
+    }
+    return wide.systems().contains(asNumber);
   }
 
   private static Optional<AsnDatabase.Info> lookupIn(final AsnDatabase database,

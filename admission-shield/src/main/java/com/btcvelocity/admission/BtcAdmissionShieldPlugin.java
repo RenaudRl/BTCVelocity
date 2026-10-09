@@ -172,7 +172,7 @@ public final class BtcAdmissionShieldPlugin {
     }
     this.asnStore = asn;
     final AdmissionEngine admission = new AdmissionEngine(settings, store,
-        store.quarantine().shadow(), this.clock, asn, asn.shadow());
+        store.quarantine().shadow(), this.clock, asn, asn.shadow(), this.logger);
     this.engine = admission;
     this.config = settings;
     this.proxy.getCommandManager().register(

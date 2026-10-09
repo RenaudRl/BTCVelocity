@@ -23,6 +23,8 @@ import com.btcvelocity.admission.Verdict.Origin;
 import java.net.InetAddress;
 import java.time.Clock;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The admission rule, free of any Velocity type so that it can be tested without a runtime.
@@ -111,6 +113,24 @@ public final class AdmissionEngine {
   public AdmissionEngine(final AdmissionConfig config, final IpClassifier classifier,
       final IpClassifier shadow, final Clock clock, final AsnLookup asn,
       final AsnLookup asnShadow) {
+    this(config, classifier, shadow, clock, asn, asnShadow,
+        LoggerFactory.getLogger(AdmissionEngine.class));
+  }
+
+  /**
+   * Creates the engine, with the IP-to-ASN database and the logger the grouping reports to.
+   *
+   * @param config the settings
+   * @param classifier where an address is looked up in the lists in use
+   * @param shadow what the new list versions in quarantine would say; never refuses anybody
+   * @param clock the time the per-network bound counts attempts in
+   * @param asn the database in use
+   * @param asnShadow the database version in quarantine, if any; never refuses anybody
+   * @param logger where a system left out of the grouping is reported
+   */
+  public AdmissionEngine(final AdmissionConfig config, final IpClassifier classifier,
+      final IpClassifier shadow, final Clock clock, final AsnLookup asn,
+      final AsnLookup asnShadow, final Logger logger) {
     this.config = config;
     this.classifier = classifier.orElse(new AsnClassifier(asn, config.asn()));
     this.shadow = shadow.orElse(new AsnClassifier(asnShadow, config.asn()));
@@ -118,7 +138,9 @@ public final class AdmissionEngine {
     NetworkRateLimiter.Grouping grouping = NetworkRateLimiter.Grouping.byPrefix(
         config.networkRate().ipv4Prefix(), config.networkRate().ipv6Prefix());
     if (config.networkRate().groupHostingByAsn()) {
-      grouping = NetworkRateLimiter.Grouping.byHostingAsn(asn, config.asn()::isHosting, grouping);
+      grouping = NetworkRateLimiter.Grouping.byHostingAsn(asn,
+          new HostingGroups(config.asn(), asn, config.rateMode() == AdmissionConfig.Mode.ENFORCE,
+              config.networkRate().maxAsnSharePercent(), logger), grouping);
     }
     this.rate = new NetworkRateLimiter(config.networkRate(), clock, grouping);
   }

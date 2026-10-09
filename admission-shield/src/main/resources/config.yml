@@ -106,6 +106,11 @@ network-rate:
   # system too, and one bucket for its subscribers would starve them. Needs asn.enabled.
   # Off by default: first see in the journal (asn=, as_name=) which systems the waves come from.
   group-hosting-by-asn: false
+  # In ENFORCE, a system that announces more than this share of the address space (percent, of IPv4
+  # or of IPv6 2000::/3; ]0, 100]) is NOT grouped and keeps its /24 or /48, with a WARN: a file that
+  # stretched a "hosting" system over the internet would put millions of players in one bucket. In
+  # observe the grouping is only counted, so it is not held back.
+  max-asn-share-percent: 1
 
 # AUTONOMOUS SYSTEMS (Sentinel 13.2). Which operator announces an address, from the IP-to-ASN table
 # of iptoasn.com (public domain, PDDL v1.0; MaxMind GeoLite2 was refused for its licence). It is
