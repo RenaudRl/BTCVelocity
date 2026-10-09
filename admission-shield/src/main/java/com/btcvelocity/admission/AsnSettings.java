@@ -79,6 +79,9 @@ public record AsnSettings(
   private static final long MAX_ASN = 0xFFFF_FFFFL;
   private static final int MAX_ASN_DIGITS = 10;
 
+  /** A shorter word ("it", "as") is found in a large share of the names of the registry. */
+  static final int MIN_KEYWORD_LENGTH = 3;
+
   /**
    * Reads the {@code asn} section; a value that does not make sense is reported and replaced by
    * its default. The fallback of a mode typo is {@code observe}, not the strict value: it must not
@@ -96,7 +99,7 @@ public record AsnSettings(
         section.node("enabled").getBoolean(true),
         parseMode(section.node("mode").getString("observe"), warnings),
         parseDeny(section.node("deny-asns"), warnings),
-        parseKeywords(section.node("observe-keywords")),
+        parseKeywords(section.node("observe-keywords"), warnings),
         parseUrl(section.node("url").getString(DEFAULT_URL.toString()), warnings),
         megabytes * 1024 * 1024,
         maxRows < MIN_MAX_ROWS ? warnedRows(maxRows, warnings) : maxRows);
@@ -198,11 +201,19 @@ public record AsnSettings(
     return value > MAX_ASN ? -1 : value;
   }
 
-  private static List<String> parseKeywords(final ConfigurationNode node) {
+  private static List<String> parseKeywords(final ConfigurationNode node,
+      final Consumer<String> warnings) {
     final List<String> keywords = new ArrayList<>();
     for (ConfigurationNode child : node.childrenList()) {
       final String word = String.valueOf(child.raw()).trim().toLowerCase(Locale.ROOT);
-      if (!word.isEmpty() && !keywords.contains(word)) {
+      if (word.isEmpty() || keywords.contains(word)) {
+        continue;
+      }
+      if (word.length() < MIN_KEYWORD_LENGTH) {
+        warnings.accept("asn.observe-keywords: '" + word + "' is shorter than "
+            + MIN_KEYWORD_LENGTH + " characters and would match far too many system names;"
+            + " ignored");
+      } else {
         keywords.add(word);
       }
     }

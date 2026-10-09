@@ -111,6 +111,23 @@ class AsnSettingsTest {
   }
 
   @Test
+  void aKeywordShorterThanThreeCharactersIsIgnoredWithAWarning() throws IOException {
+    final List<String> warnings = new ArrayList<>();
+
+    final AsnSettings asn = parse("""
+        asn:
+          observe-keywords: ["ab", "x", " a ", "vpn", ""]
+        """, warnings).asn();
+
+    assertEquals(List.of("vpn"), asn.observeKeywords());
+    assertEquals(3, warnings.size(), warnings.toString());
+    assertTrue(warnings.get(0).contains("asn.observe-keywords"), warnings.get(0));
+    assertTrue(warnings.get(0).contains("'ab'"), warnings.get(0));
+    assertEquals(Optional.empty(), asn.keywordIn("Dell Technologies"),
+        "a two-letter word would have matched half the registry");
+  }
+
+  @Test
   void aValueThatMakesNoSenseIsReportedAndReplacedByItsDefault() throws IOException {
     final List<String> warnings = new ArrayList<>();
 

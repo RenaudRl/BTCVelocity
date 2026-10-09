@@ -128,7 +128,10 @@ asn:
   deny-asns: []
   # Words (any case) looked for in the NAME of the system. A hit is journaled (basis=asn-keyword)
   # and told to the staff online; the connection is never refused for it. E.g. ["hosting", "vpn"].
-  # EMPTY by default: a word such as "cloud" also names legitimate operators.
+  # EMPTY by default: a word such as "cloud" also names legitimate operators. At least 3
+  # characters: a shorter word is ignored with a WARN (it would match a large share of the names).
+  # With network-rate.group-hosting-by-asn the systems a word names are held to the coverage limits
+  # and to the quarantine, like the denied ones.
   observe-keywords: []
   # The public download. https only.
   url: https://iptoasn.com/data/ip2asn-combined.tsv.gz
