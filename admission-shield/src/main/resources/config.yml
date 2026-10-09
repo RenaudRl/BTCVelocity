@@ -28,16 +28,29 @@ geyser-addresses: []
 
 # Let in even from a listed address.
 exemptions:
-  # Each entry needs BOTH the name and the UUID, and both must match the authenticated account.
+  # An exemption is a hole in the shield: say why it exists and, when you can, when it ends.
+  # Every entry accepts two optional-for-players fields:
+  #   reason:  free text for the staff, shown in /admission status and in the load warnings.
+  #   expires: AAAA-MM-JJ, the LAST valid day (UTC). The day after, the entry no longer applies,
+  #            with no restart needed. An entry already over when the file is read is ignored with
+  #            a WARN; an unreadable date refuses the entry (an ERROR, it exempts nobody).
+  # Each player needs BOTH the name and the UUID, and both must match the authenticated account.
   # An entry with only one of them is a configuration error: reported, and it exempts nobody.
+  # Without `expires` a player exemption never ends (the form used before the dates existed).
   players: []
   #  - name: SomeStaffMember
   #    uuid: 00000000-0000-0000-0000-000000000000
+  #    reason: moderateur en deplacement
+  #    expires: 2026-12-31
   #  - name: SomePartner
   #    uuid: 11111111-1111-1111-1111-111111111111
-  # Networks (CIDR or single address), e.g. an office or a partner's fixed connection.
+  # Networks (CIDR or single address), e.g. an office or a partner's fixed connection. A fixed
+  # address changes hands, so `expires` is MANDATORY here: an entry without it (the bare form
+  # `- 203.0.113.0/24` included) is refused with an ERROR, and the other entries still load.
   networks: []
-  #  - 203.0.113.0/24
+  #  - network: 203.0.113.0/24
+  #    reason: bureau du partenaire
+  #    expires: 2026-12-31
 
 # Shown to a refused player, MiniMessage format. {code} is replaced by the cause code
 # (ADM-VPN-DC for datacenter, ADM-VPN-TOR for Tor, ADM-RATE-NET for too many attempts from one

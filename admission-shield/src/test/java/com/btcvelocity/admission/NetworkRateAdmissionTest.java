@@ -233,7 +233,8 @@ class NetworkRateAdmissionTest {
   @Test
   void anExemptedNetworkIsNeverCounted() {
     final AdmissionEngine engine = engine(
-        "exemptions:\n  networks:\n    - 203.0.113.0/24\n" + ENFORCING);
+        "exemptions:\n  networks:\n    - {network: 203.0.113.0/24, expires: 2099-12-31}\n"
+            + ENFORCING);
 
     for (int i = 0; i < 40; i++) {
       assertEquals(Action.ADMIT, attempt(engine, "Bot" + i, "203.0.113.77").action());

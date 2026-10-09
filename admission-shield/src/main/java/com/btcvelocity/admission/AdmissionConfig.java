@@ -25,13 +25,13 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -186,11 +186,26 @@ public record AdmissionConfig(
    */
   public static AdmissionConfig parseYaml(final Reader source, final Consumer<String> warnings,
       final Consumer<String> errors) throws IOException {
+    return parseYaml(source, warnings, errors, Clock.systemUTC());
+  }
+
+  /**
+   * Parses a YAML document, judging the end dates of the exemptions against a given clock.
+   *
+   * @param source the YAML text
+   * @param warnings receives one sentence per value that was ignored
+   * @param errors receives one sentence per entry refused because it would be unsafe as written
+   * @param clock the source of "today" for the {@code expires} dates, in UTC
+   * @return the settings
+   * @throws IOException if the text is not valid YAML
+   */
+  public static AdmissionConfig parseYaml(final Reader source, final Consumer<String> warnings,
+      final Consumer<String> errors, final Clock clock) throws IOException {
     final BufferedReader reader =
         source instanceof BufferedReader buffered ? buffered : new BufferedReader(source);
     try {
       return parse(YamlConfigurationLoader.builder().source(() -> reader).build().load(),
-          warnings, errors);
+          warnings, errors, clock);
     } catch (ConfigurateException malformed) {
       throw new IOException(malformed.getMessage(), malformed);
     }
@@ -218,15 +233,28 @@ public record AdmissionConfig(
    */
   public static AdmissionConfig parse(final ConfigurationNode root,
       final Consumer<String> warnings, final Consumer<String> errors) {
+    return parse(root, warnings, errors, Clock.systemUTC());
+  }
+
+  /**
+   * Reads the settings from a parsed document, judging the end dates of the exemptions against a
+   * given clock.
+   *
+   * @param root the document root
+   * @param warnings receives one sentence per value that was ignored
+   * @param errors receives one sentence per entry refused because it would be unsafe as written
+   * @param clock the source of "today" for the {@code expires} dates, in UTC
+   * @return the settings
+   */
+  public static AdmissionConfig parse(final ConfigurationNode root,
+      final Consumer<String> warnings, final Consumer<String> errors, final Clock clock) {
     final Mode mode = parseMode(root.node("mode").getString("enforce"), warnings);
     // Empty by default: until the bench has measured the address Geyser connects from (13.1),
     // no address is spared its judgement.
     final CidrSet geyser = parseNetworks(
         root.node("geyser-addresses"), List.of(), "geyser-addresses", warnings);
-    final Exemptions exemptions = new Exemptions(
-        parsePlayers(root.node("exemptions", "players"), errors),
-        parseNetworks(root.node("exemptions", "networks"), List.of(), "exemptions.networks",
-            warnings));
+    final Exemptions exemptions = Exemptions.parse(root.node("exemptions", "players"),
+        root.node("exemptions", "networks"), clock, warnings, errors);
 
     final ConfigurationNode lists = root.node("lists");
     final Duration refresh = Duration.ofMinutes(Math.max(1, Math.round(
@@ -318,45 +346,6 @@ public record AdmissionConfig(
       }
     }
     return builder.build();
-  }
-
-  /**
-   * Reads the exempted players. Each one needs a name <em>and</em> a UUID: an entry with only one
-   * of them is an error, reported and left out, so that it exempts nobody.
-   */
-  private static List<Exemptions.Player> parsePlayers(final ConfigurationNode node,
-      final Consumer<String> errors) {
-    final List<Exemptions.Player> players = new ArrayList<>();
-    int index = 0;
-    for (ConfigurationNode entry : node.childrenList()) {
-      final String where = "exemptions.players[" + index++ + "]";
-      if (!entry.isMap()) {
-        errors.accept(where + ": '" + entry.getString("") + "' is a bare value; an exemption"
-            + " needs both 'name' and 'uuid'. Entry REFUSED, it exempts nobody");
-        continue;
-      }
-      final String name = entry.node("name").getString("").trim();
-      final String rawUuid = entry.node("uuid").getString("").trim();
-      final UUID uuid = rawUuid.isEmpty() ? null : parseUuid(rawUuid);
-      if (name.isEmpty() && uuid != null) {
-        errors.accept(where + ": a UUID alone is not an exemption; add the player's 'name'."
-            + " Entry REFUSED, it exempts nobody");
-      } else if (name.isEmpty() || uuid == null) {
-        errors.accept(where + ": an exemption needs both 'name' and a valid 'uuid'. Entry"
-            + " REFUSED, it exempts nobody");
-      } else {
-        players.add(new Exemptions.Player(name, uuid));
-      }
-    }
-    return players;
-  }
-
-  private static UUID parseUuid(final String text) {
-    try {
-      return UUID.fromString(text.trim());
-    } catch (IllegalArgumentException malformed) {
-      return null;
-    }
   }
 
   private static Map<IpClass, String> parseMessages(final ConfigurationNode node) {

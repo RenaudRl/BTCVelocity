@@ -299,13 +299,15 @@ class AdmissionEngineTest {
 
   @Test
   void anExemptedNetworkIsAdmittedAndJournaled() {
-    final Verdict verdict = engine("exemptions:\n  networks: ['203.0.113.0/28']")
+    final String partnerOffice =
+        "exemptions:\n  networks:\n    - {network: 203.0.113.0/28, expires: 2099-12-31}";
+    final Verdict verdict = engine(partnerOffice)
         .decide(java("Partner", ip("203.0.113.9")), Phase.PRE_LOGIN);
 
     assertEquals(Action.ADMIT, verdict.action());
     assertEquals(Basis.EXEMPT_NETWORK, verdict.basis());
     assertTrue(verdict.isJournaled());
-    assertEquals(Action.REFUSE, engine("exemptions:\n  networks: ['203.0.113.0/28']")
+    assertEquals(Action.REFUSE, engine(partnerOffice)
         .decide(java("Partner", ip("203.0.113.99")), Phase.PRE_LOGIN).action(),
         "the exemption stops at its own boundary");
   }

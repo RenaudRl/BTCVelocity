@@ -218,7 +218,8 @@ class ListQuarantineTest {
 
   @Test
   void anExemptNetworkIsNotCountedEither() {
-    final AdmissionConfig exempt = config("exemptions:\n  networks:\n    - 203.0.113.0/24\n");
+    final AdmissionConfig exempt = config(
+        "exemptions:\n  networks:\n    - {network: 203.0.113.0/24, expires: 2099-12-31}\n");
 
     assertTrue(new AdmissionEngine(exempt, NOTHING, DC).wouldRefuseInAddition(player())
         .isEmpty());

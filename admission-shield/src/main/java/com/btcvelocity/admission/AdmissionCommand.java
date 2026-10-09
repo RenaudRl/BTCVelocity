@@ -104,6 +104,30 @@ public final class AdmissionCommand implements SimpleCommand {
           + ").");
     }
     lines.add(rateStatus(this.config, this.rate));
+    lines.addAll(exemptionStatus(this.config.exemptions()));
+    return lines;
+  }
+
+  /**
+   * How many exemptions hold today, and which of them end within
+   * {@value Exemptions#NOTICE_DAYS} days.
+   *
+   * @param exemptions the exemptions in force
+   * @return a summary line, then one line per exemption about to end
+   */
+  static List<String> exemptionStatus(final Exemptions exemptions) {
+    final List<Exemptions.Expiring> soon = exemptions.expiringSoon();
+    final List<String> lines = new java.util.ArrayList<>();
+    lines.add("Exemptions actives : " + exemptions.activeCount() + " ("
+        + exemptions.activePlayers() + " joueur(s), " + exemptions.activeNetworks()
+        + " réseau(x)), dont " + soon.size() + " expire(nt) sous " + Exemptions.NOTICE_DAYS
+        + " jours.");
+    for (Exemptions.Expiring ending : soon) {
+      lines.add("  expire le " + ending.expires() + " : "
+          + (ending.kind() == Exemptions.Kind.PLAYER ? "joueur " : "réseau ")
+          + AdmissionJournal.value(ending.label())
+          + (ending.reason() == null ? "" : " - " + AdmissionJournal.value(ending.reason())));
+    }
     return lines;
   }
 
