@@ -153,7 +153,7 @@ class AsnReportingTest {
     final IpClassifier classifier = new AsnClassifier(lookup, settings);
 
     final List<String> lines = WhyReport.explain("192.0.2.10", this.journal, classifier, lookup,
-        settings);
+        settings, AdmissionConfig.Mode.ENFORCE);
 
     final String joined = String.join("\n", lines);
     assertTrue(joined.contains("Classement actuel de l'adresse : asn (liste iptoasn:AS64496)"),
@@ -163,10 +163,24 @@ class AsnReportingTest {
   }
 
   @Test
+  void whyShowsTheModeThatReallyApplyWhenTheModuleIsInObserve() {
+    final AdmissionConfig config = config("mode: observe\nasn:\n  deny-asns: [64496]\n"
+        + "  mode: enforce\n");
+    assertEquals(AdmissionConfig.Mode.ENFORCE, config.asn().mode(), "the asn section alone says enforce");
+    final AsnLookup lookup = address -> Optional.of(ALPHA);
+
+    final List<String> lines = WhyReport.explain("192.0.2.10", this.journal,
+        new AsnClassifier(lookup, config.asn()), lookup, config.asn(), config.asnMode());
+
+    final String joined = String.join("\n", lines);
+    assertTrue(joined.contains("asn.deny-asns (mode observe)"), joined);
+  }
+
+  @Test
   void whyMentionsAKeywordHitAsASignalAndNotARefusal() {
     final AsnSettings settings = config("asn:\n  observe-keywords: [hosting]\n").asn();
 
-    final String line = WhyReport.describeAsn(ALPHA, settings);
+    final String line = WhyReport.describeAsn(ALPHA, settings, AdmissionConfig.Mode.OBSERVE);
 
     assertTrue(line.contains("mot-clé d'observation 'hosting'"), line);
     assertTrue(line.contains("jamais un refus"), line);
@@ -176,8 +190,10 @@ class AsnReportingTest {
   void whySaysWhenNoRuleAppliesAndWhenTheSystemIsUnknown() {
     final AsnSettings settings = AsnSettings.defaults();
 
-    assertTrue(WhyReport.describeAsn(ALPHA, settings).contains("aucune règle asn"));
-    assertTrue(WhyReport.describeAsn(null, settings).contains("inconnu"));
+    assertTrue(WhyReport.describeAsn(ALPHA, settings, AdmissionConfig.Mode.OBSERVE)
+        .contains("aucune règle asn"));
+    assertTrue(WhyReport.describeAsn(null, settings, AdmissionConfig.Mode.OBSERVE)
+        .contains("inconnu"));
   }
 
   @Test
@@ -187,7 +203,7 @@ class AsnReportingTest {
         AdmissionConfig.Mode.ENFORCE);
 
     final List<String> lines = WhyReport.explain("Bot", this.journal, address -> Optional.empty(),
-        AsnLookup.NONE, AsnSettings.defaults());
+        AsnLookup.NONE, AsnSettings.defaults(), AdmissionConfig.Mode.OBSERVE);
 
     assertTrue(lines.get(1).contains("asn=64496"), lines.toString());
   }

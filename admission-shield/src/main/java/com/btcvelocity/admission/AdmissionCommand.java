@@ -68,7 +68,7 @@ public final class AdmissionCommand implements SimpleCommand {
       final IpClassifier classifier =
           this.store.orElse(new AsnClassifier(this.asn, this.config.asn()));
       for (String line : WhyReport.explain(arguments[1], this.journal, classifier, this.asn,
-          this.config.asn())) {
+          this.config.asn(), this.config.asnMode())) {
         invocation.source().sendMessage(Component.text(line, NamedTextColor.GRAY));
       }
     } else if (subcommand.equals("status") && arguments.length == 1) {

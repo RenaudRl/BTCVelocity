@@ -44,7 +44,8 @@ public final class WhyReport {
    */
   public static List<String> explain(
       final String query, final AdmissionJournal journal, final IpClassifier classifier) {
-    return explainWith(query, journal, classifier, null, AsnSettings.defaults());
+    return explainWith(query, journal, classifier, null, AsnSettings.defaults(),
+        AdmissionConfig.Mode.OBSERVE);
   }
 
   /**
@@ -58,15 +59,19 @@ public final class WhyReport {
    *     <em>now</em>
    * @param asn the IP-to-ASN database
    * @param settings the {@code asn} section
+   * @param asnMode the mode the denied systems really run in ({@link AdmissionConfig#asnMode()}:
+   *     the module's {@code observe} wins over {@code asn.mode})
    * @return the lines to show
    */
   public static List<String> explain(final String query, final AdmissionJournal journal,
-      final IpClassifier classifier, final AsnLookup asn, final AsnSettings settings) {
-    return explainWith(query, journal, classifier, asn, settings);
+      final IpClassifier classifier, final AsnLookup asn, final AsnSettings settings,
+      final AdmissionConfig.Mode asnMode) {
+    return explainWith(query, journal, classifier, asn, settings, asnMode);
   }
 
   private static List<String> explainWith(final String query, final AdmissionJournal journal,
-      final IpClassifier classifier, final @Nullable AsnLookup asn, final AsnSettings settings) {
+      final IpClassifier classifier, final @Nullable AsnLookup asn, final AsnSettings settings,
+      final AdmissionConfig.Mode asnMode) {
     final List<String> lines = new ArrayList<>();
     final InetAddress address = asAddress(query);
     final Optional<AdmissionJournal.Entry> last = address != null
@@ -87,7 +92,7 @@ public final class WhyReport {
               + " (liste " + match.sourceId() + ").")
           .orElse("Classement actuel de l'adresse : aucune liste ne la connaît."));
       if (asn != null) {
-        lines.add(describeAsn(asn.lookup(address).orElse(null), settings));
+        lines.add(describeAsn(asn.lookup(address).orElse(null), settings, asnMode));
       }
     }
     return lines;
@@ -98,17 +103,18 @@ public final class WhyReport {
    *
    * @param info the system, or {@code null} when unknown
    * @param settings the {@code asn} section
+   * @param asnMode the mode the denied systems really run in
    * @return the line; the registry's name is escaped like any journal value
    */
-  static String describeAsn(final AsnDatabase.@Nullable Info info, final AsnSettings settings) {
+  static String describeAsn(final AsnDatabase.@Nullable Info info, final AsnSettings settings,
+      final AdmissionConfig.Mode asnMode) {
     if (info == null) {
       return "Système autonome : inconnu (adresse non publique, non routée, ou base IP-vers-ASN"
           + " non chargée).";
     }
     final String policy;
     if (settings.denies(info.number())) {
-      policy = "AS dans asn.deny-asns (mode " + settings.mode().name().toLowerCase(Locale.ROOT)
-          + ")";
+      policy = "AS dans asn.deny-asns (mode " + asnMode.name().toLowerCase(Locale.ROOT) + ")";
     } else {
       policy = settings.keywordIn(info.name())
           .map(word -> "mot-clé d'observation '" + AdmissionJournal.value(word)
