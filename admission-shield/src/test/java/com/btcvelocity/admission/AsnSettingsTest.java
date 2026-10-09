@@ -127,6 +127,37 @@ class AsnSettingsTest {
   }
 
   @Test
+  void aSingleValueInsteadOfAListIsReadAsAListOfOne() throws IOException {
+    final List<String> warnings = new ArrayList<>();
+
+    final AsnSettings asn = parse("""
+        asn:
+          deny-asns: 16276
+          observe-keywords: hosting
+        """, warnings).asn();
+
+    assertEquals(Set.of(16276L), asn.denyAsns(), "the denial must not vanish in silence");
+    assertEquals(List.of("hosting"), asn.observeKeywords());
+    assertEquals(List.of(), warnings);
+  }
+
+  @Test
+  void aMapInsteadOfAListIsReportedAndNothingIsDenied() throws IOException {
+    final List<String> warnings = new ArrayList<>();
+
+    final AsnSettings asn = parse("""
+        asn:
+          deny-asns:
+            first: 16276
+        """, warnings).asn();
+
+    assertEquals(Set.of(), asn.denyAsns());
+    assertEquals(1, warnings.size(), warnings.toString());
+    assertTrue(warnings.get(0).contains("asn.deny-asns"), warnings.get(0));
+    assertTrue(warnings.get(0).contains("list"), warnings.get(0));
+  }
+
+  @Test
   void aKeywordShorterThanThreeCharactersIsIgnoredWithAWarning() throws IOException {
     final List<String> warnings = new ArrayList<>();
 

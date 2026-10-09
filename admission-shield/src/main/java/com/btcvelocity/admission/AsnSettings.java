@@ -172,7 +172,7 @@ public record AsnSettings(
   private static Set<Long> parseDeny(final ConfigurationNode node,
       final Consumer<String> warnings) {
     final Set<Long> denied = new LinkedHashSet<>();
-    for (ConfigurationNode child : node.childrenList()) {
+    for (ConfigurationNode child : elements(node, "asn.deny-asns", warnings)) {
       final String token = String.valueOf(child.raw()).trim();
       final long number = asNumber(token);
       if (number <= 0) {
@@ -183,6 +183,25 @@ public record AsnSettings(
       }
     }
     return Set.copyOf(denied);
+  }
+
+  /**
+   * The items of a setting that is meant to be a list. A single value ({@code deny-asns: 16276})
+   * is a list of one, so that a denial is not lost in silence; a map is no list, it is reported.
+   */
+  private static List<? extends ConfigurationNode> elements(final ConfigurationNode node,
+      final String key, final Consumer<String> warnings) {
+    if (node.virtual() || node.raw() == null) {
+      return List.of();
+    }
+    if (node.isList()) {
+      return node.childrenList();
+    }
+    if (node.isMap()) {
+      warnings.accept(key + " must be a list ([a, b]) or a single value, not a map; ignored");
+      return List.of();
+    }
+    return List.of(node);
   }
 
   private static long asNumber(final String token) {
@@ -204,7 +223,7 @@ public record AsnSettings(
   private static List<String> parseKeywords(final ConfigurationNode node,
       final Consumer<String> warnings) {
     final List<String> keywords = new ArrayList<>();
-    for (ConfigurationNode child : node.childrenList()) {
+    for (ConfigurationNode child : elements(node, "asn.observe-keywords", warnings)) {
       final String word = String.valueOf(child.raw()).trim().toLowerCase(Locale.ROOT);
       if (word.isEmpty() || keywords.contains(word)) {
         continue;
