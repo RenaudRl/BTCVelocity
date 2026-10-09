@@ -96,6 +96,7 @@ public final class BtcAdmissionShieldPlugin {
   static final short POST_LOGIN_PRIORITY = Short.MIN_VALUE;
   private static final long FIRST_DOWNLOAD_DELAY_SECONDS = 2;
   private static final Duration SETTLE_PERIOD = Duration.ofMinutes(1);
+  private static final Duration ASN_MIN_TIMEOUT = Duration.ofSeconds(120);
   private static final String LOGGING_FRAGMENT = "log4j2-admission-journal.xml";
 
   private final ProxyServer proxy;
@@ -107,12 +108,14 @@ public final class BtcAdmissionShieldPlugin {
   private volatile AdmissionConfig config;
   private final RefusalLedger refusals = new RefusalLedger();
   private volatile ListStore store;
+  private volatile AsnStore asnStore;
   private volatile ScheduledTask settleTask;
   private volatile AdmissionJournal journal;
   private volatile BedrockAddressSource bedrock = BedrockAddressSource.NONE;
   private volatile ScheduledTask refreshTask;
   private volatile ScheduledTask alertTask;
   private volatile StaffAlerts alerts;
+  private volatile StaffAlerts asnAlerts;
 
   /**
    * Creates the plugin.
@@ -159,27 +162,37 @@ public final class BtcAdmissionShieldPlugin {
     this.journal = new AdmissionJournal(LoggerFactory.getLogger(AdmissionJournal.LOGGER_NAME),
         this.clock);
     this.alerts = new StaffAlerts(this.clock, this::tellStaff);
+    this.asnAlerts = StaffAlerts.forAsnKeywords(this.clock, this::tellStaff);
     this.store = store;
-    final AdmissionEngine admission =
-        new AdmissionEngine(settings, store, store.quarantine().shadow(), this.clock);
+    final AsnStore asn = new AsnStore(this.dataDirectory.resolve("lists"), this.logger, this.clock,
+        settings.asn(), settings.embeddedBaseline());
+    if (settings.asn().enabled()) {
+      asn.loadAtStart();
+    }
+    this.asnStore = asn;
+    final AdmissionEngine admission = new AdmissionEngine(settings, store,
+        store.quarantine().shadow(), this.clock, asn, asn.shadow());
     this.engine = admission;
     this.config = settings;
     this.proxy.getCommandManager().register(
         this.proxy.getCommandManager().metaBuilder(COMMAND).plugin(this).build(),
-        new AdmissionCommand(this.journal, store, settings, admission.rateLimiter()));
+        new AdmissionCommand(this.journal, store, settings, admission.rateLimiter(), asn));
     this.alertTask = this.proxy.getScheduler()
         .buildTask(this, () -> {
           this.alerts.flushIfDue();
+          this.asnAlerts.flushIfDue();
           this.journal.flushExpired();
         })
         .delay(StaffAlerts.WINDOW)
         .repeat(StaffAlerts.WINDOW)
         .schedule();
-    scheduleRefresh(settings, store);
+    scheduleRefresh(settings, store, asn);
     this.logger.info("Admission shield up: mode {}, {} list(s) configured, refresh every {} h;"
-        + " network rate bound {}.", settings.mode(), settings.sources().size(),
-        settings.refreshInterval().toHours(),
-        settings.networkRate().enabled() ? settings.rateMode() : "off");
+        + " network rate bound {}; IP-to-ASN database {} ({} AS denied, mode {}).",
+        settings.mode(), settings.sources().size(), settings.refreshInterval().toHours(),
+        settings.networkRate().enabled() ? settings.rateMode() : "off",
+        settings.asn().enabled() ? "on" : "off", settings.asn().denyAsns().size(),
+        settings.asnMode());
   }
 
   /**
@@ -220,6 +233,8 @@ public final class BtcAdmissionShieldPlugin {
       event.setResult(PreLoginEvent.PreLoginComponentResult.denied(refusal(verdict)));
       this.refusals.note(event.getConnection().getRemoteAddress(), verdict);
       entry.ifPresent(this.alerts::onRefusal);
+    } else if (verdict.basis() == Verdict.Basis.ASN_KEYWORD) {
+      entry.ifPresent(this.asnAlerts::onRefusal);
     }
   }
 
@@ -245,8 +260,11 @@ public final class BtcAdmissionShieldPlugin {
         player.getUsername(), uuid, this.bedrock.isFloodgatePlayer(uuid),
         this.bedrock.realAddressOf(uuid).orElse(null));
     current.wouldRefuseInAddition(attempt).ifPresent(extra -> {
-      if (this.store.quarantine().noteWouldRefuse(extra.sourceId(), uuid)) {
-        this.journal.recordWouldRefuse(attempt, extra, this.config.mode());
+      final boolean counted = extra.ipClass() == IpClass.ASN
+          ? this.asnStore.noteWouldRefuse(uuid)
+          : this.store.quarantine().noteWouldRefuse(extra.sourceId(), uuid);
+      if (counted) {
+        this.journal.recordWouldRefuse(attempt, extra, this.config.modeFor(extra));
       }
     });
     final Optional<Verdict> settled = current.decideAtLogin(attempt);
@@ -266,6 +284,8 @@ public final class BtcAdmissionShieldPlugin {
       event.setResult(ResultedEvent.ComponentResult.denied(refusal(verdict)));
       this.refusals.note(player.getRemoteAddress(), verdict);
       entry.ifPresent(this.alerts::onRefusal);
+    } else if (verdict.basis() == Verdict.Basis.ASN_KEYWORD) {
+      entry.ifPresent(this.asnAlerts::onRefusal);
     }
   }
 
@@ -346,13 +366,20 @@ public final class BtcAdmissionShieldPlugin {
    * <p>The only outbound traffic of this module. A request carries a public URL and nothing about
    * any player.
    */
-  private void scheduleRefresh(final AdmissionConfig settings, final ListStore store) {
+  private void scheduleRefresh(final AdmissionConfig settings, final ListStore store,
+      final AsnStore asn) {
     final ListRefresher refresher = new ListRefresher(store,
         ListFetcher.http(settings.downloadTimeout(), settings.maxDownloadBytes()), this.logger,
         settings.quarantine());
+    // The ASN file is the same kind of download, in the same task, but it is ten times larger than
+    // a list: its own size bound, and a timeout that lets nine megabytes through a slow link.
+    final AsnRefresher asnRefresher = new AsnRefresher(asn,
+        ListFetcher.http(settings.downloadTimeout().compareTo(ASN_MIN_TIMEOUT) < 0
+            ? ASN_MIN_TIMEOUT : settings.downloadTimeout(), settings.asn().maxDownloadBytes()),
+        this.logger, settings.quarantine());
     if (!settings.quarantine().isZero()) {
       this.settleTask = this.proxy.getScheduler()
-          .buildTask(this, () -> settleQuarantines(store, settings))
+          .buildTask(this, () -> settleQuarantines(store, asn, settings))
           .delay(SETTLE_PERIOD)
           .repeat(SETTLE_PERIOD)
           .schedule();
@@ -373,23 +400,36 @@ public final class BtcAdmissionShieldPlugin {
         untilNextFull = wait;
       }
     }
+    boolean asnDue = false;
+    if (settings.asn().enabled()) {
+      final Duration wait = ListRefresher.delayBeforeFirstRefresh(store.directory(),
+          settings.asn().source(), interval, this.clock);
+      if (wait.isZero()) {
+        asnDue = true;
+      } else if (wait.compareTo(untilNextFull) < 0) {
+        untilNextFull = wait;
+      }
+    }
     // Missing or stale lists are fetched right after start; the full cycle then keeps its own
     // rhythm, counted from the files that are already fresh.
-    if (!due.isEmpty()) {
+    final boolean firstAsn = asnDue;
+    if (!due.isEmpty() || firstAsn) {
       this.proxy.getScheduler()
-          .buildTask(this, () -> refresh(refresher, due))
+          .buildTask(this, () -> refresh(refresher, due, firstAsn ? asnRefresher : null))
           .delay(Duration.ofSeconds(FIRST_DOWNLOAD_DELAY_SECONDS))
           .schedule();
     }
+    final AsnRefresher everyCycle = settings.asn().enabled() ? asnRefresher : null;
     this.refreshTask = this.proxy.getScheduler()
-        .buildTask(this, () -> refresh(refresher, settings.sources()))
+        .buildTask(this, () -> refresh(refresher, settings.sources(), everyCycle))
         .delay(untilNextFull)
         .repeat(interval)
         .schedule();
   }
 
   /** Ends the quarantines that are due; a rejected version is told to the staff online. */
-  private void settleQuarantines(final ListStore lists, final AdmissionConfig settings) {
+  private void settleQuarantines(final ListStore lists, final AsnStore asn,
+      final AdmissionConfig settings) {
     try {
       for (ListQuarantine.Outcome outcome
           : lists.quarantine().settleDue(settings.quarantineMaxExtraPlayers())) {
@@ -397,19 +437,37 @@ public final class BtcAdmissionShieldPlugin {
           tellStaff(outcome.staffMessage());
         }
       }
+      asn.settleDue(settings.quarantineMaxExtraPlayers())
+          .filter(outcome -> !outcome.promoted())
+          .ifPresent(outcome -> tellStaff(outcome.staffMessage()));
     } catch (RuntimeException unexpected) {
       this.logger.error("Settling the list quarantines failed unexpectedly; they stay as they"
           + " were.", unexpected);
     }
   }
 
-  private void refresh(final ListRefresher refresher, final List<ListSource> sources) {
+  /**
+   * One refresh cycle: the address lists, then the IP-to-ASN file, in this one task. A failure of
+   * either leaves what is in use as it was and does not stop the other.
+   */
+  private void refresh(final ListRefresher refresher, final List<ListSource> sources,
+      final AsnRefresher asnRefresher) {
     try {
       final int replaced = refresher.refreshAll(sources);
       this.logger.info("List refresh done: {} of {} list(s) replaced.", replaced, sources.size());
     } catch (RuntimeException unexpected) {
       this.logger.error("List refresh failed unexpectedly; the lists in use are unchanged.",
           unexpected);
+    }
+    if (asnRefresher == null) {
+      return;
+    }
+    try {
+      this.logger.info("IP-to-ASN refresh done: database {}.",
+          asnRefresher.refresh() ? "replaced" : "unchanged");
+    } catch (RuntimeException unexpected) {
+      this.logger.error("IP-to-ASN refresh failed unexpectedly; the database in use is"
+          + " unchanged.", unexpected);
     }
   }
 }

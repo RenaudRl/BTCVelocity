@@ -39,7 +39,8 @@ import org.slf4j.Logger;
  * {@code /admission why}.
  *
  * <p>The line is {@code key=value} pairs so that it can be grepped and parsed without a schema:
- * {@code ts, user, identity, uuid, ip, origin, class, source, decision, code, basis, phase, mode}.
+ * {@code ts, user, identity, uuid, ip, origin, class, source, decision, code, basis, phase, mode}
+ * and, when the IP-to-ASN database knows the address, {@code asn, as_name} at the end.
  * {@code identity} says whether {@code user} is only {@code declared} (pre-login) or
  * {@code authenticated}. It goes to a logger of its own ({@value #LOGGER_NAME}), so the proxy's
  * logging configuration can route it to a file of its own.
@@ -109,11 +110,24 @@ public final class AdmissionJournal {
       append(line, "basis", judgement.basis().label());
       append(line, "phase", this.phase.label());
       append(line, "mode", this.mode.name().toLowerCase(Locale.ROOT));
+      appendAsn(line, judgement.asn());
       return line.toString().trim();
     }
 
     private static void append(final StringBuilder line, final String key, final String value) {
       line.append(key).append('=').append(value(value)).append(' ');
+    }
+
+    /**
+     * The autonomous system, when the database knows it: {@code asn} and {@code as_name} come last
+     * so that a line written before the database was loaded, or for an address it does not know,
+     * is the line it always was. The name is the registry's and is escaped like any value.
+     */
+    private static void appendAsn(final StringBuilder line, final AsnDatabase.@Nullable Info asn) {
+      if (asn != null) {
+        append(line, "asn", Long.toString(asn.number()));
+        append(line, "as_name", asn.name());
+      }
     }
   }
 
@@ -235,10 +249,12 @@ public final class AdmissionJournal {
     private final String ipClass;
     private final String source;
     private final String network;
+    private final AsnDatabase.@Nullable Info asn;
     private int suppressed;
 
     private Burst(final Instant start, final Entry first, final String network) {
       this.start = start;
+      this.asn = first.verdict().asn();
       this.decision = first.decision();
       this.basis = first.verdict().basis().label();
       this.ipClass = first.verdict().ipClass() == null ? "none" : first.verdict().ipClass().key();
@@ -258,6 +274,7 @@ public final class AdmissionJournal {
       Entry.append(line, "suppressed", Integer.toString(this.suppressed));
       Entry.append(line, "since", this.start.toString());
       Entry.append(line, "window_s", Long.toString(AGGREGATION_WINDOW.toSeconds()));
+      Entry.appendAsn(line, this.asn);
       return line.toString().trim();
     }
   }
@@ -273,7 +290,8 @@ public final class AdmissionJournal {
   private boolean claimFullLine(final Entry entry) {
     final InetAddress judged = entry.verdict().judged();
     final Verdict.Basis basis = entry.verdict().basis();
-    if ((basis != Verdict.Basis.LISTED && basis != Verdict.Basis.RATE_NETWORK) || judged == null) {
+    if ((basis != Verdict.Basis.LISTED && basis != Verdict.Basis.RATE_NETWORK
+        && basis != Verdict.Basis.ASN_KEYWORD) || judged == null) {
       return true;
     }
     final String network = Networks.of(judged, Networks.AGGREGATE_V4, Networks.AGGREGATE_V6);

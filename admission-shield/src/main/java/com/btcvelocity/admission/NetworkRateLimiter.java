@@ -22,6 +22,7 @@ import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Predicate;
 
 /**
  * Bounds how often one network may attempt to connect, with a token bucket per network.
@@ -45,8 +46,8 @@ import java.util.concurrent.atomic.LongAdder;
  * <p>Safe to call from several threads (Velocity delivers events concurrently); one lock guards
  * the table and each call holds it for a few arithmetic operations.
  *
- * <p>An ASN-based bound would be a second instance with another {@link Grouping} and its own
- * settings; nothing here knows what a network is made of.
+ * <p>Nothing here knows what a network is made of: {@link Grouping#byHostingAsn} is the second
+ * grouping, selected by {@code network-rate.group-hosting-by-asn}.
  */
 public final class NetworkRateLimiter {
 
@@ -71,6 +72,26 @@ public final class NetworkRateLimiter {
      */
     static Grouping byPrefix(final int ipv4Prefix, final int ipv6Prefix) {
       return address -> Networks.of(address, ipv4Prefix, ipv6Prefix);
+    }
+
+    /**
+     * Counts the addresses of a hosting autonomous system as one network, and every other address
+     * as the fallback does. A wave rented from a provider arrives from many of its prefixes at
+     * once; counted by prefix, each stays under the limit.
+     *
+     * <p>Only systems the predicate calls hosting are grouped: a residential or mobile operator is
+     * one system too, and a bucket for its millions of subscribers would starve them all.
+     *
+     * @param asn where the system of an address is found
+     * @param hosting whether a system is one whose addresses share a bucket
+     * @param fallback what groups the addresses that do not
+     * @return the grouping; its keys for a system are {@code AS<number>}, which no prefix key is
+     */
+    static Grouping byHostingAsn(final AsnLookup asn,
+        final Predicate<AsnDatabase.Info> hosting, final Grouping fallback) {
+      return address -> asn.lookup(address).filter(hosting)
+          .map(info -> "AS" + info.number())
+          .orElseGet(() -> fallback.keyOf(address));
     }
   }
 

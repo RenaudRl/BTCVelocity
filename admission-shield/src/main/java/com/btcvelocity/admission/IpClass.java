@@ -23,9 +23,10 @@ import java.util.Optional;
 /**
  * The classes of address a list can put an address in.
  *
- * <p>Both are membership of a public list, not a score, and both are refused: they barely overlap
- * with a home or a mobile subscription. Any other class a future list might carry belongs in
- * observation only, until its false positives have been measured.
+ * <p>All three are membership of a public list or of a short list of systems the staff chose, not
+ * a score, and all three are refused: they barely overlap with a home or a mobile subscription.
+ * Any other class a future list might carry belongs in observation only, until its false positives
+ * have been measured.
  */
 public enum IpClass {
 
@@ -33,7 +34,13 @@ public enum IpClass {
   DATACENTER("datacenter", "ADM-VPN-DC"),
 
   /** A Tor exit node (FireHOL {@code tor_exits}). */
-  TOR("tor", "ADM-VPN-TOR");
+  TOR("tor", "ADM-VPN-TOR"),
+
+  /**
+   * An autonomous system the staff denies ({@code asn.deny-asns}, from the iptoasn.com database).
+   * Not a list: it has its own mode and no address list may be configured with this class.
+   */
+  ASN("asn", "ADM-VPN-ASN");
 
   private final String key;
   private final String causeCode;

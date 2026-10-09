@@ -56,6 +56,7 @@ public final class AdmissionEngine {
   private final AdmissionConfig config;
   private final IpClassifier classifier;
   private final IpClassifier shadow;
+  private final AsnLookup asn;
   private final NetworkRateLimiter rate;
 
   /**
@@ -90,10 +91,36 @@ public final class AdmissionEngine {
    */
   public AdmissionEngine(final AdmissionConfig config, final IpClassifier classifier,
       final IpClassifier shadow, final Clock clock) {
+    this(config, classifier, shadow, clock, AsnLookup.NONE, AsnLookup.NONE);
+  }
+
+  /**
+   * Creates the engine, with the IP-to-ASN database.
+   *
+   * <p>The denied systems ({@code asn.deny-asns}) are consulted after the lists: an address a list
+   * names keeps the list's class, and the system is only added to its verdict.
+   *
+   * @param config the settings
+   * @param classifier where an address is looked up in the lists in use
+   * @param shadow what the new list versions in quarantine would say; never refuses anybody
+   * @param clock the time the per-network bound counts attempts in
+   * @param asn the database in use: names the system of the verdicts that are written down, feeds
+   *     the keyword signal and the grouping of the per-network bound
+   * @param asnShadow the database version in quarantine, if any; never refuses anybody
+   */
+  public AdmissionEngine(final AdmissionConfig config, final IpClassifier classifier,
+      final IpClassifier shadow, final Clock clock, final AsnLookup asn,
+      final AsnLookup asnShadow) {
     this.config = config;
-    this.classifier = classifier;
-    this.shadow = shadow;
-    this.rate = new NetworkRateLimiter(config.networkRate(), clock);
+    this.classifier = classifier.orElse(new AsnClassifier(asn, config.asn()));
+    this.shadow = shadow.orElse(new AsnClassifier(asnShadow, config.asn()));
+    this.asn = asn;
+    NetworkRateLimiter.Grouping grouping = NetworkRateLimiter.Grouping.byPrefix(
+        config.networkRate().ipv4Prefix(), config.networkRate().ipv6Prefix());
+    if (config.networkRate().groupHostingByAsn()) {
+      grouping = NetworkRateLimiter.Grouping.byHostingAsn(asn, config.asn()::isHosting, grouping);
+    }
+    this.rate = new NetworkRateLimiter(config.networkRate(), clock, grouping);
   }
 
   /**
@@ -135,6 +162,33 @@ public final class AdmissionEngine {
 
   private Verdict decide(final Attempt attempt, final Phase phase,
       final IpClassifier lists) {
+    return named(decideOn(attempt, phase, lists));
+  }
+
+  /** A verdict that gets written down says which autonomous system the address belongs to. */
+  private Verdict named(final Verdict verdict) {
+    if (verdict.asn() != null || verdict.judged() == null || !verdict.isJournaled()) {
+      return verdict;
+    }
+    return this.asn.lookup(verdict.judged()).map(verdict::withAsn).orElse(verdict);
+  }
+
+  /**
+   * The signal for the staff: the address is in no list, but the name of its autonomous system
+   * holds one of the configured keywords.
+   */
+  private Optional<Verdict> keywordSignal(final InetAddress judged, final Origin origin) {
+    if (this.config.asn().observeKeywords().isEmpty()) {
+      return Optional.empty();
+    }
+    return this.asn.lookup(judged)
+        .filter(info -> this.config.asn().keywordIn(info.name()).isPresent())
+        .map(info -> new Verdict(Action.ADMIT, Basis.ASN_KEYWORD, origin, judged, null, null,
+            info));
+  }
+
+  private Verdict decideOn(final Attempt attempt, final Phase phase,
+      final IpClassifier lists) {
     InetAddress judged = attempt.remote();
     Origin origin = Origin.DIRECT;
     if (this.config.geyserAddresses().contains(attempt.remote())) {
@@ -159,6 +213,12 @@ public final class AdmissionEngine {
 
     final Optional<IpClassifier.Match> match = lists.classify(judged);
     if (match.isEmpty()) {
+      if (origin != Origin.GEYSER_ADDRESS_NOT_FLOODGATE) {
+        final Optional<Verdict> signal = keywordSignal(judged, origin);
+        if (signal.isPresent()) {
+          return signal.get();
+        }
+      }
       final Basis basis =
           origin == Origin.GEYSER_ADDRESS_NOT_FLOODGATE ? Basis.GEYSER_ADDRESS_NOT_FLOODGATE
               : Basis.CLEAN;
@@ -180,8 +240,9 @@ public final class AdmissionEngine {
       return new Verdict(Action.ADMIT, Basis.EXEMPT_PLAYER, origin, judged, ipClass, sourceId);
     }
 
-    final Action action =
-        this.config.mode() == AdmissionConfig.Mode.ENFORCE ? Action.REFUSE : Action.OBSERVE;
+    final AdmissionConfig.Mode mode =
+        ipClass == IpClass.ASN ? this.config.asnMode() : this.config.mode();
+    final Action action = mode == AdmissionConfig.Mode.ENFORCE ? Action.REFUSE : Action.OBSERVE;
     return new Verdict(action, Basis.LISTED, origin, judged, ipClass, sourceId);
   }
 
@@ -303,9 +364,8 @@ public final class AdmissionEngine {
     return spared ? Optional.empty() : network;
   }
 
-  private static Verdict rateVerdict(final Action action, final Basis basis,
-      final Attempt attempt) {
-    return new Verdict(action, basis, Origin.DIRECT, attempt.remote(), null, null);
+  private Verdict rateVerdict(final Action action, final Basis basis, final Attempt attempt) {
+    return named(new Verdict(action, basis, Origin.DIRECT, attempt.remote(), null, null));
   }
 
   private static Verdict stronger(final Verdict first, final Verdict second) {

@@ -20,6 +20,7 @@ package com.btcvelocity.admission;
 import com.velocitypowered.api.command.SimpleCommand;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 
@@ -39,6 +40,7 @@ public final class AdmissionCommand implements SimpleCommand {
   private final ListStore store;
   private final AdmissionConfig config;
   private final NetworkRateLimiter rate;
+  private final AsnStore asn;
 
   /**
    * Creates the command.
@@ -47,13 +49,15 @@ public final class AdmissionCommand implements SimpleCommand {
    * @param store the lists in memory
    * @param config the settings in force
    * @param rate the per-network bound on connection attempts
+   * @param asn the IP-to-ASN database in memory
    */
   public AdmissionCommand(final AdmissionJournal journal, final ListStore store,
-      final AdmissionConfig config, final NetworkRateLimiter rate) {
+      final AdmissionConfig config, final NetworkRateLimiter rate, final AsnStore asn) {
     this.journal = journal;
     this.store = store;
     this.config = config;
     this.rate = rate;
+    this.asn = asn;
   }
 
   @Override
@@ -61,7 +65,10 @@ public final class AdmissionCommand implements SimpleCommand {
     final String[] arguments = invocation.arguments();
     final String subcommand = arguments.length == 0 ? "" : arguments[0].toLowerCase(Locale.ROOT);
     if (subcommand.equals("why") && arguments.length == 2) {
-      for (String line : WhyReport.explain(arguments[1], this.journal, this.store)) {
+      final IpClassifier classifier =
+          this.store.orElse(new AsnClassifier(this.asn, this.config.asn()));
+      for (String line : WhyReport.explain(arguments[1], this.journal, classifier, this.asn,
+          this.config.asn())) {
         invocation.source().sendMessage(Component.text(line, NamedTextColor.GRAY));
       }
     } else if (subcommand.equals("status") && arguments.length == 1) {
@@ -103,8 +110,49 @@ public final class AdmissionCommand implements SimpleCommand {
           + " joueur(s) refusé(s) en plus (seuil " + this.config.quarantineMaxExtraPlayers()
           + ").");
     }
+    lines.addAll(asnStatus(this.config, this.asn));
     lines.add(rateStatus(this.config, this.rate));
     lines.addAll(exemptionStatus(this.config.exemptions()));
+    return lines;
+  }
+
+  /**
+   * What the module knows of autonomous systems: the database in use and its size, the version
+   * waiting in quarantine if any, and what the {@code asn} settings do with it.
+   *
+   * @param config the settings in force
+   * @param asn the database in memory
+   * @return the lines to show
+   */
+  static List<String> asnStatus(final AdmissionConfig config, final AsnStore asn) {
+    final AsnSettings settings = config.asn();
+    final List<String> lines = new java.util.ArrayList<>();
+    if (!settings.enabled()) {
+      lines.add("Base IP-vers-ASN : désactivée (asn.enabled: false).");
+      return lines;
+    }
+    final Optional<AsnStore.Loaded> current = asn.current();
+    if (current.isEmpty()) {
+      lines.add("Base IP-vers-ASN : AUCUNE chargée : les systèmes autonomes ne sont pas nommés"
+          + " et asn.deny-asns ne refuse rien.");
+    } else {
+      final AsnDatabase database = current.get().database();
+      lines.add("Base IP-vers-ASN (iptoasn.com, domaine public) : " + current.get().validLines()
+          + " lignes, " + database.ipv4RangeCount() + " plages IPv4, " + database.ipv6RangeCount()
+          + " plages IPv6, " + database.systemCount() + " systèmes, "
+          + (database.approximateBytes() >> 20) + " Mio, chargée " + current.get().loadedAt()
+          + ".");
+    }
+    asn.waitingStatus().ifPresent(waiting -> lines.add(AsnSettings.SOURCE_ID
+        + " : nouvelle version (" + waiting.pending().loaded().validLines()
+        + " lignes) en quarantaine jusqu'à " + waiting.pending().releaseAt() + ", "
+        + waiting.extraPlayers() + " joueur(s) refusé(s) en plus (seuil "
+        + config.quarantineMaxExtraPlayers() + ")."));
+    lines.add("ASN (" + config.asnMode().name().toLowerCase(Locale.ROOT) + ") : "
+        + settings.denyAsns().size() + " AS refusé(s) (code " + IpClass.ASN.causeCode() + "), "
+        + settings.observeKeywords().size() + " mot(s)-clé(s) d'observation ; débit regroupé par"
+        + " AS d'hébergement : " + (config.networkRate().groupHostingByAsn() ? "oui" : "non")
+        + ".");
     return lines;
   }
 

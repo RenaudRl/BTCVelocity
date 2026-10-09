@@ -53,11 +53,12 @@ exemptions:
   #    expires: 2026-12-31
 
 # Shown to a refused player, MiniMessage format. {code} is replaced by the cause code
-# (ADM-VPN-DC for datacenter, ADM-VPN-TOR for Tor, ADM-RATE-NET for too many attempts from one
-# network), which is also in the journal line.
+# (ADM-VPN-DC for datacenter, ADM-VPN-TOR for Tor, ADM-VPN-ASN for a denied autonomous system,
+# ADM-RATE-NET for too many attempts from one network), which is also in the journal line.
 messages:
   datacenter: "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un réseau d'hébergement ou de VPN. Si vous n'utilisez pas de VPN, contactez le staff avec le code <white>{code}</white>.</gray>"
   tor: "<red>Connexion refusée.</red>\n<gray>Les connexions depuis le réseau Tor ne sont pas acceptées. Contactez le staff avec le code <white>{code}</white>.</gray>"
+  asn: "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un fournisseur d'hébergement ou de VPN. Si vous n'utilisez pas de VPN, contactez le staff avec le code <white>{code}</white>.</gray>"
   network-rate: "<red>Connexion refusée.</red>\n<gray>Trop de tentatives de connexion depuis votre réseau. Patientez quelques secondes puis réessayez. Si cela persiste, contactez le staff avec le code <white>{code}</white>.</gray>"
 
 # BOUND ON CONNECTION ATTEMPTS PER NETWORK (Sentinel 13.4). Independent of the lists above.
@@ -97,6 +98,45 @@ network-rate:
   # a forgotten network starts again with a full bucket: pressure on the table lets attempts
   # through, it never refuses an innocent network.
   max-networks: 20000
+  # GROUP A HOSTING PROVIDER BY ITS AUTONOMOUS SYSTEM. A bot wave rented from one provider arrives
+  # from many of its networks at once; counted per /24 each stays under the limit. With true, the
+  # addresses of a system listed in asn.deny-asns, or whose name holds an asn.observe-keywords word,
+  # share ONE bucket "AS<number>" (same attempts / burst as above). Every other address, a system
+  # that is not hosting included, keeps its /24 or /48: a residential or mobile operator is one
+  # system too, and one bucket for its subscribers would starve them. Needs asn.enabled.
+  # Off by default: first see in the journal (asn=, as_name=) which systems the waves come from.
+  group-hosting-by-asn: false
+
+# AUTONOMOUS SYSTEMS (Sentinel 13.2). Which operator announces an address, from the IP-to-ASN table
+# of iptoasn.com (public domain, PDDL v1.0; MaxMind GeoLite2 was refused for its licence). It is
+# downloaded in the same task as the lists below, with the same safeguards: a bounded size, the last
+# good version kept on any failure, the embedded baseline for a first load, a bounded variation
+# between two versions, and the quarantine of lists.quarantine-hours when deny-asns is not empty.
+# The table (about 14 MiB in memory, read in 1.5 s) is searched by bisection; nothing leaves the
+# proxy. Whatever the settings below, a journaled decision carries `asn=` and `as_name=` when the
+# table knows the address, and /admission why <ip> names the system.
+asn:
+  # false : no download, no lookup; the journal has no asn= field and the rest of this section does
+  # nothing.
+  enabled: true
+  # observe : journal what deny-asns would refuse (decision=observed) and let everybody in.
+  # enforce : refuse the systems of deny-asns (ADM-VPN-ASN). The module-wide `mode: observe` also
+  # holds this back. Default observe: nothing is denied until a person has chosen what to deny.
+  mode: observe
+  # AS numbers refused like a datacenter list, e.g. [16276, "AS14061"]. EMPTY by default: an
+  # operator is added after /admission why shows it is hosting. Exemptions apply as for a list.
+  deny-asns: []
+  # Words (any case) looked for in the NAME of the system. A hit is journaled (basis=asn-keyword)
+  # and told to the staff online; the connection is never refused for it. E.g. ["hosting", "vpn"].
+  # EMPTY by default: a word such as "cloud" also names legitimate operators.
+  observe-keywords: []
+  # The public download. https only.
+  url: https://iptoasn.com/data/ip2asn-combined.tsv.gz
+  # The file weighs 9 MB (October 2026); a longer download is cut and thrown away.
+  max-download-megabytes: 32
+  # The file has 723 000 rows (October 2026). More than this, or (without a previous version) a
+  # count far from that, and the file is thrown away.
+  max-rows: 2000000
 
 lists:
   # How often the lists are downloaded again. A failed download keeps the last valid list.

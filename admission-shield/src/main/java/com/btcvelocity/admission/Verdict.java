@@ -30,6 +30,8 @@ import org.jspecify.annotations.Nullable;
  *     is never judged as a Bedrock player's)
  * @param ipClass the class the address was found in, or {@code null}
  * @param sourceId the list that named that class, or {@code null}
+ * @param asn the autonomous system of the judged address, when the database knows it; carried by
+ *     the verdicts that are written down, so the journal and {@code /admission why} can name it
  */
 public record Verdict(
     Action action,
@@ -37,7 +39,35 @@ public record Verdict(
     Origin origin,
     @Nullable InetAddress judged,
     @Nullable IpClass ipClass,
-    @Nullable String sourceId) {
+    @Nullable String sourceId,
+    AsnDatabase.@Nullable Info asn) {
+
+  /**
+   * Creates a verdict that does not name an autonomous system.
+   *
+   * @param action what to do with the connection
+   * @param basis why
+   * @param origin how the connection reached the proxy
+   * @param judged the address that was judged, or {@code null}
+   * @param ipClass the class the address was found in, or {@code null}
+   * @param sourceId the list that named that class, or {@code null}
+   */
+  public Verdict(final Action action, final Basis basis, final Origin origin,
+      final @Nullable InetAddress judged, final @Nullable IpClass ipClass,
+      final @Nullable String sourceId) {
+    this(action, basis, origin, judged, ipClass, sourceId, null);
+  }
+
+  /**
+   * The same verdict, naming the autonomous system of the judged address.
+   *
+   * @param system the system, or {@code null} to leave it unnamed
+   * @return the verdict
+   */
+  public Verdict withAsn(final AsnDatabase.@Nullable Info system) {
+    return new Verdict(this.action, this.basis, this.origin, this.judged, this.ipClass,
+        this.sourceId, system);
+  }
 
   /** The cause code of a connection turned away for coming too often from one network. */
   public static final String RATE_NETWORK_CODE = "ADM-RATE-NET";
@@ -100,7 +130,12 @@ public record Verdict(
     /** Listed, and a nominative exemption might cover the player once authenticated. */
     AWAITING_IDENTITY("awaiting-identity"),
     /** Too many connection attempts from the same network in a short time (not a list). */
-    RATE_NETWORK("rate-network");
+    RATE_NETWORK("rate-network"),
+    /**
+     * The name of the address's autonomous system holds one of {@code asn.observe-keywords}. A
+     * signal for the staff, never a refusal: the connection is admitted.
+     */
+    ASN_KEYWORD("asn-keyword");
 
     private final String label;
 
@@ -130,7 +165,7 @@ public record Verdict(
   public boolean isJournaled() {
     return switch (this.basis) {
       case LISTED, EXEMPT_NETWORK, EXEMPT_PLAYER, BEDROCK_IP_UNKNOWN,
-          GEYSER_ADDRESS_NOT_FLOODGATE, RATE_NETWORK -> true;
+          GEYSER_ADDRESS_NOT_FLOODGATE, RATE_NETWORK, ASN_KEYWORD -> true;
       case CLEAN, GEYSER_ORIGIN, AWAITING_IDENTITY -> false;
     };
   }

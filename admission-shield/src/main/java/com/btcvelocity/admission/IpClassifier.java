@@ -40,4 +40,14 @@ public interface IpClassifier {
    * @return the class and list that matched, or empty when no list knows the address
    */
   Optional<Match> classify(InetAddress address);
+
+  /**
+   * This classifier first, then another for the addresses this one does not know.
+   *
+   * @param other consulted when this classifier answers empty
+   * @return the combined classifier
+   */
+  default IpClassifier orElse(final IpClassifier other) {
+    return address -> classify(address).or(() -> other.classify(address));
+  }
 }

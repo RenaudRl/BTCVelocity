@@ -64,6 +64,7 @@ import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
  * @param quarantineMaxExtraPlayers the most authenticated players a version may have refused in
  *     addition during its quarantine and still be promoted
  * @param networkRate the bound on connection attempts per network
+ * @param asn the IP-to-ASN database and what is done with the system of an address
  */
 public record AdmissionConfig(
     Mode mode,
@@ -78,7 +79,8 @@ public record AdmissionConfig(
     boolean embeddedBaseline,
     Duration quarantine,
     int quarantineMaxExtraPlayers,
-    NetworkRateSettings networkRate) {
+    NetworkRateSettings networkRate,
+    AsnSettings asn) {
 
   /** The default ceiling on the entries of one list, well above the largest default list. */
   public static final int DEFAULT_MAX_ENTRIES = 500_000;
@@ -102,6 +104,10 @@ public record AdmissionConfig(
 
   private static final String DEFAULT_DATACENTER_MESSAGE =
       "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un réseau"
+          + " d'hébergement ou de VPN. Si vous n'utilisez pas de VPN, contactez le staff"
+          + " avec le code <white>{code}</white>.</gray>";
+  private static final String DEFAULT_ASN_MESSAGE =
+      "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un fournisseur"
           + " d'hébergement ou de VPN. Si vous n'utilisez pas de VPN, contactez le staff"
           + " avec le code <white>{code}</white>.</gray>";
   private static final String DEFAULT_TOR_MESSAGE =
@@ -276,7 +282,8 @@ public record AdmissionConfig(
             .getInt(DEFAULT_QUARANTINE_MAX_EXTRA_PLAYERS)),
         NetworkRateSettings.parse(root.node("network-rate"),
             root.node("messages", "network-rate").getString(NetworkRateSettings.DEFAULT_MESSAGE),
-            warnings));
+            warnings),
+        AsnSettings.parse(root.node("asn"), warnings));
   }
 
   /**
@@ -313,13 +320,27 @@ public record AdmissionConfig(
   }
 
   /**
+   * The mode the refusal of denied autonomous systems runs in. The module-wide {@code observe} is a
+   * dry run for everything the module does, so it also holds this back.
+   *
+   * @return {@code observe} if either the module or {@code asn.mode} is in {@code observe}
+   */
+  public Mode asnMode() {
+    return this.mode == Mode.OBSERVE ? Mode.OBSERVE : this.asn.mode();
+  }
+
+  /**
    * The mode in force for the rule behind a verdict, as the journal states it.
    *
    * @param verdict the verdict
-   * @return the network bound's mode for a rate verdict, the module's otherwise
+   * @return the network bound's mode for a rate verdict, the denied systems' mode for one of them,
+   *     the module's otherwise
    */
   public Mode modeFor(final Verdict verdict) {
-    return verdict.basis() == Verdict.Basis.RATE_NETWORK ? rateMode() : this.mode;
+    if (verdict.basis() == Verdict.Basis.RATE_NETWORK) {
+      return rateMode();
+    }
+    return verdict.ipClass() == IpClass.ASN ? asnMode() : this.mode;
   }
 
   private static Mode parseMode(final String value, final Consumer<String> warnings) {
@@ -353,6 +374,7 @@ public record AdmissionConfig(
     messages.put(IpClass.DATACENTER,
         node.node("datacenter").getString(DEFAULT_DATACENTER_MESSAGE));
     messages.put(IpClass.TOR, node.node("tor").getString(DEFAULT_TOR_MESSAGE));
+    messages.put(IpClass.ASN, node.node("asn").getString(DEFAULT_ASN_MESSAGE));
     return Map.copyOf(messages);
   }
 
@@ -366,8 +388,8 @@ public record AdmissionConfig(
       final String url = item.node("url").getString("");
       final String file = item.node("file").getString("");
       final URI uri = parseHttps(url);
-      if (ipClass == null || uri == null || !SAFE_FILE_NAME.matcher(file).matches()
-          || file.contains("..")) {
+      if (ipClass == null || ipClass == IpClass.ASN || uri == null
+          || !SAFE_FILE_NAME.matcher(file).matches() || file.contains("..")) {
         warnings.accept("lists.sources." + id + ": needs class (datacenter|tor), an https url"
             + " and a plain file name; ignored");
         continue;

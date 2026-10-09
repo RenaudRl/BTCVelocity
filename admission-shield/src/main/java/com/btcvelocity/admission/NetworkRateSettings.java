@@ -48,6 +48,11 @@ import org.spongepowered.configurate.ConfigurationNode;
  * @param maxNetworks the most networks followed at once; the least recently seen is forgotten
  *     first, and a forgotten network starts again with a full bucket
  * @param message the MiniMessage text shown to a refused player, with {@code {code}} to replace
+ * @param groupHostingByAsn whether the addresses of a hosting autonomous system (one of
+ *     {@code asn.deny-asns}, or named by one of {@code asn.observe-keywords}) share one bucket per
+ *     system instead of one per /24: a wave spread over a provider's many networks is then
+ *     counted as the one wave it is. Off by default; it needs the ASN database, and an address the
+ *     database does not know, or a system that is not hosting, keeps its prefix
  */
 public record NetworkRateSettings(
     boolean enabled,
@@ -58,7 +63,28 @@ public record NetworkRateSettings(
     int ipv4Prefix,
     int ipv6Prefix,
     int maxNetworks,
-    String message) {
+    String message,
+    boolean groupHostingByAsn) {
+
+  /**
+   * Creates settings that group by prefix only.
+   *
+   * @param enabled whether attempts are counted at all
+   * @param mode {@code observe} or {@code enforce}
+   * @param attempts the sustained attempts allowed per {@code window}
+   * @param window the span {@code attempts} is counted over
+   * @param burst the most attempts a quiet network may make at once
+   * @param ipv4Prefix the IPv4 prefix length that makes a network
+   * @param ipv6Prefix the IPv6 prefix length that makes a network
+   * @param maxNetworks the most networks followed at once
+   * @param message the MiniMessage text shown to a refused player
+   */
+  public NetworkRateSettings(final boolean enabled, final AdmissionConfig.Mode mode,
+      final int attempts, final Duration window, final int burst, final int ipv4Prefix,
+      final int ipv6Prefix, final int maxNetworks, final String message) {
+    this(enabled, mode, attempts, window, burst, ipv4Prefix, ipv6Prefix, maxNetworks, message,
+        false);
+  }
 
   static final int DEFAULT_ATTEMPTS = 10;
   static final int DEFAULT_WINDOW_SECONDS = 10;
@@ -111,7 +137,8 @@ public record NetworkRateSettings(
             warnings),
         within(section, "max-networks", DEFAULT_MAX_NETWORKS, MIN_MAX_NETWORKS, MAX_MAX_NETWORKS,
             warnings),
-        message);
+        message,
+        section.node("group-hosting-by-asn").getBoolean(false));
   }
 
   private static AdmissionConfig.Mode parseMode(final String value,

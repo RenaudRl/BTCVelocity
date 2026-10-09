@@ -41,19 +41,42 @@ public final class StaffAlerts {
 
   private final Clock clock;
   private final Consumer<String> sink;
+  private final String single;
+  private final String plural;
   private @Nullable Instant lastSent;
   private int pending;
   private AdmissionJournal.@Nullable Entry latest;
 
   /**
-   * Creates the alerts.
+   * Creates the alerts for refusals.
    *
    * @param clock the source of "now"
    * @param sink receives each message, to be shown to the staff online
    */
   public StaffAlerts(final Clock clock, final Consumer<String> sink) {
+    this(clock, sink, "[Admission] Refus : ", "refus");
+  }
+
+  private StaffAlerts(final Clock clock, final Consumer<String> sink, final String single,
+      final String plural) {
     this.clock = clock;
     this.sink = sink;
+    this.single = single;
+    this.plural = plural;
+  }
+
+  /**
+   * Creates the alerts for the autonomous systems whose name holds an observation keyword. They
+   * are a signal and not a refusal, so they get their own instance (their own window: a refusal
+   * is never held back by a signal) and their own words.
+   *
+   * @param clock the source of "now"
+   * @param sink receives each message, to be shown to the staff online
+   * @return the alerts
+   */
+  public static StaffAlerts forAsnKeywords(final Clock clock, final Consumer<String> sink) {
+    return new StaffAlerts(clock, sink, "[Admission] Signal ASN (observation, non refusé) : ",
+        "signaux ASN (observation, non refusés)");
   }
 
   /**
@@ -87,8 +110,8 @@ public final class StaffAlerts {
       return null;
     }
     final String message = this.pending == 1
-        ? "[Admission] Refus : " + describe(this.latest)
-        : "[Admission] " + this.pending + " refus depuis " + WINDOW.toSeconds()
+        ? this.single + describe(this.latest)
+        : "[Admission] " + this.pending + " " + this.plural + " depuis " + WINDOW.toSeconds()
             + " s, dernier : " + describe(this.latest);
     this.pending = 0;
     this.latest = null;
@@ -112,7 +135,14 @@ public final class StaffAlerts {
         + ", " + (verdict.judged() == null ? "ip inconnue"
             : Networks.of(verdict.judged(), Networks.STAFF_V4, Networks.STAFF_V6))
         + ", " + (verdict.ipClass() == null ? "aucune classe" : verdict.ipClass().key())
-        + ", " + (entry.code() == null ? "sans code" : entry.code()) + ")."
+        + ", " + (entry.code() == null ? "sans code" : entry.code())
+        + asnSuffix(verdict.asn()) + ")."
         + " /admission why pour le détail.";
+  }
+
+  /** The system, when known; its name is the registry's, written out like the player's. */
+  private static String asnSuffix(final AsnDatabase.@Nullable Info asn) {
+    return asn == null ? "" : ", AS" + asn.number() + " "
+        + AdmissionJournal.value(asn.name()).replace("§", "\\u00A7");
   }
 }
