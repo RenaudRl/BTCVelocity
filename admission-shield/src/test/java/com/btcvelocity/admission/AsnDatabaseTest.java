@@ -136,7 +136,12 @@ class AsnDatabaseTest {
 
     assertEquals(4_294_967_295L, find(database, "10.0.0.1").orElseThrow().number());
     assertEquals(3_000_000_000L, find(database, "10.0.1.1").orElseThrow().number());
-    assertEquals(Set.of(4_294_967_295L), Set.of(find(database, "10.0.0.1").orElseThrow().number()));
+    // The same numbers must survive the other doors too: the per-system tallies are keyed by them.
+    assertEquals(Set.of(4_294_967_295L, 3_000_000_000L), database.systemsWhere(info -> true));
+    assertEquals(256, database.ipv4AddressesOf(Set.of(4_294_967_295L)));
+    assertEquals(256, database.ipv4AddressesOf(Set.of(3_000_000_000L)));
+    assertEquals(0, database.ipv4AddressesOf(Set.of(-1L, 1L)),
+        "a signed copy of the number is another system");
   }
 
   @Test

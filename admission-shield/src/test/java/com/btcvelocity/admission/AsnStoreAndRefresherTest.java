@@ -133,6 +133,63 @@ class AsnStoreAndRefresherTest {
     assertFalse(store.coversMoreThan(64500, 1.0), "the new database does not know the system");
   }
 
+  private static AsnStore.Loaded version(final long number, final String name) {
+    final AsnDatabase.Builder builder = AsnDatabase.builder();
+    builder.addIpv4(0xC0000200L, 0xC00002FFL, number, "NL", name);
+    return new AsnStore.Loaded(builder.build(), 1, 0, java.time.Instant.EPOCH);
+  }
+
+  @Test
+  void readsDuringADatabaseSwapAlwaysSeeOneWholeVersion() throws Exception {
+    final AsnStore.Loaded first = version(64496, "Alpha Hosting BV");
+    final AsnStore.Loaded second = version(64999, "Beta Version SA");
+    final AsnStore store = store(AsnSettings.defaults());
+    store.install(first);
+    final int readers = 4;
+    final int swaps = 20_000;
+    final java.util.concurrent.atomic.AtomicBoolean swapping =
+        new java.util.concurrent.atomic.AtomicBoolean(true);
+    final java.util.concurrent.atomic.AtomicLong lookups =
+        new java.util.concurrent.atomic.AtomicLong();
+    final java.util.concurrent.ExecutorService pool =
+        java.util.concurrent.Executors.newFixedThreadPool(readers);
+    final List<java.util.concurrent.Future<String>> verdicts = new ArrayList<>();
+    try {
+      for (int i = 0; i < readers; i++) {
+        verdicts.add(pool.submit(() -> {
+          while (swapping.get()) {
+            final Optional<AsnDatabase.Info> info = store.lookup(ALPHA);
+            lookups.incrementAndGet();
+            if (info.isEmpty()) {
+              return "a lookup found nothing in the middle of a swap";
+            }
+            final boolean whole = info.get().number() == 64496
+                && "Alpha Hosting BV".equals(info.get().name())
+                || info.get().number() == 64999 && "Beta Version SA".equals(info.get().name());
+            if (!whole) {
+              return "a lookup mixed two versions: " + info.get();
+            }
+            if (store.coversMoreThan(64496, 1.0) && store.coversMoreThan(64999, 1.0)) {
+              return "the share answers came from two versions at once";
+            }
+          }
+          return "";
+        }));
+      }
+      for (int i = 0; i < swaps; i++) {
+        store.install(i % 2 == 0 ? second : first);
+      }
+    } finally {
+      swapping.set(false);
+      pool.shutdown();
+    }
+    for (java.util.concurrent.Future<String> verdict : verdicts) {
+      assertEquals("", verdict.get(30, java.util.concurrent.TimeUnit.SECONDS));
+    }
+    assertTrue(pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS));
+    assertTrue(lookups.get() > 0, "the readers did run while the swaps happened");
+  }
+
   @Test
   void aNonPublicAddressIsNeverGivenASystem() throws IOException {
     writeFile("10.0.0.0\t10.0.0.255\t64496\tNL\tPrivately announced\n");

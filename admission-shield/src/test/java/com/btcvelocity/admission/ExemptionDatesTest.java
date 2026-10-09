@@ -18,6 +18,7 @@
 package com.btcvelocity.admission;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,8 +27,12 @@ import com.btcvelocity.admission.Verdict.Basis;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.InetAddress;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -94,6 +99,46 @@ class ExemptionDatesTest {
     assertEquals(LocalDate.of(2026, 12, 31), players.get(0).expires());
     assertNull(players.get(1).reason());
     assertEquals(LocalDate.of(2027, 1, 15), players.get(1).expires());
+  }
+
+  /** An exemption ending on 2026-10-07, judged with a real clock set to the given instant. */
+  private static boolean networkHolds(final String instant, final ZoneId zone) {
+    final Exemptions exemptions = new Exemptions(List.of(),
+        List.of(new Exemptions.Network("203.0.113.0/28", listOf("203.0.113.0/28"), null,
+            LocalDate.of(2026, 10, 7))),
+        Clock.fixed(Instant.parse(instant), zone));
+    return exemptions.coversAddress(OFFICE);
+  }
+
+  @Test
+  void theLastValidDayHoldsUntilMidnightUtcAndNotOneSecondLonger() {
+    assertTrue(networkHolds("2026-10-07T00:00:00Z", ZoneOffset.UTC));
+    assertTrue(networkHolds("2026-10-07T23:59:59Z", ZoneOffset.UTC), "the very last second");
+    assertFalse(networkHolds("2026-10-08T00:00:00Z", ZoneOffset.UTC), "the first second after");
+  }
+
+  @Test
+  void theDayIsJudgedInUtcWhateverZoneTheClockCarries() {
+    // 12:00 UTC on the 7th is already the 8th at 01:00 in Auckland: still the last valid day.
+    assertTrue(networkHolds("2026-10-07T12:00:00Z", ZoneId.of("Pacific/Auckland")));
+    assertTrue(networkHolds("2026-10-07T23:30:00Z", ZoneId.of("Pacific/Auckland")),
+        "the 8th in Auckland, the 7th in UTC");
+    // 00:30 UTC on the 8th is still the 7th at 17:30 in Los Angeles: but in UTC it is over.
+    assertFalse(networkHolds("2026-10-08T00:30:00Z", ZoneId.of("America/Los_Angeles")));
+  }
+
+  @Test
+  void aPlayerEntryEndsAtTheSameMidnightAsANetworkOne() throws IOException {
+    final UUID uuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+    final Exemptions.Player player =
+        new Exemptions.Player("StaffMember", uuid, null, LocalDate.of(2026, 10, 7));
+
+    assertTrue(new Exemptions(List.of(player), List.of(),
+        Clock.fixed(Instant.parse("2026-10-07T23:59:59.999Z"), ZoneOffset.UTC))
+        .coversPlayer("StaffMember", uuid));
+    assertFalse(new Exemptions(List.of(player), List.of(),
+        Clock.fixed(Instant.parse("2026-10-08T00:00:00Z"), ZoneOffset.UTC))
+        .coversPlayer("StaffMember", uuid));
   }
 
   @Test
