@@ -89,7 +89,8 @@ class AdmissionConfigAndJournalTest {
     try (var stream = AdmissionConfig.class.getResourceAsStream("/config.yml")) {
       template = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
     }
-    final String uncommented = template
+    // A Windows checkout ships the template with CRLF; the replacements below assume LF.
+    final String uncommented = template.replace("\r\n", "\n")
         .replace("  players: []\n", "  players:\n")
         .replace("  #  - name:", "    - name:")
         .replace("  #    uuid:", "      uuid:");
