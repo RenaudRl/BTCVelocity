@@ -1,0 +1,118 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.github.retrooper",
+    "module": "packetevents-netty-common",
+    "version": "2.14.1",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.5.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 8,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "io.netty",
+          "module": "netty-all",
+          "version": {
+            "requires": "4.1.72.Final"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "packetevents-netty-common-2.14.1.jar",
+          "url": "packetevents-netty-common-2.14.1.jar",
+          "size": 14860,
+          "sha512": "51c67d45968427049154dc7175d558d9fd0812fbdb42d4ab3530322b23ea9db45163b6cac0ed88058f1eaa27cf20952bfe75f19e9737cded4d4a8d4299c635d4",
+          "sha256": "3f17a1f527145bc8719dba969038a3b34114d63964069ad1acf0f2a2139855ca",
+          "sha1": "c61c51cc3772b4a9eae8033837f227ec92eda128",
+          "md5": "a2bd27bcc5775efa2706c98a45da7f7e"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.version": 8,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "com.github.retrooper",
+          "module": "packetevents-api",
+          "version": {
+            "requires": "2.14.1"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "packetevents-netty-common-2.14.1.jar",
+          "url": "packetevents-netty-common-2.14.1.jar",
+          "size": 14860,
+          "sha512": "51c67d45968427049154dc7175d558d9fd0812fbdb42d4ab3530322b23ea9db45163b6cac0ed88058f1eaa27cf20952bfe75f19e9737cded4d4a8d4299c635d4",
+          "sha256": "3f17a1f527145bc8719dba969038a3b34114d63964069ad1acf0f2a2139855ca",
+          "sha1": "c61c51cc3772b4a9eae8033837f227ec92eda128",
+          "md5": "a2bd27bcc5775efa2706c98a45da7f7e"
+        }
+      ]
+    },
+    {
+      "name": "sourcesElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "packetevents-netty-common-2.14.1-sources.jar",
+          "url": "packetevents-netty-common-2.14.1-sources.jar",
+          "size": 12659,
+          "sha512": "8137c570beb1865fe1a82747262dd2f30235f641b6e84a41786a7106ab6d07e03edce02681ec353df855a59cae4857808e28c2ddafb8fbd10a2a61741b59a95f",
+          "sha256": "68aeb3b930349fe6f262f1b617e71758b62fc11066e3f2cd985eb49da8af73be",
+          "sha1": "2cf7503a1a647d9537e235ed9f8cfa6a35e1f13f",
+          "md5": "c4288575c0b963318f23f0b4d1f568e6"
+        }
+      ]
+    },
+    {
+      "name": "javadocElements",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "javadoc",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "packetevents-netty-common-2.14.1-javadoc.jar",
+          "url": "packetevents-netty-common-2.14.1-javadoc.jar",
+          "size": 4197113,
+          "sha512": "d90786221eb26df4533b5db4ed834f8600374e37f2b26e75c577faf658003c879467ad8bedcaee31ba2ac97acc6ee3015c48653e42bef8d8ab5e43a11a06f3fd",
+          "sha256": "a150c2cecf6e387ca38a26bf39d3a640fcf3dab390535582c0398f875902c7f8",
+          "sha1": "1b43565f0e44cc32459022920881c3e0500ec5fb",
+          "md5": "7a8173977781baa3bd75ce79f53f9149"
+        }
+      ]
+    }
+  ]
+}
