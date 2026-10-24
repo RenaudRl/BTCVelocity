@@ -170,6 +170,13 @@ public final class NativePermissionEvaluator {
     if (snapshot.primaryGroup != null && !snapshot.primaryGroup.isBlank()) {
       roots.add(snapshot.primaryGroup);
     }
+    // The base grade belongs to every subject, a never-seen one included: same rule as the Paper
+    // extension, otherwise the proxy would refuse what a backend grants to the same player.
+    for (NativePermissionSnapshot.Group group : snapshot.groups.values()) {
+      if (group != null && group.isDefault && group.name != null && !group.name.isBlank()) {
+        roots.add(group.name);
+      }
+    }
     roots.sort(String.CASE_INSENSITIVE_ORDER);
     for (String root : roots) {
       visitGroup(snapshot, root, visited, result);

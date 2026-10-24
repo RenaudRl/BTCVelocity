@@ -268,11 +268,17 @@ final class NativePermissionService implements AutoCloseable {
           statement.setString(1, subject.toString());
           try (ResultSet result = statement.executeQuery()) {
             if (!result.next()) {
-              return null;
+              final NativePermissionSnapshot unseen = neverSeen(subject, groupCatalog);
+              if (unseen == null) {
+                return null;
+              }
+              // putIfAbsent: a concurrent load of the same subject may already hold a real row.
+              final NativePermissionSnapshot previous = snapshots.putIfAbsent(subject, unseen);
+              return previous != null ? previous : unseen;
             }
             final NativePermissionSnapshot snapshot = GSON.fromJson(result.getString("payload"), NativePermissionSnapshot.class);
             snapshot.revision = Math.max(snapshot.revision, result.getLong("revision"));
-            normalize(snapshot, subject);
+            normalize(snapshot, subject, groupCatalog);
             snapshots.compute(subject, (key, previous) -> previous == null || snapshot.revision >= previous.revision ? snapshot : previous);
             return snapshots.get(subject);
           }
@@ -310,7 +316,30 @@ final class NativePermissionService implements AutoCloseable {
     return Map.copyOf(groups);
   }
 
-  private void normalize(final NativePermissionSnapshot snapshot, final UUID subject) {
+  /**
+   * Snapshot of a subject the database holds no row for, or {@code null} when it must stay unknown.
+   *
+   * <p>"No row" is not "no grade": the base group applies to a player nobody ever granted anything.
+   * Without a default group in the catalog the answer stays {@code null}, as before, so a catalog that
+   * is empty because it could not be read yet never caches a subject as grade-less.
+   */
+  static NativePermissionSnapshot neverSeen(
+      final UUID subject,
+      final Map<String, NativePermissionSnapshot.Group> catalog
+  ) {
+    if (catalog.values().stream().noneMatch(NativePermissionService::isDefaultGroup)) {
+      return null;
+    }
+    final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
+    normalize(snapshot, subject, catalog);
+    return snapshot;
+  }
+
+  static void normalize(
+      final NativePermissionSnapshot snapshot,
+      final UUID subject,
+      final Map<String, NativePermissionSnapshot.Group> catalog
+  ) {
     snapshot.subject = subject;
     if (snapshot.permissions == null) {
       snapshot.permissions = new java.util.ArrayList<>();
@@ -318,9 +347,21 @@ final class NativePermissionService implements AutoCloseable {
     if (snapshot.groups == null) {
       snapshot.groups = new HashMap<>();
     }
-    final Map<String, NativePermissionSnapshot.Group> merged = new HashMap<>(groupCatalog);
+    final Map<String, NativePermissionSnapshot.Group> merged = new HashMap<>(catalog);
     snapshot.groups.forEach((key, value) -> merged.put(key.toLowerCase(), value));
+    // A copy embedded in a stored row predates the flag or a later change of it: the catalog alone
+    // says which group is the base grade, as on the Paper side.
+    catalog.forEach((key, current) -> {
+      final NativePermissionSnapshot.Group embedded = merged.get(key);
+      if (embedded != null && embedded != current) {
+        embedded.isDefault = current.isDefault;
+      }
+    });
     snapshot.groups = merged;
+  }
+
+  private static boolean isDefaultGroup(final NativePermissionSnapshot.Group group) {
+    return group != null && group.isDefault;
   }
 
   private void handleInvalidation(final String payload) {
@@ -345,7 +386,10 @@ final class NativePermissionService implements AutoCloseable {
         // après un rafraîchissement échoué les ferait recharger contre le catalogue périmé.
         refreshGroupCatalog().thenAccept(refreshed -> {
           if (refreshed) {
-            snapshots.entrySet().removeIf(entry -> NativePermissionEvaluator.usesGroup(entry.getValue(), group));
+            // A group that just became the base grade is in no cached snapshot yet, yet applies to all.
+            final boolean becameDefault = isDefaultGroup(groupCatalog.get(group));
+            snapshots.entrySet().removeIf(entry ->
+                becameDefault || NativePermissionEvaluator.usesGroup(entry.getValue(), group));
           }
         });
       }
