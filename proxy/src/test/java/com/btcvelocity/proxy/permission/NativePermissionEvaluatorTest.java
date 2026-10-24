@@ -18,6 +18,9 @@
 package com.btcvelocity.proxy.permission;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.velocitypowered.api.permission.Tristate;
@@ -157,6 +160,96 @@ class NativePermissionEvaluatorTest {
     snapshot.directGroups = Set.of("admin");
 
     assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(snapshot, "btc.direct", Map.of(), 0L));
+  }
+
+  // --- base grade (task 11.A.13) -----------------------------------------------------------
+  // Each grade carries one witness node no other grade carries, so a positive decision can only
+  // come from that grade or from what it inherits: the same method as the Paper-side proof.
+
+  private static final String WITNESS_PLAYER = "btc.grade.witness.player";
+  private static final String WITNESS_STAFF = "btc.grade.witness.staff";
+
+  private static Map<String, NativePermissionSnapshot.Group> grades(final boolean playerIsDefault) {
+    final NativePermissionSnapshot.Group player = group("player", 0, node(WITNESS_PLAYER, true, 0, Map.of()));
+    player.isDefault = playerIsDefault;
+    final NativePermissionSnapshot.Group staff = group("staff", 100, node(WITNESS_STAFF, true, 0, Map.of()));
+    staff.inherits = Set.of("player");
+    return Map.of("player", player, "staff", staff);
+  }
+
+  @Test
+  void aSubjectWithNoGroupCarriesTheDefaultGroup() {
+    final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
+    snapshot.subject = UUID.randomUUID();
+    snapshot.groups = grades(true);
+
+    assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(snapshot, WITNESS_PLAYER, Map.of(), 0L));
+    assertEquals(Tristate.UNDEFINED, NativePermissionEvaluator.evaluate(snapshot, WITNESS_STAFF, Map.of(), 0L));
+    assertEquals(Map.of(WITNESS_PLAYER, true), NativePermissionEvaluator.permissionMap(snapshot, Map.of(), 0L));
+    assertTrue(NativePermissionEvaluator.usesGroup(snapshot, "player"),
+        "a default group is used by everyone, so its invalidation must evict every snapshot");
+  }
+
+  @Test
+  void withoutTheDefaultFlagTheSameSubjectCarriesNothing() {
+    final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
+    snapshot.subject = UUID.randomUUID();
+    snapshot.groups = grades(false);
+
+    assertEquals(Tristate.UNDEFINED, NativePermissionEvaluator.evaluate(snapshot, WITNESS_PLAYER, Map.of(), 0L));
+  }
+
+  /** The counter-proof of the task: a player the database has no row for must still carry `player`. */
+  @Test
+  void aPlayerTheDatabaseNeverSawCarriesTheDefaultGroup() {
+    final UUID neverSeen = UUID.randomUUID();
+
+    final NativePermissionSnapshot snapshot = NativePermissionService.neverSeen(neverSeen, grades(true));
+
+    assertNotNull(snapshot, "no row must not mean no snapshot once a base grade exists");
+    assertEquals(neverSeen, snapshot.subject);
+    assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(snapshot, WITNESS_PLAYER, Map.of(), 0L));
+    assertEquals(Tristate.UNDEFINED, NativePermissionEvaluator.evaluate(snapshot, WITNESS_STAFF, Map.of(), 0L));
+  }
+
+  /** Without a base grade (or without a readable catalog) the subject stays unknown, as before. */
+  @Test
+  void aNeverSeenPlayerStaysUnknownWithoutADefaultGroup() {
+    assertNull(NativePermissionService.neverSeen(UUID.randomUUID(), grades(false)));
+    assertNull(NativePermissionService.neverSeen(UUID.randomUUID(), Map.of()),
+        "an unreadable catalog looks empty: caching the subject as grade-less would outlive the outage");
+  }
+
+  @Test
+  void aHigherGradeKeepsTheBaseGradeWitnessWithoutDoubleCounting() {
+    final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
+    snapshot.subject = UUID.randomUUID();
+    snapshot.groups = grades(true);
+    snapshot.directGroups = Set.of("staff");
+
+    assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(snapshot, WITNESS_STAFF, Map.of(), 0L));
+    assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(snapshot, WITNESS_PLAYER, Map.of(), 0L));
+  }
+
+  /** A row saved before the flag existed embeds a copy of `player` that reads the flag as false. */
+  @Test
+  void theCatalogDecidesTheFlagOverAStaleEmbeddedCopy() {
+    final NativePermissionSnapshot stored = new NativePermissionSnapshot();
+    final NativePermissionSnapshot.Group stale = group("player", 0, node(WITNESS_PLAYER, true, 0, Map.of()));
+    stored.groups = new java.util.HashMap<>(Map.of("player", stale));
+
+    NativePermissionService.normalize(stored, UUID.randomUUID(), grades(true));
+
+    assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(stored, WITNESS_PLAYER, Map.of(), 0L));
+  }
+
+  /** Contract with the Paper writer: the group payload spells the flag `isDefault`; older ones omit it. */
+  @Test
+  void groupPayloadReadsTheDefaultFlagAndToleratesItsAbsence() {
+    final com.google.gson.Gson gson = new com.google.gson.Gson();
+
+    assertTrue(gson.fromJson("{\"name\":\"player\",\"isDefault\":true}", NativePermissionSnapshot.Group.class).isDefault);
+    assertFalse(gson.fromJson("{\"name\":\"player\",\"weight\":0}", NativePermissionSnapshot.Group.class).isDefault);
   }
 
   private static NativePermissionSnapshot.Group group(

@@ -61,5 +61,7 @@ final class NativePermissionSnapshot {
     List<Node> permissions = new ArrayList<>();
     List<Metadata> metadata = new ArrayList<>();
     Set<String> inherits = new HashSet<>();
+    /** Base grade of every subject; absent from groups written before the flag existed (false). */
+    boolean isDefault;
   }
 }
