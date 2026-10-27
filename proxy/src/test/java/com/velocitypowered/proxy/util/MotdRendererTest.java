@@ -40,6 +40,17 @@ class MotdRendererTest {
   }
 
   @Test
+  void charteV2DefaultMotdRendersCenteredAndFitsTheListWidth() {
+    final String line1 = "<center><gradient:#F0DAA2:#E4BA53><b>BornToCraft</b></gradient>";
+    final String line2 = "<center><#4CC2B2>SkyAdventure</#4CC2B2> <#D69A70>26.3";
+    assertEquals("BornToCraft", plain(line1).strip());
+    assertEquals("SkyAdventure 26.3", plain(line2).strip());
+    assertTrue(MotdRenderer.widthOf(line1) <= WIDTH);
+    assertTrue(MotdRenderer.widthOf(line2) <= WIDTH);
+    assertTrue(leadingSpaces(plain(line1)) > 0);
+  }
+
+  @Test
   void measuresAsciiWithProportionalWidths() {
     // i=2, l=3, m=6 — a character count would report 3 for all of them.
     assertEquals(2, MinecraftFontWidth.widthOf("i", false));
