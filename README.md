@@ -1,12 +1,12 @@
 # 🌌 BTC Velocity — High-Performance Minecraft Proxy
 
-![Banner](https://img.shields.io/badge/Minecraft-26.2-blue?style=for-the-badge&logo=minecraft)
-![Java](https://img.shields.io/badge/Java-21%2B-orange?style=for-the-badge&logo=openjdk)
+![Banner](https://img.shields.io/badge/Minecraft-26.3-blue?style=for-the-badge&logo=minecraft)
+![Java](https://img.shields.io/badge/Java-25-orange?style=for-the-badge&logo=openjdk)
 ![Status](https://img.shields.io/badge/Status-Production_Ready-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)
 
 > [!IMPORTANT]
-> **BTC Velocity** is a custom, high-performance fork of [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD), purpose-built for the **Born to Craft** Minecraft network. Compatible with **Minecraft 26.2** (protocol 776) and **Java 21+**.
+> **BTC Velocity** is a custom, high-performance fork of [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD), purpose-built for the **Born to Craft** Minecraft network, kept in sync with PaperMC Velocity **4.3.0**. Compatible with **Minecraft 26.3** (protocol 777) and **Java 25**.
 
 ---
 
@@ -30,7 +30,7 @@ modifications required by GPLv3 §5(a) are in [NOTICE.md](NOTICE.md).
 
 | Feature | Origin | What it does |
 |---|---|---|
-| Minecraft 26.2 | BTC | Protocol 776 support. |
+| Minecraft 26.3 | Velocity | Protocol 777 support from upstream 4.3.0; clients older than 26.3 are refused (BTC). |
 | `btc:bridge` protocol **v2** | BTC | Typed, versioned messages between proxy and backends. Every message carries an envelope (version, message id, source backend); `Ack`/`Nack` let the sender tell a lost request from a slow one. The sealed hierarchy has an explicit `permits` list, so a message added outside it fails to compile instead of silently decoding as unknown. |
 | Modern forwarding | Velocity | Velocity-native forwarding plus BungeeGuard. |
 | Anti-decompression bomb | BTC | Compression-ratio monitoring with a ratio-check floor, and oversized packet detection. |
@@ -70,7 +70,7 @@ jar it embedded in the shadow JAR are gone.
 | | |
 |---|---|
 | Public API | `dev.btc.velocity:api`, published to <https://borntocraftstudio.net/repo/> |
-| Repository source of truth | [`repo/`](repo/README.md) in this repository, uploaded to the site as-is |
+| Repository source of truth | A separate private repository, uploaded to the site as-is (no longer `repo/` in this repository) |
 | Also hosted there | `dev.btc.core:api` (BTC-CORE) and the BTC forks of PacketEvents, CraftEngine, BetterHud, BetterModel, CustomNameplates, BlueMap and MiniPlaceholders — each under its own upstream licence |
 
 ---
@@ -145,17 +145,17 @@ jdbc-url = "jdbc:postgresql://127.0.0.1:5432/btcvelocity?ssl=false&application_n
 ## 🏗️ Building & Deployment
 
 ### Prerequisites
-* **Java 21+ JDK** (Java 25 recommended for production)
+* **Java 25 JDK**
 * **Gradle 8.12+** (or use the included wrapper)
 
 ### Build
 ```bash
-export JAVA_HOME=/path/to/java-21
+export JAVA_HOME=/path/to/java-25
 ./gradlew clean build
 ```
 
 The production-ready shadow JAR will be at:
-`proxy/build/libs/velocity-proxy-0.1-all.jar`
+`proxy/build/libs/velocity-proxy-0.3-all.jar`
 
 ### Recommended Startup Flags
 ```bash
@@ -181,7 +181,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("dev.btc.velocity:api:0.2")
+    compileOnly("dev.btc.velocity:api:0.3")
 }
 ```
 
@@ -192,7 +192,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'dev.btc.velocity:api:0.2'
+    compileOnly 'dev.btc.velocity:api:0.3'
 }
 ```
 
@@ -209,7 +209,7 @@ dependencies {
     <dependency>
         <groupId>dev.btc.velocity</groupId>
         <artifactId>api</artifactId>
-        <version>0.2</version>
+        <version>0.3</version>
         <scope>provided</scope>
     </dependency>
 </dependencies>
@@ -217,7 +217,7 @@ dependencies {
 
 - **Javadoc**: https://borntocraftstudio.net/repo/javadoc/velocity/
 - The same repository also hosts the backend API `dev.btc.core:api` (BTC-CORE).
-- Repo layout and republish instructions: [`repo/README.md`](repo/README.md).
+- API `0.3` moved to Adventure 5: plugins built against `0.2` must be recompiled.
 
 ---
 

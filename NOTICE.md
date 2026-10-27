@@ -1,7 +1,8 @@
 # NOTICE — BTC Velocity
 
 BTC Velocity is a fork of [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD), itself a fork
-of [Velocity](https://github.com/PaperMC/Velocity).
+of [Velocity](https://github.com/PaperMC/Velocity). Base: Velocity-CTD up to `ff498c55` (14/04/2026),
+then PaperMC Velocity 4.3.0 merged directly on 27/10/2026.
 
 This file exists to satisfy GPLv3 §5(a) and §5(b): it states who modified this software, what was
 modified, and which notices must be preserved when it is redistributed.
@@ -42,7 +43,7 @@ Required by GPLv3 §5(a). A summary; the authoritative record is the git history
 
 | Area | Modification |
 |---|---|
-| Protocol | Support for Minecraft 26.2 (protocol 776). |
+| Protocol | Minecraft 26.3 (protocol 777, from upstream 4.3.0); clients older than 26.3 refused. |
 | Permissions | LuckPerms integration removed; replaced by a native BTC permission resolver with an immutable UUID snapshot model and PostgreSQL/Valkey storage. |
 | `btc:bridge` protocol | Versioned typed message protocol between proxy and backends (v2: envelope carrying version, message id and source backend; `Ack`/`Nack`; sealed hierarchy with an explicit `permits` list). |
 | MOTD | Inline `<left>`/`<center>`/`<right>` alignment with pixel-accurate glyph widths, configurable width, and a config migration from the old alignment keys. |
