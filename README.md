@@ -2,13 +2,23 @@
 
 ![Banner](https://img.shields.io/badge/Minecraft-26.3-blue?style=for-the-badge&logo=minecraft)
 ![Java](https://img.shields.io/badge/Java-25-orange?style=for-the-badge&logo=openjdk)
-![Status](https://img.shields.io/badge/Status-Production_Ready-green?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Active_development-yellow?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)
 
 > [!IMPORTANT]
 > **BTC Velocity** is a custom, high-performance fork of [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD), purpose-built for the **Born to Craft** Minecraft network, kept in sync with PaperMC Velocity **4.3.0**. Compatible with **Minecraft 26.3** (protocol 777) and **Java 25**.
 
 ---
+
+## 🚧 Work in Progress
+
+These parts ship in the jar but are **not finished**. Do not rely on them as complete protections yet.
+
+| Area | Status |
+|---|---|
+| **Sentinel admission shield** (anti-bot, anti-proxy/VPN, datacenter/Tor lists, ASN, per-network rate limits) | In progress: filters are in place, tuning and false-positive review on a test network are ongoing. |
+| **`btc:bridge` v2 control plane** | In progress: envelope, HMAC signature, ACK/NACK and deduplication work; per-target authorisation, private transport (mTLS/tunnel), categorised errors and the full malformed/replay test suite are still being completed. |
+| **CloudNet integration** (service registry, arrival routing, resource-pack deduplication) | In progress: proxy plugins built against Adventure 4 (craft-engine-proxy, CloudNet bridge) must be recompiled and re-validated for this release. |
 
 ## 🚀 Architecture
 
