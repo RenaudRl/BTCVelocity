@@ -29,6 +29,10 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 
 public class LoginPluginResponsePacket extends DeferredByteBufHolder implements MinecraftPacket {
 
+  // Vanilla rejects custom query answers with a payload larger than 1 MiB.
+  private static final int MAX_PAYLOAD_SIZE =
+      Integer.getInteger("velocity.max-login-plugin-response-payload-size", 1048576);
+
   private int id;
 
   private boolean success;
@@ -87,7 +91,18 @@ public class LoginPluginResponsePacket extends DeferredByteBufHolder implements 
   }
 
   @Override
-  public boolean handle(final MinecraftSessionHandler handler) {
+  public int decodeExpectedMaxLength(ByteBuf buf, Direction direction, ProtocolVersion version) {
+    // varint id + success boolean + payload
+    return 5 + 1 + MAX_PAYLOAD_SIZE;
+  }
+
+  @Override
+  public int decodeExpectedMinLength(ByteBuf buf, Direction direction, ProtocolVersion version) {
+    return 1 + 1;
+  }
+
+  @Override
+  public boolean handle(MinecraftSessionHandler handler) {
     return handler.handle(this);
   }
 

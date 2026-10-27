@@ -12,12 +12,20 @@ jobs:
       uses: actions/checkout@v4
       with:
         persist-credentials: false
+    - name: Set up cache
+      uses: namespacelabs/nscloud-cache-action@v1
+      with:
+        cache: gradle
+    - name: Setup gradle build cache
+      run: |
+        nsc cache gradle setup --init-gradle /tmp/init.gradle
     - name: Set up Gradle
       uses: gradle/actions/setup-gradle@v4
     - name: Set up JDK 21
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v6
       with:
         java-version: 25
         distribution: 'zulu'
+        cache: "" # namespace handles this
     - name: Build with Gradle
-      run: ./gradlew build
+      run: ./gradlew --init-script=/tmp/init.gradle build

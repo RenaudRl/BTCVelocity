@@ -27,14 +27,12 @@ import com.velocitypowered.api.permission.Tristate;
 import com.velocitypowered.api.proxy.ConsoleCommandSource;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.util.ClosestLocaleMatcher;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import net.kyori.adventure.audience.MessageType;
 import net.kyori.adventure.identity.Identity;
 import net.kyori.adventure.permission.PermissionChecker;
-import net.kyori.adventure.platform.facet.FacetPointers;
-import net.kyori.adventure.platform.facet.FacetPointers.Type;
 import net.kyori.adventure.pointer.Pointers;
 import net.kyori.adventure.pointer.PointersSupplier;
 import net.kyori.adventure.text.Component;
@@ -81,17 +79,14 @@ public final class VelocityConsole extends SimpleTerminalConsole implements Cons
   private static final @NotNull PointersSupplier<VelocityConsole> POINTERS = PointersSupplier.<VelocityConsole>builder()
       .resolving(PermissionChecker.POINTER, VelocityConsole::getPermissionChecker)
       .resolving(Identity.LOCALE, (console) -> ClosestLocaleMatcher.INSTANCE.lookupClosest(Locale.getDefault()))
-      .resolving(FacetPointers.TYPE, (console) -> Type.CONSOLE)
       .build();
 
   public VelocityConsole(final VelocityServer server) {
     this.server = server;
   }
 
-  @SuppressWarnings("deprecation")
   @Override
-  public void sendMessage(final @NonNull Identity identity, final @NonNull Component message,
-                          final @NonNull MessageType messageType) {
+  public void sendMessage(final @NonNull Component message) {
     COMPONENT_LOGGER.info(message);
   }
 
@@ -142,6 +137,7 @@ public final class VelocityConsole extends SimpleTerminalConsole implements Cons
         .appName("Velocity")
         // Explicitly disable mouse support on the builder
         .option(LineReader.Option.MOUSE, false)
+        .variable(LineReader.HISTORY_FILE, Path.of(".console_history"))
         .completer((reader, parsedLine, list) -> {
           try {
             List<String> offers = this.server.getCommandManager()

@@ -31,8 +31,8 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 
 public class PluginMessagePacket extends DeferredByteBufHolder implements MinecraftPacket {
 
-  // BTC: increased from 32767 (32KB) to 2097152 (2MB) for Axiom large payload support
-  private static final int MAX_PAYLOAD_SIZE = Integer.getInteger("velocity.max-plugin-message-payload-size", 2097152);
+  private static final int MAX_PAYLOAD_SIZE_CLIENTBOUND = getPayloadLimit(Direction.CLIENTBOUND);
+  private static final int MAX_PAYLOAD_SIZE_SERVERBOUND = getPayloadLimit(Direction.SERVERBOUND);
 
   private @Nullable String channel;
 
@@ -54,7 +54,21 @@ public class PluginMessagePacket extends DeferredByteBufHolder implements Minecr
     return channel;
   }
 
-  public void setChannel(final @Nullable String channel) {
+  private static int getPayloadLimit(Direction direction) {
+    if (System.getProperty("velocity.max-plugin-message-payload-size") != null) {
+      return Integer.getInteger("velocity.max-plugin-message-payload-size");
+    }
+    if (direction == Direction.SERVERBOUND) {
+      // BTC: 2 MiB instead of vanilla 32767 for Axiom large serverbound payloads.
+      return Integer.getInteger("velocity.max-plugin-message-payload-size.serverbound", 2097152);
+    } else {
+      // This is the vanilla expected limit, a payload this large feels like a nightmare given the trust
+      // we give to servers...
+      return Integer.getInteger("velocity.max-plugin-message-payload-size.clientbound", 1048576);
+    }
+  }
+
+  public void setChannel(String channel) {
     this.channel = channel;
   }
 
@@ -106,7 +120,8 @@ public class PluginMessagePacket extends DeferredByteBufHolder implements Minecr
 
   @Override
   public int decodeExpectedMaxLength(ByteBuf buf, Direction direction, ProtocolVersion version) {
-    return ProtocolUtils.DEFAULT_MAX_STRING_BYTES + MAX_PAYLOAD_SIZE;
+    return ProtocolUtils.DEFAULT_MAX_STRING_BYTES
+        + (direction == Direction.CLIENTBOUND ? MAX_PAYLOAD_SIZE_CLIENTBOUND : MAX_PAYLOAD_SIZE_SERVERBOUND);
   }
 
   @Override

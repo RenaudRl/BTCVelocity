@@ -56,6 +56,7 @@ import com.velocitypowered.proxy.protocol.packet.ClientSettingsPacket;
 import com.velocitypowered.proxy.protocol.packet.ClientboundCookieRequestPacket;
 import com.velocitypowered.proxy.protocol.packet.ClientboundStoreCookiePacket;
 import com.velocitypowered.proxy.protocol.packet.DisconnectPacket;
+import com.velocitypowered.proxy.protocol.packet.JoinGamePacket;
 import com.velocitypowered.proxy.protocol.packet.KeepAlivePacket;
 import com.velocitypowered.proxy.protocol.packet.LegacyPlayerListItemPacket;
 import com.velocitypowered.proxy.protocol.packet.PluginMessagePacket;
@@ -69,6 +70,7 @@ import com.velocitypowered.proxy.protocol.packet.TransferPacket;
 import com.velocitypowered.proxy.protocol.packet.UpsertPlayerInfoPacket;
 import com.velocitypowered.proxy.protocol.packet.chat.ComponentHolder;
 import com.velocitypowered.proxy.protocol.packet.config.StartUpdatePacket;
+import com.velocitypowered.proxy.protocol.util.DeferredByteBufHolder;
 import com.velocitypowered.proxy.protocol.util.PluginMessageUtil;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
@@ -93,6 +95,8 @@ public class BackendPlaySessionHandler implements MinecraftSessionHandler {
   private static final boolean BACKPRESSURE_LOG = Boolean.getBoolean("velocity.log-server-backpressure");
 
   private static final int MAXIMUM_PACKETS_TO_FLUSH = Integer.getInteger("velocity.max-packets-per-flush", 8192);
+
+  private static final int LARGE_PACKET_THRESHOLD = 1024 * 128;
 
   private final VelocityServer server;
 
@@ -171,7 +175,14 @@ public class BackendPlaySessionHandler implements MinecraftSessionHandler {
   }
 
   @Override
-  public boolean handle(final ClientSettingsPacket packet) {
+  public boolean handle(JoinGamePacket packet) {
+    // We receive this if the connection is reconfigured
+    packet.setOnlineMode(serverConn.getPlayer().isOnlineMode());
+    return false; // forward
+  }
+
+  @Override
+  public boolean handle(ClientSettingsPacket packet) {
     serverConn.ensureConnected().write(packet);
     return true;
   }
@@ -305,7 +316,7 @@ public class BackendPlaySessionHandler implements MinecraftSessionHandler {
       return true;
     }
 
-    // Register and unregister packets are simply forwarded to the server as-is.
+    // Register and unregister packets are simply forwarded to the client as-is.
     if (PluginMessageUtil.isRegister(packet) || PluginMessageUtil.isUnregister(packet)) {
       return false;
     }
@@ -474,18 +485,19 @@ public class BackendPlaySessionHandler implements MinecraftSessionHandler {
     if (packet instanceof PluginMessagePacket pluginMessage) {
       pluginMessage.retain();
     }
-
+    boolean huge = packet instanceof DeferredByteBufHolder def && def.content().readableBytes() > LARGE_PACKET_THRESHOLD;
     playerConnection.delayedWrite(packet);
-    if (++packetsFlushed >= MAXIMUM_PACKETS_TO_FLUSH) {
+    if (huge || ++packetsFlushed >= MAXIMUM_PACKETS_TO_FLUSH) {
       playerConnection.flush();
       packetsFlushed = 0;
     }
   }
 
   @Override
-  public void handleUnknown(final ByteBuf buf) {
+  public void handleUnknown(ByteBuf buf) {
+    boolean huge = buf.readableBytes() > LARGE_PACKET_THRESHOLD;
     playerConnection.delayedWrite(buf.retain());
-    if (++packetsFlushed >= MAXIMUM_PACKETS_TO_FLUSH) {
+    if (huge || ++packetsFlushed >= MAXIMUM_PACKETS_TO_FLUSH) {
       playerConnection.flush();
       packetsFlushed = 0;
     }

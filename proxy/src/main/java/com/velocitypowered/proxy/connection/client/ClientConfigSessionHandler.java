@@ -47,6 +47,7 @@ import com.velocitypowered.proxy.protocol.packet.config.FinishedUpdatePacket;
 import com.velocitypowered.proxy.protocol.packet.config.KnownPacksPacket;
 import com.velocitypowered.proxy.protocol.util.PluginMessageUtil;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufHolder;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import java.util.concurrent.CompletableFuture;
@@ -149,7 +150,6 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
     } else if (BungeeCordMessageResponder.isBungeeCordMessage(packet)) {
       return true;
     } else if (serverConn != null) {
-      byte[] bytes = ByteBufUtil.getBytes(packet.content());
       ChannelIdentifier id = this.server.getChannelRegistrar().getFromId(packet.getChannel());
 
       if (id == null) {
@@ -159,6 +159,7 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
 
       // Handling this stuff async means that we should probably pause
       // the connection while we toss this off into another pool
+      byte[] bytes = ByteBufUtil.getBytes(packet.content());
       serverConn.getPlayer().getConnection().setAutoReading(false);
       this.server.getEventManager()
           .fire(new PluginMessageEvent(serverConn.getPlayer(), serverConn, id, bytes))
@@ -225,9 +226,10 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
   }
 
   @Override
-  public boolean handle(final ServerboundCustomClickActionPacket packet) {
-    if (player.getConnectionInFlight() != null) {
-      player.getConnectionInFlight().ensureConnected().write(packet.retain());
+  public boolean handle(ServerboundCustomClickActionPacket packet) {
+    VelocityServerConnection serverConnection = player.getConnectionInFlightOrConnectedServer();
+    if (serverConnection != null) {
+      serverConnection.ensureConnected().write(packet.retain());
       return true;
     }
 
@@ -254,8 +256,8 @@ public class ClientConfigSessionHandler implements MinecraftSessionHandler {
 
     MinecraftConnection smc = serverConnection.getConnection();
     if (smc != null && serverConnection.getPhase().consideredComplete()) {
-      if (packet instanceof PluginMessagePacket) {
-        ((PluginMessagePacket) packet).retain();
+      if (packet instanceof ByteBufHolder bufHolder) {
+        bufHolder.retain();
       }
 
       smc.write(packet);

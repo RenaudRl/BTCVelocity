@@ -45,7 +45,9 @@ import com.velocitypowered.proxy.connection.client.InitialInboundConnection;
 import com.velocitypowered.proxy.connection.client.InitialLoginSessionHandler;
 import com.velocitypowered.proxy.connection.client.StatusSessionHandler;
 import com.velocitypowered.proxy.network.Connections;
+import com.velocitypowered.proxy.network.limiter.SimpleBytesPerSecondLimiter;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
+import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import com.velocitypowered.proxy.protocol.StateRegistry;
 import com.velocitypowered.proxy.protocol.VelocityConnectionEvent;
 import com.velocitypowered.proxy.protocol.netty.MinecraftCipherDecoder;
@@ -80,6 +82,7 @@ import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
@@ -106,6 +109,7 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
    */
   public static final int MAX_CLIENT_PACKET_SIZE = Integer.getInteger("velocity.max-client-packet-size", 2097152);
 
+  private final @Nullable UUID sessionId;
   private final Channel channel;
 
   public boolean pendingConfigurationSwitch = false;
@@ -129,15 +133,28 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
   private boolean knownDisconnect = false;
 
   /**
-   * Initializes a new {@link MinecraftConnection} instance.
+   * Initializes a new {@link MinecraftConnection} instance with no session ID.
    *
    * @param channel the channel on the connection
    * @param server  the Velocity instance
    */
-  public MinecraftConnection(final Channel channel, final VelocityServer server) {
+  public MinecraftConnection(Channel channel, VelocityServer server) {
+    this(channel, server, null);
+  }
+
+  /**
+   * Initializes a new {@link MinecraftConnection} instance.
+   *
+   * @param channel   the channel on the connection
+   * @param server    the Velocity instance
+   * @param sessionId the proxy session id of the player this connection belongs to, or
+   *                  {@code null} if it does not belong to a player session
+   */
+  public MinecraftConnection(Channel channel, VelocityServer server, @Nullable UUID sessionId) {
     this.channel = channel;
     this.remoteAddress = channel.remoteAddress();
     this.server = server;
+    this.sessionId = sessionId;
     this.state = StateRegistry.HANDSHAKE;
 
     this.sessionHandlers = new EnumMap<>(StateRegistry.class);
@@ -372,6 +389,10 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
     return channel;
   }
 
+  public @Nullable UUID getSessionId() {
+    return sessionId;
+  }
+
   public boolean isClosed() {
     return !channel.isActive();
   }
@@ -496,8 +517,13 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
   public void setProtocolVersion(final ProtocolVersion protocolVersion) {
     ensureInEventLoop();
 
-    boolean changed = this.protocolVersion != protocolVersion;
+    final boolean changed = this.protocolVersion != protocolVersion;
     this.protocolVersion = protocolVersion;
+    final MinecraftVarintFrameDecoder frameDecoder = this.channel.pipeline()
+        .get(MinecraftVarintFrameDecoder.class);
+    if (frameDecoder != null) {
+      frameDecoder.setProtocolVersion(protocolVersion);
+    }
     if (protocolVersion != ProtocolVersion.LEGACY) {
       this.channel.pipeline().get(MinecraftEncoder.class).setProtocolVersion(protocolVersion);
       this.channel.pipeline().get(MinecraftDecoder.class).setProtocolVersion(protocolVersion);
@@ -599,6 +625,12 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
     ensureOpen();
     ensureInEventLoop();
 
+    final MinecraftVarintFrameDecoder frameDecoder = channel.pipeline()
+        .get(MinecraftVarintFrameDecoder.class);
+    if (frameDecoder != null) {
+      frameDecoder.setCompressionEnabled(threshold != -1);
+    }
+
     if (threshold == -1) {
       final ChannelHandler removedDecoder = channel.pipeline().remove(COMPRESSION_DECODER);
       final ChannelHandler removedEncoder = channel.pipeline().remove(COMPRESSION_ENCODER);
@@ -649,6 +681,14 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
               new DecompressionBombHandler(security.getMaxDecompressedSize(),
                   security.getMaxCompressionRatio(), security.getMaxViolations(),
                   security.getRatioCheckMinDecompressedSize()));
+        }
+
+        var packetLimiterConfig = server.getConfiguration().getPacketLimiterConfig();
+        if (minecraftDecoder.getDirection() == ProtocolUtils.Direction.SERVERBOUND
+            && packetLimiterConfig.interval() > 0
+            && packetLimiterConfig.bytesAfterDecompression() > 0) {
+          decoder.setPacketLimiter(new SimpleBytesPerSecondLimiter(
+              -1, packetLimiterConfig.bytesAfterDecompression(), packetLimiterConfig.interval()));
         }
 
         channel.pipeline().fireUserEventTriggered(VelocityConnectionEvent.COMPRESSION_ENABLED);

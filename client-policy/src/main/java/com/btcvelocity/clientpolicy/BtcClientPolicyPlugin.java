@@ -44,8 +44,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import net.kyori.adventure.audience.MessageType;
-import net.kyori.adventure.identity.Identity;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.slf4j.Logger;
@@ -286,11 +284,11 @@ public final class BtcClientPolicyPlugin {
         message -> player.disconnect(MiniMessage.miniMessage().deserialize(message)));
   }
 
-  @SuppressWarnings("deprecation")
   private void send(Player player, ConsentPlanner.Delta delta) {
     for (String code : delta.xaeroMessages()) {
       // A system message, not a player chat line: Xaero reads it and hides it.
-      player.sendMessage(Identity.nil(), Component.text(code), MessageType.SYSTEM);
+      // Adventure 5: the proxy sends sendMessage(Component) as a system message.
+      player.sendMessage(Component.text(code));
     }
     if (delta.voxelJson() != null) {
       player.sendPluginMessage(VOXELMAP_SETTINGS, VoxelMapSettingsPacket.encode(delta.voxelJson()));

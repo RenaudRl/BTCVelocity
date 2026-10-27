@@ -72,7 +72,7 @@ public class VelocityServerConnection implements MinecraftConnectionAssociation,
   private @Nullable MinecraftConnection connection;
 
   private boolean hasCompletedJoin = false;
-
+  private boolean clientLoaded = false; // 1.21.4+
   private boolean gracefulDisconnect = false;
 
   private BackendConnectionPhase connectionPhase = BackendConnectionPhases.UNKNOWN;
@@ -113,7 +113,8 @@ public class VelocityServerConnection implements MinecraftConnectionAssociation,
         .connect(registeredServer.getServerInfo().getAddress())
         .addListener((ChannelFutureListener) future -> {
           if (future.isSuccess()) {
-            connection = new MinecraftConnection(future.channel(), server);
+            connection = new MinecraftConnection(future.channel(), server,
+                proxyPlayer.getConnection().getSessionId());
             connection.setAssociation(VelocityServerConnection.this);
             future.channel().pipeline().addLast(HANDLER, connection);
 
@@ -335,6 +336,15 @@ public class VelocityServerConnection implements MinecraftConnectionAssociation,
         }
       }
     }
+  }
+
+  public void setClientLoaded(boolean clientLoaded) {
+    this.clientLoaded = clientLoaded;
+  }
+
+  @Override
+  public boolean isClientLoaded() {
+    return clientLoaded;
   }
 
   boolean isGracefulDisconnect() {

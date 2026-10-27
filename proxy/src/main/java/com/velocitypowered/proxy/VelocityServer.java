@@ -483,7 +483,8 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     PluginDescription description = new VelocityPluginDescription(
         "btc-proxy-core", version.getName(), version.getVersion(), "The high-performance BTC Proxy Core",
             version.getName().equals("BTC Proxy Core") ? VELOCITY_URL : null,
-            ImmutableList.of(version.getVendor()), Collections.emptyList(), null);
+            ImmutableList.of(version.getVendor()), Collections.emptyList(),
+            Collections.emptyList(), null);
     VelocityPluginContainer container = new VelocityPluginContainer(description);
     container.setInstance(VelocityVirtualPlugin.INSTANCE);
     return container;
@@ -797,6 +798,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
     unregisterCommands();
 
+    final VelocityConfiguration oldConfiguration = this.configuration;
     this.configuration = newConfiguration;
 
     reloadServerList();
@@ -810,6 +812,22 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     // Re-register servers. If a server is being replaced, make sure to note what players need to
     // move back to a fallback server.
     Collection<ConnectedPlayer> evacuate = new ArrayList<>();
+    // Servers removed from the configuration: evacuate their players and unregister them.
+    for (String oldName : oldConfiguration.getBackendServers().keySet()) {
+      if (newConfiguration.getBackendServers().keySet().stream()
+          .anyMatch(name -> name.equalsIgnoreCase(oldName))) {
+        continue;
+      }
+
+      Optional<VelocityRegisteredServer> removed = servers.getServer(oldName);
+      if (removed.isEmpty()) {
+        continue;
+      }
+
+      evacuate.addAll(removed.get().getPlayersConnected());
+      servers.unregister(removed.get().getServerInfo());
+    }
+
     for (Map.Entry<String, BackendServerConfig> entry : newConfiguration.getBackendServers().entrySet()) {
       ServerInfo newInfo = new ServerInfo(entry.getKey(), AddressUtil.parseAddress(entry.getValue().address()), entry.getValue().forwardingMode());
       Optional<VelocityRegisteredServer> rs = servers.getServer(entry.getKey());
@@ -1082,9 +1100,8 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       startedShutdown = true;
       LOGGER.info("Shutting down the proxy...");
 
-      // Shutdown the connection manager, this should be
-      // done first to refuse new connections
-      cm.shutdown();
+      // Stop accepting new connections, but keep DNS available to pre-shutdown handlers.
+      cm.closeEndpoints(true);
 
       try {
         eventManager.fire(new ProxyPreShutdownEvent())
@@ -1098,6 +1115,8 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         Thread.currentThread().interrupt();
         LOGGER.warn("Interrupted while waiting for ProxyPreShutdownEvent; continuing shutdown.");
       }
+
+      cm.shutdown();
 
       ImmutableList<@NotNull ConnectedPlayer> players = ImmutableList.copyOf(connectionsByUuid.values());
       ImmutableList<@NotNull UUID> playerUuids = ImmutableList.copyOf(connectionsByUuid.keySet());

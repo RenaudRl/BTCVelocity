@@ -297,7 +297,6 @@ public class ConfigSessionHandler implements MinecraftSessionHandler {
           serverConn.getServer().getServerInfo().getName(),
           ProtocolVersion.getVersionByName(server.getConfiguration().getMinimumVersion()).getVersionIntroducedIn()));
     } else {
-      byte[] bytes = ByteBufUtil.getBytes(packet.content());
       ChannelIdentifier id = this.server.getChannelRegistrar().getFromId(packet.getChannel());
 
       if (id == null) {
@@ -307,6 +306,7 @@ public class ConfigSessionHandler implements MinecraftSessionHandler {
 
       // Handling this stuff async means that we should probably pause
       // the connection while we toss this off into another pool
+      byte[] bytes = ByteBufUtil.getBytes(packet.content());
       this.serverConn.getConnection().setAutoReading(false);
       this.server.getEventManager()
           .fire(new PluginMessageEvent(serverConn, serverConn.getPlayer(), id, bytes))

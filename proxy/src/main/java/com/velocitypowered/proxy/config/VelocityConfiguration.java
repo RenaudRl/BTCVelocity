@@ -36,6 +36,8 @@ import com.velocitypowered.proxy.config.migration.KeyAuthenticationMigration;
 import com.velocitypowered.proxy.config.migration.MiniMessageTranslationsMigration;
 import com.velocitypowered.proxy.config.migration.MotdAlignmentMigration;
 import com.velocitypowered.proxy.config.migration.MotdMigration;
+import com.velocitypowered.proxy.config.migration.PacketLimiterMigration;
+import com.velocitypowered.proxy.config.migration.PingPassthroughMigration;
 import com.velocitypowered.proxy.config.migration.TransferIntegrationMigration;
 import com.velocitypowered.proxy.util.AddressUtil;
 import com.velocitypowered.proxy.util.MotdRenderer;
@@ -118,8 +120,7 @@ public final class VelocityConfiguration implements ProxyConfig {
   private boolean kickExistingPlayersCheckIp = false;
 
   @Expose
-  private PingPassthroughMode pingPassthrough = PingPassthroughMode.DISABLED;
-
+  private PingPassthroughMode pingPassthrough = PingPassthroughMode.DEFAULT;
   @Expose
   private boolean samplePlayersInPing = false;
 
@@ -1125,8 +1126,12 @@ public final class VelocityConfiguration implements ProxyConfig {
           new MotdMigration(),
           new MiniMessageTranslationsMigration(),
           new TransferIntegrationMigration(),
-          // Must stay last: it bumps config-version past every migration above.
-          new MotdAlignmentMigration()
+          // BTC: MotdAlignmentMigration also gates on < 2.8 and is ours; it runs before the upstream
+          // PacketLimiterMigration, which then no-ops (PacketLimiterConfig.fromConfig fills missing keys).
+          new MotdAlignmentMigration(),
+          new PacketLimiterMigration(),
+          // Must stay last among version migrations: bumps config-version to 2.9.
+          new PingPassthroughMigration()
       ));
 
       migrations.addAll(BtcConfigMigrations.createBtcMigrations());
@@ -1207,8 +1212,7 @@ public final class VelocityConfiguration implements ProxyConfig {
       final CommentedConfig playerCapsConfig = config.get("playercaps");
       final PlayerInfoForwarding forwardingMode = config.getEnumOrElse(
               "player-info-forwarding-mode", PlayerInfoForwarding.NONE);
-      final PingPassthroughMode pingPassthroughMode = config.getEnumOrElse("ping-passthrough",
-              PingPassthroughMode.DISABLED);
+      final PingPassthroughMode pingPassthroughMode = PingPassthroughMode.fromConfig(config.get("ping-passthrough"));
       final boolean samplePlayersInPing = config.getOrElse("sample-players-in-ping", false);
       final String bind = config.getOrElse("bind", "0.0.0.0:25565");
       final int maxPlayers = config.getIntOrElse("show-max-players", 500);
@@ -2394,12 +2398,13 @@ public final class VelocityConfiguration implements ProxyConfig {
   /**
    * Configuration for packet limiting.
    *
-   * @param interval the interval in seconds to measure packets over
-   * @param pps      the maximum number of packets per second allowed
-   * @param bytes    the maximum number of bytes per second allowed
+   * @param interval                the interval in seconds to measure packets over
+   * @param pps                     the maximum number of packets per second allowed
+   * @param bytes                   the maximum number of bytes per second allowed
+   * @param bytesAfterDecompression the maximum number of decompressed bytes per second allowed
    */
-  public record PacketLimiterConfig(int interval, int pps, int bytes) {
-    public static PacketLimiterConfig DEFAULT = new PacketLimiterConfig(7, 500, -1);
+  public record PacketLimiterConfig(int interval, int pps, int bytes, int bytesAfterDecompression) {
+    public static PacketLimiterConfig DEFAULT = new PacketLimiterConfig(7, -1, -1, 5242880);
 
     /**
      * returns a PacketLimiterConfig from a config section, or the default if the section is null.
@@ -2412,7 +2417,8 @@ public final class VelocityConfiguration implements ProxyConfig {
         return new PacketLimiterConfig(
             config.getIntOrElse("interval", DEFAULT.interval()),
             config.getIntOrElse("packets-per-second", DEFAULT.pps()),
-            config.getIntOrElse("bytes-per-second", DEFAULT.bytes())
+            config.getIntOrElse("bytes-per-second", DEFAULT.bytes()),
+            config.getIntOrElse("decompressed-bytes-per-second", DEFAULT.bytesAfterDecompression())
         );
       } else {
         return DEFAULT;
