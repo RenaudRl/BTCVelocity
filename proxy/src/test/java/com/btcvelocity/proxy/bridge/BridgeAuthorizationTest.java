@@ -135,6 +135,17 @@ class BridgeAuthorizationTest {
   }
 
   @Test
+  void aTaskCoversItsNumberedServicesButNotATaskWhoseNameMerelyStartsTheSame() {
+    final BridgeAuthorization policy = BridgeAuthorization.parse("Lobby", "Lobby");
+
+    assertNull(policy.refuse("Lobby-3", connect("Lobby-3", "Lobby-3")), "témoin : Lobby-3 passe");
+    assertEquals(BridgeMessage.ErrorCode.BACKEND_NOT_ALLOWED,
+        policy.refuse("Lobby2-1", connect("Lobby2-1", "Lobby-3")));
+    assertEquals(BridgeMessage.ErrorCode.TARGET_NOT_ALLOWED,
+        policy.refuse("Lobby-3", connect("Lobby-3", "Lobby2-1")));
+  }
+
+  @Test
   void theDeclarationIsTrimmedAndOrderPreserved() {
     final BridgeAuthorization policy = BridgeAuthorization.parse(" lobby , sky ", null);
 
