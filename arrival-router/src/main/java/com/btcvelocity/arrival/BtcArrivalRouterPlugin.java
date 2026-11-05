@@ -23,13 +23,16 @@ import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.event.proxy.server.ServerRegisteredEvent;
 import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 
 /**
@@ -66,20 +69,32 @@ public final class BtcArrivalRouterPlugin {
    */
   public static final String POLICY_VARIABLE = "BTC_ARRIVAL_SERVERS";
 
+  /**
+   * The server that holds a player when no destination is available, declared in
+   * {@code velocity.toml} (it runs outside CloudNet). Unset: no limbo, behaviour unchanged.
+   */
+  public static final String LIMBO_VARIABLE = "BTC_ARRIVAL_LIMBO";
+
+  // One sweep for every way a destination comes back (registration, restart, failed attempt).
+  private static final long LIMBO_SWEEP_SECONDS = 5;
+
   private final Logger logger;
   private final ProxyServer proxy;
   private final ArrivalPolicy policy;
+  private final String limbo;
   private final ArrivalAttempts attempts = new ArrivalAttempts();
 
   @Inject
   public BtcArrivalRouterPlugin(ProxyServer proxy, Logger logger) {
-    this(proxy, logger, ArrivalPolicy.parse(System.getenv(POLICY_VARIABLE)));
+    this(proxy, logger, ArrivalPolicy.parse(System.getenv(POLICY_VARIABLE)),
+        System.getenv(LIMBO_VARIABLE));
   }
 
-  BtcArrivalRouterPlugin(ProxyServer proxy, Logger logger, ArrivalPolicy policy) {
+  BtcArrivalRouterPlugin(ProxyServer proxy, Logger logger, ArrivalPolicy policy, String limbo) {
     this.proxy = proxy;
     this.logger = logger;
     this.policy = policy;
+    this.limbo = limbo == null || limbo.isBlank() ? null : limbo.trim();
   }
 
   @Subscribe
@@ -92,6 +107,23 @@ public final class BtcArrivalRouterPlugin {
       return;
     }
     this.logger.info("Arrival destinations: {}", String.join(", ", this.policy.patterns()));
+    if (this.limbo != null) {
+      this.logger.info("Limbo: {} (players there are released every {} s)",
+          this.limbo, LIMBO_SWEEP_SECONDS);
+      this.proxy.getScheduler().buildTask(this, this::releaseFromLimbo)
+          .repeat(LIMBO_SWEEP_SECONDS, TimeUnit.SECONDS)
+          .schedule();
+    }
+  }
+
+  /**
+   * A server registered again is a new service: players it refused may try it once more.
+   *
+   * @param event the registration
+   */
+  @Subscribe
+  public void onServerRegistered(ServerRegisteredEvent event) {
+    this.attempts.forgetServer(event.registeredServer().getServerInfo().getName());
   }
 
   /**
@@ -110,6 +142,9 @@ public final class BtcArrivalRouterPlugin {
 
     var player = event.getPlayer();
     Optional<RegisteredServer> chosen = this.choose(Set.of());
+    if (chosen.isEmpty()) {
+      chosen = this.limboServer();
+    }
     if (chosen.isEmpty()) {
       this.logger.warn("No arrival destination available for {}; the proxy will disconnect them.",
           player.getUsername());
@@ -144,6 +179,13 @@ public final class BtcArrivalRouterPlugin {
     this.attempts.record(player.getUniqueId(), from);
 
     Optional<RegisteredServer> chosen = this.choose(this.attempts.of(player.getUniqueId()));
+    // To the limbo, unless the limbo is what dropped them or where they still are (failed switch).
+    boolean stillInLimbo = player.getCurrentServer()
+        .map(current -> this.isLimbo(current.getServerInfo().getName()))
+        .orElse(false);
+    if (chosen.isEmpty() && !this.isLimbo(from) && !stillInLimbo) {
+      chosen = this.limboServer();
+    }
     if (chosen.isEmpty()) {
       this.logger.info(
           "{} was kicked from {} and no other destination is left; leaving the disconnect as is.",
@@ -163,9 +205,43 @@ public final class BtcArrivalRouterPlugin {
     this.attempts.forget(event.getPlayer().getUniqueId());
   }
 
+  /**
+   * Sends every player waiting in the limbo to a destination, as soon as one is available. A
+   * failed attempt leaves them in the limbo, recorded, until the next sweep or re-registration.
+   */
+  // shortcut: a server declared in velocity.toml is never re-registered, so once it failed for a
+  // player it is not retried until they reconnect; fine while destinations are CloudNet services.
+  void releaseFromLimbo() {
+    Optional<RegisteredServer> limboServer = this.limboServer();
+    if (limboServer.isEmpty()) {
+      return;
+    }
+    for (Player player : limboServer.get().getPlayersConnected()) {
+      Optional<RegisteredServer> chosen = this.choose(this.attempts.of(player.getUniqueId()));
+      if (chosen.isPresent()) {
+        var target = chosen.get();
+        this.attempts.record(player.getUniqueId(), target.getServerInfo().getName());
+        player.createConnectionRequest(target).fireAndForget();
+        this.logger.info("{} leaves the limbo for {}",
+            player.getUsername(), target.getServerInfo().getName());
+      }
+    }
+  }
+
+  private boolean isLimbo(String serverName) {
+    return this.limbo != null && this.limbo.equalsIgnoreCase(serverName);
+  }
+
+  private Optional<RegisteredServer> limboServer() {
+    return Optional.ofNullable(this.limbo).flatMap(this.proxy::getServer);
+  }
+
   private Optional<RegisteredServer> choose(Set<String> excluded) {
     List<ArrivalCandidate> candidates = new ArrayList<>();
     for (RegisteredServer server : this.proxy.getAllServers()) {
+      if (this.isLimbo(server.getServerInfo().getName())) {
+        continue; // never a destination, even under a wildcard pattern
+      }
       candidates.add(new ArrivalCandidate(
           server.getServerInfo().getName(),
           server.getPlayersConnected().size()));
