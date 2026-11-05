@@ -135,6 +135,20 @@ class SocialTransferHandlerTest {
   }
 
   @Test
+  void aConnectRequestToAnUnregisteredServerMovesNobody() {
+    // The invalid-target case for the single-player path. Witness: aSingleConnectRequestStillMoves...
+    when(server.getServer(TARGET)).thenReturn(Optional.empty());
+    final UUID alice = UUID.randomUUID();
+    final VelocityClusterPlayer alicePlayer = knownPlayer(alice);
+    final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
+        UUID.randomUUID(), "connect_request", "survie", "proxy", NOW, NOW + 10_000L);
+
+    handler.onMessage("survie", new BridgeMessage.ConnectRequest(envelope, alice, TARGET, null));
+
+    verify(alicePlayer, never()).move(anyString());
+  }
+
+  @Test
   void aSingleConnectRequestStillMovesItsPlayer() {
     // Party validation must not have swallowed the one-player path that shares the handler.
     targetIsRegistered();
