@@ -271,6 +271,12 @@ read-timeout = 30000
 # don't enable it.
 haproxy-protocol = false
 
+# Sources allowed to send a PROXY protocol header (address or CIDR, never a host name). A connection
+# from anywhere else is closed before it is read, so nobody can forge a client address and get past
+# per-address checks (Sentinel, rate limits, bans). An empty list trusts nobody. Only used when
+# haproxy-protocol is true. Default: loopback, private and link-local networks.
+haproxy-protocol-trusted-proxies = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10"]
+
 # Enables TCP fast open support on the proxy. Requires the proxy to run on Linux.
 tcp-fast-open = false
 

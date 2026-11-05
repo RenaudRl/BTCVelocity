@@ -25,6 +25,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.annotations.Expose;
 import com.btcvelocity.proxy.config.migration.BtcConfigMigrations;
+import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.api.proxy.config.BackendServerConfig;
 import com.velocitypowered.api.proxy.config.ProxyConfig;
 import com.velocitypowered.api.proxy.server.PlayerInfoForwarding;
@@ -467,6 +468,12 @@ public final class VelocityConfiguration implements ProxyConfig {
           + "throughput and increase CPU usage!");
     }
 
+    for (String entry : advanced.trustedProxies.invalidEntries()) {
+      LOGGER.error("Invalid haproxy-protocol-trusted-proxies entry '{}' (expected address or "
+          + "address/prefix, at most /8 for IPv4 and /7 for IPv6)", entry);
+      valid = false;
+    }
+
     if (advanced.loginRatelimit < 0) {
       LOGGER.error("Invalid login ratelimit {}ms", advanced.loginRatelimit);
       valid = false;
@@ -815,6 +822,10 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   public void setProxyProtocol(final boolean proxyProtocol) {
     advanced.setProxyProtocol(proxyProtocol);
+  }
+
+  public TrustedProxies getProxyProtocolTrustedProxies() {
+    return advanced.getTrustedProxies();
   }
 
   public boolean useTcpFastOpen() {
@@ -2056,6 +2067,11 @@ public final class VelocityConfiguration implements ProxyConfig {
     private boolean proxyProtocol = false;
 
     @Expose
+    private List<String> proxyProtocolTrustedProxies = TrustedProxies.DEFAULT_ENTRIES;
+
+    private TrustedProxies trustedProxies = TrustedProxies.parse(TrustedProxies.DEFAULT_ENTRIES);
+
+    @Expose
     private boolean tcpFastOpen = false;
 
     @Expose
@@ -2158,6 +2174,10 @@ public final class VelocityConfiguration implements ProxyConfig {
         } else {
           this.proxyProtocol = config.getOrElse("proxy-protocol", false);
         }
+        final List<?> trusted = config.getOrElse("haproxy-protocol-trusted-proxies",
+            TrustedProxies.DEFAULT_ENTRIES);
+        this.proxyProtocolTrustedProxies = trusted.stream().map(String::valueOf).toList();
+        this.trustedProxies = TrustedProxies.parse(this.proxyProtocolTrustedProxies);
         this.tcpFastOpen = config.getOrElse("tcp-fast-open", false);
         this.bungeePluginMessageChannel = config.getOrElse("bungee-plugin-message-channel", true);
         this.showPingRequests = config.getOrElse("show-ping-requests", false);
@@ -2212,6 +2232,10 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     public void setProxyProtocol(final boolean proxyProtocol) {
       this.proxyProtocol = proxyProtocol;
+    }
+
+    public TrustedProxies getTrustedProxies() {
+      return trustedProxies;
     }
 
     public boolean isTcpFastOpen() {

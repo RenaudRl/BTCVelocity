@@ -42,13 +42,18 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
 import io.netty.handler.timeout.ReadTimeoutHandler;
+import java.net.InetSocketAddress;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * Server channel initializer.
  */
 public class ServerChannelInitializer extends ChannelInitializer<Channel> {
+
+  private static final Logger LOGGER = LogManager.getLogger(ServerChannelInitializer.class);
 
   private final VelocityServer server;
 
@@ -58,6 +63,16 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
 
   @Override
   protected void initChannel(final Channel ch) {
+    final boolean proxyProtocol = this.server.getConfiguration().isProxyProtocol();
+    // An untrusted peer could forge the client address in its PROXY header: drop it unread.
+    if (proxyProtocol && !(ch.remoteAddress() instanceof InetSocketAddress peer
+        && this.server.getConfiguration().getProxyProtocolTrustedProxies()
+            .contains(peer.getAddress()))) {
+      LOGGER.debug("Refusing PROXY protocol connection from untrusted source {}", ch.remoteAddress());
+      ch.close();
+      return;
+    }
+
     ch.pipeline()
         .addLast(LEGACY_PING_DECODER, new LegacyPingDecoder())
         .addLast(FRAME_DECODER, new MinecraftVarintFrameDecoder(ProtocolUtils.Direction.SERVERBOUND))
@@ -83,7 +98,7 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
           new SimpleBytesPerSecondLimiter(configuredPacketsPerSecond, configuredBytes, configuredInterval)
       );
     }
-    if (this.server.getConfiguration().isProxyProtocol()) {
+    if (proxyProtocol) {
       ch.pipeline().addFirst(new HAProxyMessageDecoder());
     }
   }

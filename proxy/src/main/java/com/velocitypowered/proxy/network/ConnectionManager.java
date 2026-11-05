@@ -142,8 +142,10 @@ public final class ConnectionManager {
                 // Warn people with console access that HAProxy is in use, see PR: #1436
                 if (this.server.getConfiguration().isProxyProtocol()) {
                   LOGGER.warn(
-                      "Using HAProxy and listening on {}, please ensure this listener is adequately firewalled.",
-                      channel.localAddress());
+                      "Using HAProxy and listening on {}: only {} may send a PROXY header, other "
+                          + "connections are closed (haproxy-protocol-trusted-proxies).",
+                      channel.localAddress(),
+                      this.server.getConfiguration().getProxyProtocolTrustedProxies().describe());
                 }
 
                 // Fire the proxy bound event after the socket is bound
