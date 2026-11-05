@@ -31,11 +31,12 @@ import org.apache.logging.log4j.Logger;
  */
 public final class MotdAlignmentMigration implements ConfigurationMigration {
 
-  private static final String CONFIG_VERSION = "2.8";
-
+  // Keyed on its own keys, never on config-version: upstream's PacketLimiterMigration owns "2.8",
+  // and bumping it here made that migration skip on every 2.7 config (4.3.0 merge).
   @Override
   public boolean shouldMigrate(final CommentedFileConfig config) {
-    return configVersion(config) < 2.8;
+    return config.contains("line1-alignment") || config.contains("line2-alignment")
+        || !config.contains("motd-width");
   }
 
   @Override
@@ -58,8 +59,6 @@ public final class MotdAlignmentMigration implements ConfigurationMigration {
             + " segment that runs until the next alignment tag or the end of the line, so a single\n"
             + " line can mix alignments, e.g. \"<center><gold>My Server<right><dark_gray>1.26\".\n"
             + " First line of the MOTD");
-
-    config.set("config-version", CONFIG_VERSION);
   }
 
   private static void migrateLine(final CommentedFileConfig config, final String lineKey,
