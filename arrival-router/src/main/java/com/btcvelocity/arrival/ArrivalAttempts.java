@@ -70,6 +70,16 @@ public final class ArrivalAttempts {
   }
 
   /**
+   * Forgets a server for every player. Called when a server is registered again: a new service
+   * under an old name is not the backend that refused them, so it deserves another try.
+   *
+   * @param serverName the server that was registered again
+   */
+  public void forgetServer(String serverName) {
+    this.attempted.values().forEach(servers -> servers.remove(serverName));
+  }
+
+  /**
    * How many players are currently tracked. Exists for the tests and for an operator asking
    * whether this map leaks.
    *

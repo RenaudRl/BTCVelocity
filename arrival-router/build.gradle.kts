@@ -10,6 +10,7 @@ dependencies {
     annotationProcessor(project(":velocity-api"))
 
     testImplementation(project(":velocity-api"))
+    testImplementation(libs.mockito)
     compileOnly(libs.jspecify)
 }
 

@@ -69,6 +69,23 @@ class ArrivalAttemptsTest {
   }
 
   @Test
+  void aServerRegisteredAgainIsForgottenForEveryone() {
+    // Arrange
+    var first = UUID.randomUUID();
+    var second = UUID.randomUUID();
+    this.attempts.record(first, "Lobby-1");
+    this.attempts.record(first, "Lobby-2");
+    this.attempts.record(second, "Lobby-1");
+
+    // Act
+    this.attempts.forgetServer("Lobby-1");
+
+    // Assert — only the re-registered server comes back into the running
+    assertEquals(Set.of("Lobby-2"), this.attempts.of(first));
+    assertTrue(this.attempts.of(second).isEmpty());
+  }
+
+  @Test
   void anUnknownPlayerHasAttemptedNothing() {
     assertTrue(this.attempts.of(UUID.randomUUID()).isEmpty());
     assertEquals(0, this.attempts.trackedPlayers(), "reading must not create an entry");
