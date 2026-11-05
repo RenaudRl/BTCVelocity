@@ -37,10 +37,12 @@ public final class PacketLimiterMigration implements ConfigurationMigration {
 
   @Override
   public void migrate(CommentedFileConfig config, Logger logger) {
-    config.set("packet-limiter.interval", DEFAULT.interval());
-    config.set("packet-limiter.packets-per-second", DEFAULT.pps());
-    config.set("packet-limiter.bytes-per-second", DEFAULT.bytes());
-    config.set("packet-limiter.decompressed-bytes-per-second", DEFAULT.bytesAfterDecompression());
+    // BTC: fill in, never overwrite. Upstream resets the limits to its defaults (pps -1), which
+    // would silently lift the 500 pps our deployed 2.7 configs set.
+    config.add("packet-limiter.interval", DEFAULT.interval());
+    config.add("packet-limiter.packets-per-second", DEFAULT.pps());
+    config.add("packet-limiter.bytes-per-second", DEFAULT.bytes());
+    config.add("packet-limiter.decompressed-bytes-per-second", DEFAULT.bytesAfterDecompression());
 
     config.setComment("packet-limiter.interval", """
         Size of the moving time window in seconds used to calculate average rates.
