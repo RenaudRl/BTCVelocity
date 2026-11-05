@@ -121,12 +121,16 @@ public final class VelocityBridgeChannel implements BridgeChannel {
       LOGGER.info("btc:bridge commands are restricted to {} backend(s)",
           this.authorization.allowedSources().size());
     } else {
-      LOGGER.info("btc:bridge accepts commands from any authenticated backend (no {} declared)",
+      // warn, not info: the backend's empty list means "nobody", the proxy's means "everybody".
+      LOGGER.warn("btc:bridge accepts commands from any authenticated backend (no {} declared)",
           BridgeAuthorization.SOURCES_ENV);
     }
     if (this.authorization.filtersTargets()) {
       LOGGER.info("btc:bridge destinations are restricted to {} server(s)",
           this.authorization.allowedTargets().size());
+    } else {
+      LOGGER.warn("btc:bridge commands may send players to any server (no {} declared)",
+          BridgeAuthorization.TARGETS_ENV);
     }
     // Same reason as above, for the platform: "I cannot resolve" is said out loud rather than
     // inferred away. Never "no Floodgate, so everyone is Java" — that would be a guess on the wire.
