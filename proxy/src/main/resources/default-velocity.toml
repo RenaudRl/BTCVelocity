@@ -300,6 +300,8 @@ log-command-executions = false
 
 # Allows players transferred from other hosts via the
 # Transfer packet (Minecraft 1.20.5) to be received.
+# With the Redis cluster enabled, set it to true on every proxy: /transfer and the
+# shutdown handoff move players between proxies with this packet.
 accepts-transfers = false
 
 # Enables support for SO_REUSEPORT. This may help the proxy scale better on multicore systems
