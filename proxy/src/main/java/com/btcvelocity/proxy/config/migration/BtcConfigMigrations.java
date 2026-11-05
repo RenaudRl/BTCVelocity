@@ -202,11 +202,6 @@ public class BtcConfigMigrations {
         migration(null, "redis.password", ""),
         migration(null, "redis.use-ssl", false),
         migration(
-            "Maximum number of maintained connections to the Redis server.",
-            "redis.max-concurrent-connections",
-            50
-        ),
-        migration(
             "The ID of this proxy, only needed for multi-proxy setups.\n"
                 + " Leave blank if you do not use Redis. Your server will not start if this is blank and Redis is on.",
             "redis.proxy-id",

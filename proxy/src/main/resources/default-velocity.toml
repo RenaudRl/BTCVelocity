@@ -437,12 +437,6 @@ username = ""
 password = ""
 use-ssl = false
 
-# Maximum number of maintained connections to the Redis server.
-#
-# We encourage leaving this at "50," as having an absurd number
-# of connections to your Redis instance will massively depreciate performance.
-max-concurrent-connections = 50
-
 # The ID of this proxy and is only needed for multi-proxy setups.
 # Leave blank if you do not use Redis and is left blank by
 # default to ensure you assign a qualitative proxy ID.
@@ -622,14 +616,6 @@ ratio-check-min-decompressed-size = 2097152
 # Each violating packet is dropped (not forwarded), and after this many
 # violations the connection is terminated. Default: 3.
 max-violations = 3
-
-[playercaps]
-# This allows you to define the maximum amount of players that can be on any
-# of the defined servers below. This player cap is artifical, meaning it
-# only exists to ensure players are not removed when they reach the front
-# of the queue.
-factions = 300
-minigames = 300
 
 [server-links]
 # This allows you to implement server links into the escape menu that

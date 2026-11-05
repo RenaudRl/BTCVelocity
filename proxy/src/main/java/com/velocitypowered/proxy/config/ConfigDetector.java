@@ -51,7 +51,7 @@ public record ConfigDetector(Logger logger) {
    * as missing or deprecated when comparing configurations.</p>
    */
   private static final Set<String> IGNORED_SECTIONS = Set.of("servers", "server-links",
-          "forced-hosts", "slash-servers", "playercaps", "proxy-addresses",
+          "forced-hosts", "slash-servers", "proxy-addresses",
           "command-aliases", "proxy-command-aliases", "auto-queue-servers");
 
   /**
