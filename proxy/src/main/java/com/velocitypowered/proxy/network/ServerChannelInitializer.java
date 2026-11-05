@@ -45,6 +45,7 @@ import io.netty.handler.timeout.ReadTimeoutHandler;
 import java.net.InetSocketAddress;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -54,6 +55,7 @@ import org.apache.logging.log4j.Logger;
 public class ServerChannelInitializer extends ChannelInitializer<Channel> {
 
   private static final Logger LOGGER = LogManager.getLogger(ServerChannelInitializer.class);
+  private static final AtomicBoolean UNTRUSTED_WARNED = new AtomicBoolean();
 
   private final VelocityServer server;
 
@@ -68,7 +70,13 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
     if (proxyProtocol && !(ch.remoteAddress() instanceof InetSocketAddress peer
         && this.server.getConfiguration().getProxyProtocolTrustedProxies()
             .contains(peer.getAddress()))) {
-      LOGGER.debug("Refusing PROXY protocol connection from untrusted source {}", ch.remoteAddress());
+      // First refusal at warn so a misconfigured relay is visible; later ones at debug (log flood).
+      if (UNTRUSTED_WARNED.compareAndSet(false, true)) {
+        LOGGER.warn("Refusing PROXY protocol connection from untrusted source {} (add your relay to "
+            + "haproxy-protocol-trusted-proxies; further refusals are logged at debug)", ch.remoteAddress());
+      } else {
+        LOGGER.debug("Refusing PROXY protocol connection from untrusted source {}", ch.remoteAddress());
+      }
       ch.close();
       return;
     }

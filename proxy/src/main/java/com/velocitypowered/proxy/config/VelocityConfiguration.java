@@ -2174,9 +2174,13 @@ public final class VelocityConfiguration implements ProxyConfig {
         } else {
           this.proxyProtocol = config.getOrElse("proxy-protocol", false);
         }
-        final List<?> trusted = config.getOrElse("haproxy-protocol-trusted-proxies",
-            TrustedProxies.DEFAULT_ENTRIES);
-        this.proxyProtocolTrustedProxies = trusted.stream().map(String::valueOf).toList();
+        // A scalar written instead of an array is read as a one-entry list; validate() judges it.
+        final Object trusted = config.get("haproxy-protocol-trusted-proxies");
+        this.proxyProtocolTrustedProxies = switch (trusted) {
+          case null -> TrustedProxies.DEFAULT_ENTRIES;
+          case List<?> list -> list.stream().map(String::valueOf).toList();
+          default -> List.of(String.valueOf(trusted));
+        };
         this.trustedProxies = TrustedProxies.parse(this.proxyProtocolTrustedProxies);
         this.tcpFastOpen = config.getOrElse("tcp-fast-open", false);
         this.bungeePluginMessageChannel = config.getOrElse("bungee-plugin-message-channel", true);
