@@ -264,12 +264,6 @@ public final class VelocityConfiguration implements ProxyConfig {
   @Expose
   private DynamicProxyFilterMode dynamicProxyFilter;
 
-  /**
-   * Server-specific player cap overrides (used for dynamic balancing).
-   */
-  @Expose
-  private Map<String, Integer> playerCaps;
-
   private VelocityConfiguration(final String bind, final String motdLine1, final String motdLine2,
                                 final int motdWidth, final List<String> motdHover,
                                 final int showMaxPlayers, final boolean onlineMode,
@@ -291,7 +285,7 @@ public final class VelocityConfiguration implements ProxyConfig {
                                 final Queue queue, final Security security,
                                 final Map<String, List<String>> slashServers,
                                 final Map<String, List<ServerLink>> serverLinks, final List<ProxyAddress> proxyAddresses,
-                                final DynamicProxyFilterMode dynamicProxyFilter, final Map<String, Integer> playerCaps) {
+                                final DynamicProxyFilterMode dynamicProxyFilter) {
     this.bind = bind;
     this.motdLine1 = motdLine1;
     this.motdLine2 = motdLine2;
@@ -336,7 +330,6 @@ public final class VelocityConfiguration implements ProxyConfig {
     this.serverLinks = serverLinks;
     this.proxyAddresses = proxyAddresses;
     this.dynamicProxyFilter = dynamicProxyFilter;
-    this.playerCaps = playerCaps;
   }
 
   /**
@@ -1024,15 +1017,6 @@ public final class VelocityConfiguration implements ProxyConfig {
   }
 
   /**
-   * Gets the map of per-server player caps.
-   *
-   * @return the player caps mapping
-   */
-  public Map<String, Integer> getPlayerCaps() {
-    return this.playerCaps;
-  }
-
-  /**
    * Gets all server links scoped to the provided server name, including global ones.
    *
    * @param serverName the backend server name (e.g., "lobby")
@@ -1084,7 +1068,6 @@ public final class VelocityConfiguration implements ProxyConfig {
         .add("logMinimumVersion", logMinimumVersion)
         .add("minimumVersion", minimumVersion)
         .add("slashServers", slashServers)
-        .add("playerCaps", playerCaps)
         .toString();
   }
 
@@ -1220,7 +1203,6 @@ public final class VelocityConfiguration implements ProxyConfig {
       final CommentedConfig securityConfig = config.get("security");
       final CommentedConfig serverLinksConfig = config.get("server-links");
       final CommentedConfig proxyAddressesConfig = config.get("proxy-addresses");
-      final CommentedConfig playerCapsConfig = config.get("playercaps");
       final PlayerInfoForwarding forwardingMode = config.getEnumOrElse(
               "player-info-forwarding-mode", PlayerInfoForwarding.NONE);
       final PingPassthroughMode pingPassthroughMode = PingPassthroughMode.fromConfig(config.get("ping-passthrough"));
@@ -1314,13 +1296,6 @@ public final class VelocityConfiguration implements ProxyConfig {
         }
       }
 
-      final Map<String, Integer> playerCaps = new HashMap<>();
-      if (playerCapsConfig != null) {
-        for (CommentedConfig.Entry entry : playerCapsConfig.entrySet()) {
-          playerCaps.put(entry.getKey(), entry.getValue());
-        }
-      }
-
       // Throw an exception if the forwarding-secret file is empty and the proxy is using a
       // forwarding mode that requires it.
       if (forwardingSecret.length == 0
@@ -1373,8 +1348,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           slashServers,
           links,
           addresses,
-          filter,
-          playerCaps
+          filter
       );
     }
   }
@@ -2473,8 +2447,6 @@ public final class VelocityConfiguration implements ProxyConfig {
    * which are optional depending on the server's security configuration.</li>
    * <li>SSL support through {@code useSsl} for secure connections, especially
    * recommended for public or cloud-hosted Redis servers.</li>
-   * <li>Connection management settings, such as {@code maxConcurrentConnections},
-   * that control the number of parallel connections allowed.</li>
    * <li>Health check intervals via {@code pingIntervalMs} and timeout settings
    * for identifying unresponsive Redis connections or proxies.</li>
    * </ul>
@@ -2526,12 +2498,6 @@ public final class VelocityConfiguration implements ProxyConfig {
     private boolean useSsl;
 
     /**
-     * The maximum number of concurrent connections allowed to the Redis server.
-     */
-    @Expose
-    private int maxConcurrentConnections;
-
-    /**
      * The proxy ID to use when identifying this proxy to Redis.
      * If null, the proxy will operate anonymously.
      */
@@ -2555,7 +2521,6 @@ public final class VelocityConfiguration implements ProxyConfig {
 
       this.password = config.get("password");
       this.useSsl = config.getOrElse("use-ssl", false);
-      this.maxConcurrentConnections = config.getOrElse("max-concurrent-connections", 10);
       this.proxyId = config.get("proxy-id");
 
       if (this.proxyId == null || this.proxyId.isEmpty()) {
@@ -2623,16 +2588,6 @@ public final class VelocityConfiguration implements ProxyConfig {
     }
 
     /**
-     * Gets the maximum number of concurrent Redis connections allowed.
-     *
-     * @return the maximum number of connections
-     */
-    @Deprecated(forRemoval = true)
-    public int getMaxConcurrentConnections() {
-      return maxConcurrentConnections;
-    }
-
-    /**
      * Gets the proxy ID used to uniquely identify this instance in Redis,
      * or {@code null} if not explicitly configured.
      *
@@ -2652,7 +2607,6 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", username=" + username
           // password excluded for security
           + ", useSsl=" + useSsl
-          + ", maxConcurrentConnections=" + maxConcurrentConnections
           + '}';
     }
   }
