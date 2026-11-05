@@ -42,6 +42,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.translation.Argument;
 import org.apache.logging.log4j.LogManager;
@@ -400,10 +401,36 @@ public class VelocityQueueManager implements QueueManager {
         });
   }
 
+  /**
+   * Drops the queues of servers that are no longer registered and hold nobody.
+   *
+   * <p>Ephemeral services (CloudNet {@code Dungeon-7}) each leave a queue behind otherwise: the map
+   * only ever grew. A queue with players in it is kept, so a service restarted under the same name
+   * finds its waiting players again.</p>
+   *
+   * @return the names of the dropped queues
+   */
+  static List<String> pruneStaleQueues(final Map<String, VelocityQueue> queues,
+                                       final Predicate<String> isRegistered) {
+    final List<String> dropped = new ArrayList<>();
+    for (final Map.Entry<String, VelocityQueue> entry : queues.entrySet()) {
+      final VelocityQueue queue = entry.getValue();
+      if (queue.size() == 0 && !isRegistered.test(entry.getKey())
+          && queues.remove(entry.getKey(), queue)) {
+        queue.teardown();
+        dropped.add(entry.getKey());
+      }
+    }
+    return dropped;
+  }
+
   private void pingBackends() {
     if (!isMasterProxy()) {
       return;
     }
+
+    pruneStaleQueues(queues, name -> server.getServer(name).isPresent())
+        .forEach(lastTurnedOnlineTime::remove);
 
     final List<CompletableFuture<?>> pingFutures = new ArrayList<>();
 
