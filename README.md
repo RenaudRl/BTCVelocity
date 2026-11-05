@@ -44,7 +44,6 @@ modifications required by GPLv3 §5(a) are in [NOTICE.md](NOTICE.md).
 | `btc:bridge` protocol **v2** | BTC | Typed, versioned messages between proxy and backends. Every message carries an envelope (version, message id, source backend); `Ack`/`Nack` let the sender tell a lost request from a slow one. The sealed hierarchy has an explicit `permits` list, so a message added outside it fails to compile instead of silently decoding as unknown. |
 | Modern forwarding | Velocity | Velocity-native forwarding plus BungeeGuard. |
 | Anti-decompression bomb | BTC | Compression-ratio monitoring with a ratio-check floor, and oversized packet detection. |
-| Netty pipeline tuning | BTC | Zero-copy where possible. |
 
 ### Permissions — native, LuckPerms removed
 
@@ -170,7 +169,7 @@ The production-ready shadow JAR will be at:
 ### Recommended Startup Flags
 ```bash
 java -Xms4G -Xmx4G \
-  -XX:+UseZGC -XX:+ZGenerational \
+  -XX:+UseZGC \
   -XX:+UseCompactObjectHeaders \
   -XX:+UseStringDeduplication \
   -jar velocity-proxy-*-all.jar
@@ -251,7 +250,7 @@ BTCVelocity/
 
 | Component | Version |
 | :--- | :--- |
-| Netty | 4.2.15.Final |
+| Netty | 4.2.19.Final |
 | Lettuce (Redis client) | 7.6.0 |
 | PostgreSQL JDBC | 42.7.11 |
 | HikariCP | 6.2.1 |
