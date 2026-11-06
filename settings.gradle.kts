@@ -35,6 +35,7 @@ sequenceOf(
     "native",
     "proxy",
     "cloudnet-registry",
+    "cloudnet-wake",
     "arrival-router",
     "pack-policy",
     "platform-resolver",
