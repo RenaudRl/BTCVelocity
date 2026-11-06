@@ -437,8 +437,9 @@ status-cache-ttl = 0
 # that choose a destination (btc-arrival-router) avoid that backend for the open delay, then try it
 # again: the next success clears it, a failure avoids it again. A backend that answers and refuses
 # the player (full, whitelist) is not a failure. Servers are never removed from the proxy.
-# 0 turns it off. Read at startup.
-backend-circuit-failures = 3
+# 0 turns it off, and it is off by default: 3 is the value to use once the behaviour has been
+# validated on the bench. Read at startup.
+backend-circuit-failures = 0
 
 # Seconds in which the failed connections are counted.
 backend-circuit-window-seconds = 30

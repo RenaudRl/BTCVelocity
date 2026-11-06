@@ -32,7 +32,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 class BackendCircuitConfigTest {
 
-  private static final String FAILURES = "backend-circuit-failures = 3";
+  private static final String FAILURES = "backend-circuit-failures = 0";
+  private static final String ACTIVE = "backend-circuit-failures = 3";
   private static final String WINDOW = "backend-circuit-window-seconds = 30";
   private static final String OPEN = "backend-circuit-open-seconds = 30";
 
@@ -41,6 +42,7 @@ class BackendCircuitConfigTest {
     final VelocityConfiguration config = VelocityConfiguration.read(write(dir, FAILURES, WINDOW, OPEN));
 
     assertTrue(config.validate());
+    assertEquals(0, BackendCircuitBreaker.DEFAULT_FAILURES, "off until validated on the bench");
     assertEquals(BackendCircuitBreaker.DEFAULT_FAILURES, config.getBackendCircuitFailures());
     assertEquals(BackendCircuitBreaker.DEFAULT_WINDOW_SECONDS, config.getBackendCircuitWindowSeconds());
     assertEquals(BackendCircuitBreaker.DEFAULT_OPEN_SECONDS, config.getBackendCircuitOpenSeconds());
@@ -72,9 +74,9 @@ class BackendCircuitConfigTest {
   void aNegativeCountOrAnUnusableDelayIsRefused(@TempDir final Path dir) throws IOException {
     assertFalse(VelocityConfiguration.read(write(dir, "backend-circuit-failures = -1", WINDOW, OPEN))
         .validate());
-    assertFalse(VelocityConfiguration.read(write(dir, FAILURES, "backend-circuit-window-seconds = 0", OPEN))
+    assertFalse(VelocityConfiguration.read(write(dir, ACTIVE, "backend-circuit-window-seconds = 0", OPEN))
         .validate());
-    assertFalse(VelocityConfiguration.read(write(dir, FAILURES, WINDOW, "backend-circuit-open-seconds = -5"))
+    assertFalse(VelocityConfiguration.read(write(dir, ACTIVE, WINDOW, "backend-circuit-open-seconds = -5"))
         .validate());
   }
 

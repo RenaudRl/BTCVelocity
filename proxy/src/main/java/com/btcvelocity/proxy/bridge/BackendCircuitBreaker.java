@@ -58,7 +58,7 @@ public final class BackendCircuitBreaker {
    * Failed connections within the window that open the circuit. Zero or less turns it off, and it
    * is off by default until the behaviour has been seen on a real network.
    */
-  public static final int DEFAULT_FAILURES = 3;
+  public static final int DEFAULT_FAILURES = 0;
 
   /** Different players whose connections must have failed for the circuit to open. */
   public static final int MIN_DISTINCT_PLAYERS = 2;

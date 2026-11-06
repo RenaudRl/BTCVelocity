@@ -86,15 +86,14 @@ class BackendHealthRegistryCircuitTest {
   }
 
   @Test
-  void theDefaultRegistryStartsWithTheDefaultThresholds() {
+  void theDefaultRegistryHasTheCircuitOff() {
+    // Witness: it ships off until the behaviour has been validated on the bench.
     final BackendHealthRegistry byDefault = new BackendHealthRegistry();
 
-    for (int i = 0; i < BackendCircuitBreaker.DEFAULT_FAILURES - 1; i++) {
+    for (int i = 0; i < 50; i++) {
       byDefault.recordConnectionFailure(SERVER, i % 2 == 0 ? ALICE : BOB);
     }
-    assertFalse(byDefault.isAvoided(SERVER));
 
-    byDefault.recordConnectionFailure(SERVER, BOB);
-    assertTrue(byDefault.isAvoided(SERVER));
+    assertFalse(byDefault.isAvoided(SERVER));
   }
 }

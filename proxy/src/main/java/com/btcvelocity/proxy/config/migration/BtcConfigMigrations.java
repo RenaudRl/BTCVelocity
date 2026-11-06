@@ -199,7 +199,8 @@ public class BtcConfigMigrations {
                 + " that choose a destination (btc-arrival-router) avoid that backend for the open delay, then try it\n"
                 + " again: the next success clears it, a failure avoids it again. A backend that answers and refuses\n"
                 + " the player (full, whitelist) is not a failure. Servers are never removed from the proxy.\n"
-                + " 0 turns it off. Read at startup.",
+                + " 0 turns it off, and it is off by default: 3 is the value to use once the behaviour has been\n"
+                + " validated on the bench. Read at startup.",
             "advanced.backend-circuit-failures",
             BackendCircuitBreaker.DEFAULT_FAILURES
         ),
