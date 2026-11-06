@@ -281,6 +281,29 @@ class PlayerDepotServiceTest {
   }
 
   @Test
+  void aSettingsFloodFromOnePlayerNeverPushesOutAnotherPlayersDisconnect() throws Exception {
+    final PlayerSettings listed = mock(PlayerSettings.class);
+    when(listed.isClientListingAllowed()).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    when(alice.getPlayerSettings()).thenReturn(listed);
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    final ConnectedPlayer bob = player("bob", null); // already gone locally
+    depot.put(entry(bob.getUniqueId(), "bob", SELF, "lobby"));
+    depot.hang = new CountDownLatch(1); // Redis is slow: nothing drains meanwhile
+
+    for (int i = 0; i < 10_000; i++) {
+      service.onPlayerSettingsChange(alice, listed);
+    }
+    service.onPlayerDisconnect(bob);
+    depot.hang.countDown();
+    awaitWorker();
+
+    assertNull(depot.map.get(bob.getUniqueId()), "bob's disconnect was dropped");
+    assertTrue(depot.map.get(alice.getUniqueId()).isClientListingAllowed(),
+        "the coalesced write carries the latest settings");
+  }
+
+  @Test
   void aRepairThatReadBeforeTheReleaseNeverClaimsAReleasedPlayerAgain() throws Exception {
     join("alice"); // online with no entry: the repair would claim her
     depot.valuesHang = new CountDownLatch(1);

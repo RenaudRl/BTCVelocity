@@ -37,9 +37,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -123,6 +125,11 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * Whether a refresh is already waiting in the worker queue, so an outage queues one at most.
    */
   private final AtomicBoolean refreshPending = new AtomicBoolean();
+
+  /**
+   * Players with a settings write waiting in the worker queue.
+   */
+  private final Set<UUID> pendingSettings = ConcurrentHashMap.newKeySet();
 
   /**
    * Throttles the warning for logins let in without a duplicate check.
@@ -314,8 +321,21 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * @param settings the new settings
    */
   public void onPlayerSettingsChange(final ConnectedPlayer player, final PlayerSettings settings) {
-    this.worker.execute(() -> updateOwnEntry(player,
-        entry -> entry.setClientListingAllowed(settings.isClientListingAllowed())));
+    // Coalesced: at most one settings write waits per player, and it reads the settings when it
+    // runs, so a client flipping them on every packet cannot fill the queue that carries the
+    // disconnects. Connects, switches and disconnects are never coalesced.
+    final UUID uniqueId = player.getUniqueId();
+    if (!this.pendingSettings.add(uniqueId)) {
+      return;
+    }
+    final boolean queued = this.worker.execute(() -> {
+      this.pendingSettings.remove(uniqueId);
+      this.server.getPlayer(uniqueId).ifPresent(current -> updateOwnEntry(current, entry ->
+          entry.setClientListingAllowed(current.getPlayerSettings().isClientListingAllowed())));
+    });
+    if (!queued) {
+      this.pendingSettings.remove(uniqueId);
+    }
   }
 
   /**
