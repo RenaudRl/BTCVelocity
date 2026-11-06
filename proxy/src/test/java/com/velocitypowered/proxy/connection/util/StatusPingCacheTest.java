@@ -123,7 +123,7 @@ class StatusPingCacheTest {
     assertFalse(waiter.isDone());
     assertEquals(1, builds.get());
 
-    advance(nanos, 31); // past the in-flight limit
+    nanos.addAndGet(StatusPingCache.IN_FLIGHT_LIMIT_NANOS); // the limit is reached
     assertEquals("ping-2", cache.get(KEY, 5, this::build).get().orElseThrow());
     assertFalse(first.isDone());
 

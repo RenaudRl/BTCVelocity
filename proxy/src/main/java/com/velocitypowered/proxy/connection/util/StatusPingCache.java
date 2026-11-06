@@ -51,8 +51,14 @@ public final class StatusPingCache {
    */
   private static final int MAX_ENTRIES = 512;
 
-  // A build that never completes must not pin its key forever: after this it is replaced.
-  private static final long IN_FLIGHT_LIMIT_NANOS = TimeUnit.SECONDS.toNanos(30);
+  /*
+   * A build that never completes must not pin its key: after this it is replaced by a new one,
+   * at most one per key per period. A passthrough ping already ends by itself (connect timeout
+   * 5 s, then the read-timeout, 30 s by default, in VelocityRegisteredServer.ping), so this is
+   * set to that read-timeout: a slower legitimate build is not rebuilt behind its back. It only
+   * bounds a ProxyPingEvent listener that never completes.
+   */
+  static final long IN_FLIGHT_LIMIT_NANOS = TimeUnit.SECONDS.toNanos(30);
 
   /**
    * What makes two clients receive the same response: their protocol version (the version string
