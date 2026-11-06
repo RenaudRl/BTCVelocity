@@ -51,6 +51,11 @@ public final class StatusPingCache {
    */
   private static final int MAX_ENTRIES = 512;
 
+  private static final double NANOS_PER_SECOND = TimeUnit.SECONDS.toNanos(1);
+
+  // A larger ttl is cut here, so that the deadline arithmetic on the nano clock cannot overflow.
+  private static final double MAX_TTL_NANOS = TimeUnit.DAYS.toNanos(365);
+
   /*
    * A build that never completes must not pin its key: after this it is replaced by a new one,
    * at most one per key per period. A passthrough ping already ends by itself (connect timeout
@@ -112,7 +117,7 @@ public final class StatusPingCache {
     if (!(ttlSeconds > 0)) { // also catches NaN
       return build.get();
     }
-    final long ttlNanos = (long) Math.min(ttlSeconds * 1e9, Long.MAX_VALUE / 4);
+    final long ttlNanos = (long) Math.min(ttlSeconds * NANOS_PER_SECOND, MAX_TTL_NANOS);
     final long now = clock.getAsLong();
 
     if (entries.size() >= MAX_ENTRIES) {

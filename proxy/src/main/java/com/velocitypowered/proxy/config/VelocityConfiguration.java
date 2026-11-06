@@ -79,6 +79,9 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   private static final String UNBOUNDED = "UNBOUNDED";
 
+  // advanced.status-cache-ttl: the only negative value accepted, same meaning as 0 (cache off).
+  private static final double STATUS_CACHE_OFF = -1;
+
   @Expose
   private String bind = "0.0.0.0:25565";
 
@@ -480,7 +483,7 @@ public final class VelocityConfiguration implements ProxyConfig {
     }
 
     // -1 is the documented "off"; the comparison also refuses NaN.
-    if (!(advanced.statusCacheTtl >= 0) && advanced.statusCacheTtl != -1) {
+    if (!(advanced.statusCacheTtl >= 0) && advanced.statusCacheTtl != STATUS_CACHE_OFF) {
       LOGGER.error("Invalid status-cache-ttl {}: use seconds >= 0, or -1 to disable",
           advanced.statusCacheTtl);
       valid = false;
