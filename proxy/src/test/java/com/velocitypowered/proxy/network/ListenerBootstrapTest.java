@@ -114,7 +114,13 @@ class ListenerBootstrapTest {
         .thenReturn(TrustedProxies.parse(entries));
   }
 
-  private Socket connectTo(final InetSocketAddress requested) throws IOException {
+  private Socket connectTo(final InetSocketAddress requested)
+      throws IOException, InterruptedException {
+    // bind() returns when the socket is open; the endpoint is registered by a listener right after
+    final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (this.manager.localAddressOf(requested) == null && System.nanoTime() < deadline) {
+      Thread.sleep(10);
+    }
     final InetSocketAddress bound = this.manager.localAddressOf(requested);
     assertNotNull(bound, "the listener must be bound");
     final Socket socket = new Socket(bound.getAddress(), bound.getPort());
