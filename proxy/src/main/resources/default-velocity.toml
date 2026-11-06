@@ -443,6 +443,22 @@ map = "Velocity"
 # Whether plugins should be shown in query response by default or not.
 show-plugins = false
 
+[observability]
+# Watches the Netty event loops: a loop that has not run a task for watchdog-threshold-ms is logged
+# as a warning with its thread name and stack (at most once a minute per loop), and its lag is
+# exported as a metric.
+watchdog-enabled = true
+
+# Event loop lag, in milliseconds, above which a loop is reported as blocked.
+watchdog-threshold-ms = 100
+
+# Serves /metrics (Prometheus text format) and /healthz over HTTP, for a local scraper.
+prometheus-enabled = false
+
+# Address and port of that listener. It has no authentication, so only a loopback address
+# (127.0.0.1, [::1], localhost) is accepted: the proxy refuses to start with any other one.
+prometheus-bind = "127.0.0.1:9225"
+
 [redis]
 # Should Redis be used to communicate between multiple Velocity proxies?
 enabled = false

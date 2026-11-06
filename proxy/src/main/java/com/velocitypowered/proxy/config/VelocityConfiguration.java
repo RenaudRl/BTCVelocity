@@ -25,6 +25,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.annotations.Expose;
 import com.btcvelocity.proxy.config.migration.BtcConfigMigrations;
+import com.btcvelocity.proxy.observability.MetricsEndpoint;
 import com.btcvelocity.proxy.security.GeyserListenerAddress;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.api.proxy.config.BackendServerConfig;
@@ -157,6 +158,8 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   private final Metrics metrics;
 
+  private final Observability observability;
+
   /**
    * Redis configuration used for multi-proxy functionality.
    */
@@ -275,7 +278,8 @@ public final class VelocityConfiguration implements ProxyConfig {
                                 final boolean samplePlayersInPing, final boolean enablePlayerAddressLogging,
                                 final Servers servers, final ForcedHosts forcedHosts, final CommandAliases commandAliases,
                                 final ProxyCommandAliases proxyCommandAliases, final Commands commands, final Advanced advanced,
-                                final Query query, final Metrics metrics, final boolean forceKeyAuthentication,
+                                final Query query, final Metrics metrics,
+                                final Observability observability, final boolean forceKeyAuthentication,
                                 final PacketLimiterConfig packetLimiterConfig,
                                 final boolean logPlayerConnections, final boolean logPlayerDisconnections,
                                 final boolean logOfflineConnections, final boolean disableForge,
@@ -311,6 +315,7 @@ public final class VelocityConfiguration implements ProxyConfig {
     this.advanced = advanced;
     this.query = query;
     this.metrics = metrics;
+    this.observability = observability;
     this.forceKeyAuthentication = forceKeyAuthentication;
     this.packetLimiterConfig = packetLimiterConfig;
     this.logPlayerConnections = logPlayerConnections;
@@ -491,6 +496,8 @@ public final class VelocityConfiguration implements ProxyConfig {
         valid = false;
       }
     }
+
+    valid &= observability.validate();
 
     if (advanced.loginRatelimit < 0) {
       LOGGER.error("Invalid login ratelimit {}ms", advanced.loginRatelimit);
@@ -883,6 +890,10 @@ public final class VelocityConfiguration implements ProxyConfig {
     return metrics;
   }
 
+  public Observability getObservability() {
+    return observability;
+  }
+
   public PingPassthroughMode getPingPassthrough() {
     return pingPassthrough;
   }
@@ -1252,6 +1263,7 @@ public final class VelocityConfiguration implements ProxyConfig {
       final CommentedConfig advancedConfig = config.get("advanced");
       final CommentedConfig queryConfig = config.get("query");
       final CommentedConfig metricsConfig = config.get("metrics");
+      final CommentedConfig observabilityConfig = config.get("observability");
       final CommentedConfig redisConfig = config.get("redis");
       final CommentedConfig postgresConfig = config.get("postgresql");
       final CommentedConfig queueConfig = config.get("queue");
@@ -1384,6 +1396,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           new Advanced(advancedConfig),
           new Query(queryConfig),
           new Metrics(metricsConfig),
+          new Observability(observabilityConfig),
           forceKeyAuthentication,
           packetLimiterConfig,
           logPlayerConnections,
@@ -2482,6 +2495,85 @@ public final class VelocityConfiguration implements ProxyConfig {
   }
 
   /**
+   * Configuration for the event loop watchdog and the local Prometheus listener.
+   */
+  public static final class Observability {
+
+    static final String DEFAULT_PROMETHEUS_BIND = "127.0.0.1:9225";
+
+    private boolean watchdogEnabled = true;
+    private long watchdogThresholdMs = 100;
+    private boolean prometheusEnabled = false;
+    private String prometheusBind = DEFAULT_PROMETHEUS_BIND;
+
+    Observability(final CommentedConfig config) {
+      if (config == null) {
+        return;
+      }
+      this.watchdogEnabled = config.getOrElse("watchdog-enabled", true);
+      // A whole number in the toml is read as an Integer: go through Number, never cast to long.
+      this.watchdogThresholdMs = config.<Number>getOrElse("watchdog-threshold-ms", 100).longValue();
+      this.prometheusEnabled = config.getOrElse("prometheus-enabled", false);
+      this.prometheusBind = config.getOrElse("prometheus-bind", DEFAULT_PROMETHEUS_BIND);
+    }
+
+    /**
+     * Checks the settings. The metrics listener has no authentication, so a bind address that is
+     * not loopback is refused even while the listener is disabled.
+     *
+     * @return {@code true} if the settings are sound
+     */
+    boolean validate() {
+      boolean valid = true;
+      try {
+        MetricsEndpoint.parseLoopbackBind(prometheusBind);
+      } catch (final IllegalArgumentException e) {
+        LOGGER.error("Invalid observability.prometheus-bind '{}': {}. The metrics listener has no "
+            + "authentication and only accepts a loopback address such as 127.0.0.1:9225.",
+            prometheusBind, e.getMessage());
+        valid = false;
+      }
+      if (watchdogEnabled && watchdogThresholdMs < 1) {
+        LOGGER.error("Invalid observability.watchdog-threshold-ms {}, expected at least 1",
+            watchdogThresholdMs);
+        valid = false;
+      }
+      return valid;
+    }
+
+    public boolean isWatchdogEnabled() {
+      return watchdogEnabled;
+    }
+
+    public long getWatchdogThresholdMs() {
+      return watchdogThresholdMs;
+    }
+
+    public boolean isPrometheusEnabled() {
+      return prometheusEnabled;
+    }
+
+    public String getPrometheusBind() {
+      return prometheusBind;
+    }
+
+    @Override
+    public boolean equals(final Object other) {
+      return other instanceof Observability o
+          && watchdogEnabled == o.watchdogEnabled
+          && watchdogThresholdMs == o.watchdogThresholdMs
+          && prometheusEnabled == o.prometheusEnabled
+          && prometheusBind.equals(o.prometheusBind);
+    }
+
+    @Override
+    public int hashCode() {
+      return java.util.Objects.hash(watchdogEnabled, watchdogThresholdMs, prometheusEnabled,
+          prometheusBind);
+    }
+  }
+
+  /**
    * Configuration for packet limiting.
    *
    * @param interval                the interval in seconds to measure packets over
@@ -2974,7 +3066,12 @@ public final class VelocityConfiguration implements ProxyConfig {
      */
     private List<String> queueOnJoinServers;
 
-    private Queue(final CommentedConfig config) {
+    // A whole number in the toml ("send-delay = 2") is read as an Integer, not a Double.
+    private static double seconds(final CommentedConfig config, final String key, final double def) {
+      return config.<Number>getOrElse(key, def).doubleValue();
+    }
+
+    Queue(final CommentedConfig config) {
       if (config == null) {
         return;
       }
@@ -2982,10 +3079,10 @@ public final class VelocityConfiguration implements ProxyConfig {
       this.enabled = config.getOrElse("enabled", false);
       this.noQueueServers = config.getOrElse("no-queue-servers", List.of());
       this.allowMultiQueue = config.getOrElse("allow-multi-queue", false);
-      this.sendDelay = config.getOrElse("send-delay", 1.0);
-      this.queueDelay = config.getOrElse("queue-delay", 0.0);
-      this.messageDelay = config.getOrElse("message-delay", 1.0);
-      this.backendPingInterval = config.getOrElse("backend-ping-interval", 5.0);
+      this.sendDelay = seconds(config, "send-delay", 1.0);
+      this.queueDelay = seconds(config, "queue-delay", 0.0);
+      this.messageDelay = seconds(config, "message-delay", 1.0);
+      this.backendPingInterval = seconds(config, "backend-ping-interval", 5.0);
       this.maxBatchSize = config.getOrElse("max-batch-size", 5);
       this.maxSendRetries = config.getOrElse("max-send-retries", 10);
       this.removePlayerOnServerSwitch = config.getOrElse("remove-player-on-server-switch", true);

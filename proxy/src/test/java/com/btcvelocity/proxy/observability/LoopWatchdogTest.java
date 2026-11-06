@@ -1,0 +1,140 @@
+/*
+ * Copyright (C) 2026 Velocity Contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.btcvelocity.proxy.observability;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.netty.channel.DefaultEventLoop;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+class LoopWatchdogTest {
+
+  private static final long LONG_WINDOW_MILLIS = 60_000;
+
+  private DefaultEventLoop blockedLoop;
+  private DefaultEventLoop healthyLoop;
+  private final List<LoopWatchdog.Stall> stalls = new CopyOnWriteArrayList<>();
+  private LoopWatchdog watchdog;
+
+  @BeforeEach
+  void setUp() {
+    blockedLoop = new DefaultEventLoop(null, named("test-blocked-loop"));
+    healthyLoop = new DefaultEventLoop(null, named("test-healthy-loop"));
+  }
+
+  private static ThreadFactory named(final String name) {
+    return runnable -> new Thread(runnable, name);
+  }
+
+  @AfterEach
+  void tearDown() {
+    if (watchdog != null) {
+      watchdog.close();
+    }
+    blockedLoop.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+    healthyLoop.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+  }
+
+  @Test
+  void aBlockedLoopIsReportedOnceWithItsThreadAndStack() throws Exception {
+    watchdog = new LoopWatchdog(Map.of("blocked", blockedLoop),
+        50, 10, LONG_WINDOW_MILLIS, stalls::add);
+
+    final CountDownLatch release = new CountDownLatch(1);
+    blockedLoop.execute(() -> {
+      try {
+        release.await();
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    });
+    try {
+      awaitStall();
+      // Many more checks while it stays blocked: the window keeps the log to one report.
+      Thread.sleep(300);
+      assertFalse(watchdog.isResponsive());
+      assertTrue(watchdog.readings().get(0).lagNanos() >= TimeUnit.MILLISECONDS.toNanos(50));
+    } finally {
+      release.countDown();
+    }
+
+    assertEquals(1, stalls.size(), "one stack per loop per window");
+    final LoopWatchdog.Stall stall = stalls.get(0);
+    assertEquals("blocked", stall.loop());
+    assertEquals("test-blocked-loop", stall.threadName());
+    assertTrue(stall.lagMillis() >= 50, "lag " + stall.lagMillis());
+    assertTrue(stall.stack().length > 0);
+  }
+
+  @Test
+  void aHealthyLoopIsNeverReported() throws Exception {
+    // Threshold far above any scheduling noise: only a real stall could trip it.
+    watchdog = new LoopWatchdog(Map.of("healthy", healthyLoop),
+        5_000, 10, LONG_WINDOW_MILLIS, stalls::add);
+
+    Thread.sleep(300);
+
+    assertTrue(stalls.isEmpty());
+    assertTrue(watchdog.isResponsive());
+    assertEquals(1, watchdog.readings().size());
+  }
+
+  @Test
+  void aLoopBlockedAgainAfterTheWindowIsReportedAgain() throws Exception {
+    watchdog = new LoopWatchdog(Map.of("blocked", blockedLoop), 50, 10, 100, stalls::add);
+
+    final CountDownLatch release = new CountDownLatch(1);
+    blockedLoop.execute(() -> {
+      try {
+        release.await();
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    });
+    try {
+      awaitStall();
+      // Window is 100 ms: staying blocked longer must produce a second report.
+      final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (stalls.size() < 2 && System.nanoTime() < deadline) {
+        Thread.sleep(10);
+      }
+    } finally {
+      release.countDown();
+    }
+
+    assertTrue(stalls.size() >= 2);
+  }
+
+  private void awaitStall() throws InterruptedException {
+    final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (stalls.isEmpty() && System.nanoTime() < deadline) {
+      Thread.sleep(10);
+    }
+    assertFalse(stalls.isEmpty(), "the blocked loop was not reported within 5 s");
+  }
+}
