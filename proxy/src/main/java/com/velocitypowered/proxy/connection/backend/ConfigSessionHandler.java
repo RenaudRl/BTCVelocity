@@ -397,6 +397,9 @@ public class ConfigSessionHandler implements MinecraftSessionHandler {
 
   @Override
   public void disconnected() {
+    if (!resultFuture.isDone() && !serverConn.isGracefulDisconnect()) {
+      serverConn.markClosedByBackend();
+    }
     resultFuture.complete(ConnectionRequestResults.forDisconnect(
         ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR, serverConn.getServer()));
   }
@@ -425,6 +428,7 @@ public class ConfigSessionHandler implements MinecraftSessionHandler {
   private void switchFailure(final Throwable cause) {
     LOGGER.error("Unable to switch to new server {} for {}", serverConn.getServerInfo().getName(),
         serverConn.getPlayer().getUsername(), cause);
+    serverConn.markProxySideFailure();
     serverConn.getPlayer().disconnect(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
     resultFuture.completeExceptionally(cause);
   }

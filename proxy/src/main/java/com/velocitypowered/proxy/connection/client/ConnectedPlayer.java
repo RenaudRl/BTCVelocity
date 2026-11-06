@@ -28,6 +28,7 @@ import com.google.common.base.Preconditions;
 import com.google.gson.JsonObject;
 import com.btcvelocity.api.permission.PermissionResolver;
 import com.btcvelocity.api.queue.QueueState;
+import com.btcvelocity.proxy.bridge.BackendConnectionOutcome;
 import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
 import com.btcvelocity.proxy.permission.PermissionUtils;
 import com.btcvelocity.proxy.queue.VelocityQueue;
@@ -1922,7 +1923,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
           connectionInFlight = con;
 
           return con.connect().whenCompleteAsync((result, exception) -> {
-            recordBackendOutcome(realDestination, result, exception);
+            recordBackendOutcome(realDestination, con, result, exception);
             if (result != null && !result.isSuccessful() && !result.isSafe()) {
               handleConnectionException(result.getAttemptedConnection(),
                   // The only way for the reason to be null is if the result is safe
@@ -1937,23 +1938,28 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     }
 
     /**
-     * Feeds the passive circuit breaker with how the attempt ended. An exception means the backend
-     * could not be reached or dropped the login (connect failure, timeout, closed unexpectedly); a
-     * backend that answered and refused the player (full, whitelist) is neither. A player who left
-     * while connecting closes the backend connection himself, which says nothing about the backend.
+     * Feeds the passive circuit breaker with how the attempt ended; see
+     * {@link BackendConnectionOutcome#classify}. A backend that answered and refused the player
+     * (full, whitelist), a player who left while connecting and an error raised by the proxy or a
+     * plugin say nothing about the backend.
      */
     private void recordBackendOutcome(final VelocityRegisteredServer destination,
+                                      final VelocityServerConnection attempt,
                                       final Impl result, final Throwable exception) {
       final BackendHealthRegistry health = server.getBackendHealthRegistry();
       if (health == null) {
         return;
       }
-      if (exception != null) {
-        if (isActive()) {
-          health.recordConnectionFailure(destination.getServerInfo().getName(), getUniqueId());
-        }
-      } else if (result != null && result.isSuccessful()) {
-        health.recordConnectionSuccess(destination.getServerInfo().getName());
+      final String name = destination.getServerInfo().getName();
+      switch (BackendConnectionOutcome.classify(
+          exception == null && result != null && result.isSuccessful(),
+          exception != null,
+          !isActive() || attempt.isGracefulDisconnect(),
+          attempt.isProxySideFailure(),
+          attempt.wasClosedByBackend())) {
+        case FAILURE -> health.recordConnectionFailure(name, getUniqueId());
+        case SUCCESS -> health.recordConnectionSuccess(name);
+        case IGNORE -> { }
       }
     }
 
