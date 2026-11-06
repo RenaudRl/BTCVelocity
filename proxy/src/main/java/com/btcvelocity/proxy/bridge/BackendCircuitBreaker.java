@@ -18,9 +18,12 @@
 package com.btcvelocity.proxy.bridge;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 
@@ -28,25 +31,37 @@ import java.util.function.LongSupplier;
  * A passive circuit breaker per backend, fed by the connections the proxy really makes.
  *
  * <p>Nothing is probed: when a player's connection to a backend fails, the failure is recorded
- * here, and when one succeeds the backend is cleared. A backend that fails {@code failures} times
- * within {@code window} is <em>open</em>: routing avoids it for {@code open}. Then it is
- * <em>half-open</em>: it may be tried again, and the next outcome decides — a success closes it, a
- * failure opens it again for another {@code open}.</p>
+ * here with the player's id, and when one succeeds the backend is cleared (the count restarts from
+ * zero). A backend whose connections fail {@code failures} times within {@code window}, with no
+ * success in between and for at least {@link #MIN_DISTINCT_PLAYERS} different players, is
+ * <em>open</em>: routing avoids it for {@code open}. One player failing over and over (a broken
+ * client, a mod mismatch) says nothing about the backend and never opens it. Then it is
+ * <em>half-open</em>: it may be tried again, and the next outcome decides — a success closes it, the
+ * failure of a player not yet counted opens it again for another {@code open}.</p>
  *
  * <p>A backend that dies stops receiving players here before the orchestrator has declared it
- * gone. It is a routing hint, not a verdict: nothing is removed from the server map.</p>
+ * gone. It is a routing hint, not a verdict: nothing is removed from the server map. The state
+ * belongs to this proxy alone: it is not shared through Redis, so each proxy learns from the
+ * connections it makes itself.</p>
  *
- * <p>shortcut: half-open lets every caller through, not a single trial one. The first failure
- * closes the door again, so the exposure is the players routed during one connection attempt;
- * upgrade to a single-trial permit if a backend that accepts the TCP connection and then hangs
- * ever shows a stampede.</p>
+ * <p>shortcut: the breaker lets every caller through while half-open; the single-trial rule lives
+ * in the routing code that asks ({@code btc-arrival-router}'s sweep sends one player), not here.
+ * The first failure closes the door again, so the exposure elsewhere is the players routed during
+ * one connection attempt; upgrade to a permit held here if a backend that accepts the TCP
+ * connection and then hangs ever shows a stampede.</p>
  *
  * <p>Thread-safe: outcomes are recorded from connection event loops.</p>
  */
 public final class BackendCircuitBreaker {
 
-  /** Failed connections within the window that open the circuit. Zero or less turns it off. */
+  /**
+   * Failed connections within the window that open the circuit. Zero or less turns it off, and it
+   * is off by default until the behaviour has been seen on a real network.
+   */
   public static final int DEFAULT_FAILURES = 3;
+
+  /** Different players whose connections must have failed for the circuit to open. */
+  public static final int MIN_DISTINCT_PLAYERS = 2;
 
   /** The span, in seconds, in which the failures are counted. */
   public static final int DEFAULT_WINDOW_SECONDS = 30;
@@ -64,9 +79,16 @@ public final class BackendCircuitBreaker {
     HALF_OPEN
   }
 
-  /** Failure instants still inside the window, and when the circuit stops being open (0: closed). */
-  private record Circuit(List<Long> failures, long openUntil) {
-    private static final Circuit CLOSED = new Circuit(List.of(), 0L);
+  /** One failed connection: when, and whose. */
+  private record Failure(long at, UUID player) {
+  }
+
+  /**
+   * The failures still inside the window; when the circuit stops being open (0: closed); and the
+   * players whose failures opened it, who cannot open it again by failing once more.
+   */
+  private record Circuit(List<Failure> failures, long openUntil, Set<UUID> blamed) {
+    private static final Circuit CLOSED = new Circuit(List.of(), 0L, Set.of());
   }
 
   private final int failures;
@@ -105,9 +127,10 @@ public final class BackendCircuitBreaker {
    * Records a failed connection to a backend.
    *
    * @param serverName the backend
+   * @param player     the player whose connection failed
    * @return {@code true} when this failure opened the circuit (or opened it again)
    */
-  public boolean recordFailure(final String serverName) {
+  public boolean recordFailure(final String serverName, final UUID player) {
     if (this.failures <= 0) {
       return false;
     }
@@ -119,21 +142,30 @@ public final class BackendCircuitBreaker {
         return current; // already open: a connection that began before it cannot extend it
       }
       if (current.openUntil() != 0) {
-        opened[0] = true; // half-open: the trial failed
-        return new Circuit(List.of(), now + this.openMillis);
+        // Half-open: the trial failed, unless it is a player already counted against this backend.
+        if (current.blamed().contains(player)) {
+          return current;
+        }
+        opened[0] = true;
+        final Set<UUID> blamed = new HashSet<>(current.blamed());
+        blamed.add(player);
+        return new Circuit(List.of(), now + this.openMillis, Set.copyOf(blamed));
       }
-      final List<Long> recent = new ArrayList<>();
-      for (final long at : current.failures()) {
-        if (now - at < this.windowMillis) {
-          recent.add(at);
+      final List<Failure> recent = new ArrayList<>();
+      final Set<UUID> players = new HashSet<>();
+      for (final Failure failure : current.failures()) {
+        if (now - failure.at() < this.windowMillis) {
+          recent.add(failure);
+          players.add(failure.player());
         }
       }
-      recent.add(now);
-      if (recent.size() >= this.failures) {
+      recent.add(new Failure(now, player));
+      players.add(player);
+      if (recent.size() >= this.failures && players.size() >= MIN_DISTINCT_PLAYERS) {
         opened[0] = true;
-        return new Circuit(List.of(), now + this.openMillis);
+        return new Circuit(List.of(), now + this.openMillis, Set.copyOf(players));
       }
-      return new Circuit(List.copyOf(recent), 0L);
+      return new Circuit(List.copyOf(recent), 0L, Set.of());
     });
     return opened[0];
   }

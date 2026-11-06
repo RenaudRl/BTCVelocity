@@ -1950,7 +1950,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
       }
       if (exception != null) {
         if (isActive()) {
-          health.recordConnectionFailure(destination.getServerInfo().getName());
+          health.recordConnectionFailure(destination.getServerInfo().getName(), getUniqueId());
         }
       } else if (result != null && result.isSuccessful()) {
         health.recordConnectionSuccess(destination.getServerInfo().getName());

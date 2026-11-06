@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
@@ -34,14 +35,18 @@ class BackendCircuitBreakerTest {
   private static final long WINDOW = 10_000L;
   private static final long OPEN_FOR = 20_000L;
   private static final String LOBBY = "Lobby-1";
+  private static final UUID ALICE = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+  private static final UUID BOB = UUID.fromString("00000000-0000-0000-0000-00000000000b");
+  private static final UUID CAROL = UUID.fromString("00000000-0000-0000-0000-00000000000c");
 
   private final AtomicLong now = new AtomicLong(1_000_000L);
   private final BackendCircuitBreaker breaker =
       new BackendCircuitBreaker(3, WINDOW, OPEN_FOR, this.now::get);
 
+  /** {@code times} failures, alternating between two players so that they are never one alone. */
   private void fail(final int times) {
     for (int i = 0; i < times; i++) {
-      this.breaker.recordFailure(LOBBY);
+      this.breaker.recordFailure(LOBBY, i % 2 == 0 ? ALICE : BOB);
     }
   }
 
@@ -63,16 +68,37 @@ class BackendCircuitBreakerTest {
   void theThresholdFailureOpensItAndSaysSo() {
     fail(2);
 
-    assertTrue(this.breaker.recordFailure(LOBBY), "the failure that opens it is reported");
+    assertTrue(this.breaker.recordFailure(LOBBY, ALICE), "the failure that opens it is reported");
     assertEquals(OPEN, this.breaker.state(LOBBY));
     assertTrue(this.breaker.isAvoided(LOBBY));
+  }
+
+  @Test
+  void onePlayerFailingOverAndOverNeverOpensIt() {
+    // Witness: a broken client or a mod mismatch must not take a healthy backend out of routing.
+    for (int i = 0; i < 10; i++) {
+      assertFalse(this.breaker.recordFailure(LOBBY, ALICE));
+    }
+
+    assertEquals(CLOSED, this.breaker.state(LOBBY));
+    assertFalse(this.breaker.isAvoided(LOBBY));
+  }
+
+  @Test
+  void aSecondPlayerFailingAfterManyFailuresOfTheFirstOpensIt() {
+    for (int i = 0; i < 10; i++) {
+      this.breaker.recordFailure(LOBBY, ALICE);
+    }
+
+    assertTrue(this.breaker.recordFailure(LOBBY, BOB), "the count was met, the second player was not");
+    assertEquals(OPEN, this.breaker.state(LOBBY));
   }
 
   @Test
   void failuresSpreadOverMoreThanTheWindowNeverOpenIt() {
     // Witness: a counter without a window would open on the third failure of a whole day.
     for (int i = 0; i < 10; i++) {
-      this.breaker.recordFailure(LOBBY);
+      this.breaker.recordFailure(LOBBY, i % 2 == 0 ? ALICE : BOB);
       this.now.addAndGet(WINDOW / 2 + 1);
     }
 
@@ -84,7 +110,7 @@ class BackendCircuitBreakerTest {
     fail(2);
     this.now.addAndGet(WINDOW);
 
-    this.breaker.recordFailure(LOBBY);
+    this.breaker.recordFailure(LOBBY, CAROL);
 
     assertEquals(CLOSED, this.breaker.state(LOBBY), "two of the three are out of the window");
   }
@@ -94,7 +120,7 @@ class BackendCircuitBreakerTest {
     fail(2);
     this.now.addAndGet(WINDOW - 1);
 
-    this.breaker.recordFailure(LOBBY);
+    this.breaker.recordFailure(LOBBY, CAROL);
 
     assertEquals(OPEN, this.breaker.state(LOBBY));
   }
@@ -125,15 +151,38 @@ class BackendCircuitBreakerTest {
   }
 
   @Test
-  void aFailureWhileHalfOpenOpensItAgainAtOnce() {
+  void theFailureOfANewPlayerWhileHalfOpenOpensItAgainAtOnce() {
     fail(3);
     this.now.addAndGet(OPEN_FOR);
 
-    assertTrue(this.breaker.recordFailure(LOBBY));
+    assertTrue(this.breaker.recordFailure(LOBBY, CAROL));
 
     assertEquals(OPEN, this.breaker.state(LOBBY), "one failed trial is enough, not three more");
     this.now.addAndGet(OPEN_FOR - 1);
     assertEquals(OPEN, this.breaker.state(LOBBY), "and for a whole delay again");
+  }
+
+  @Test
+  void theFailureOfAPlayerAlreadyCountedWhileHalfOpenDoesNotOpenItAgain() {
+    // Witness: the players who opened it retrying must not keep it shut on their own.
+    fail(3);
+    this.now.addAndGet(OPEN_FOR);
+
+    assertFalse(this.breaker.recordFailure(LOBBY, ALICE));
+    assertFalse(this.breaker.recordFailure(LOBBY, BOB));
+
+    assertEquals(HALF_OPEN, this.breaker.state(LOBBY));
+  }
+
+  @Test
+  void aPlayerWhoReopenedItIsCountedFromThenOn() {
+    fail(3);
+    this.now.addAndGet(OPEN_FOR);
+    this.breaker.recordFailure(LOBBY, CAROL);
+    this.now.addAndGet(OPEN_FOR);
+
+    assertFalse(this.breaker.recordFailure(LOBBY, CAROL), "already counted at the last trial");
+    assertEquals(HALF_OPEN, this.breaker.state(LOBBY));
   }
 
   @Test
@@ -158,7 +207,7 @@ class BackendCircuitBreakerTest {
     fail(3);
     this.now.addAndGet(OPEN_FOR - 1);
 
-    assertFalse(this.breaker.recordFailure(LOBBY));
+    assertFalse(this.breaker.recordFailure(LOBBY, CAROL));
     this.now.addAndGet(1);
 
     assertEquals(HALF_OPEN, this.breaker.state(LOBBY));
@@ -186,7 +235,7 @@ class BackendCircuitBreakerTest {
     final BackendCircuitBreaker off = new BackendCircuitBreaker(0, 0, 0, this.now::get);
 
     for (int i = 0; i < 50; i++) {
-      assertFalse(off.recordFailure(LOBBY));
+      assertFalse(off.recordFailure(LOBBY, UUID.randomUUID()));
     }
 
     assertFalse(off.isAvoided(LOBBY));
@@ -207,7 +256,7 @@ class BackendCircuitBreakerTest {
     final Thread[] workers = new Thread[threads];
     for (int i = 0; i < threads; i++) {
       workers[i] = new Thread(() -> {
-        if (this.breaker.recordFailure(LOBBY)) {
+        if (this.breaker.recordFailure(LOBBY, UUID.randomUUID())) {
           opened.incrementAndGet();
         }
       });

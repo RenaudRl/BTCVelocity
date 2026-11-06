@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 
@@ -28,18 +29,25 @@ import org.junit.jupiter.api.Test;
 class BackendHealthRegistryCircuitTest {
 
   private static final String SERVER = "Lobby-1";
+  private static final UUID ALICE = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+  private static final UUID BOB = UUID.fromString("00000000-0000-0000-0000-00000000000b");
 
   private final AtomicLong now = new AtomicLong(5_000_000L);
   private final BackendHealthRegistry registry = new BackendHealthRegistry(
       BackendHealthRegistry.DEFAULT_FRESHNESS_MILLIS, this.now::get,
       new BackendCircuitBreaker(2, 10_000L, 20_000L, this.now::get));
 
+  private void failTwice(final BackendHealthRegistry target) {
+    target.recordConnectionFailure(SERVER, ALICE);
+    target.recordConnectionFailure(SERVER, BOB);
+  }
+
   @Test
   void failedConnectionsMakeRoutingAvoidTheBackendThenTryItAgain() {
-    this.registry.recordConnectionFailure(SERVER);
+    this.registry.recordConnectionFailure(SERVER, ALICE);
     assertFalse(this.registry.isAvoided(SERVER));
 
-    this.registry.recordConnectionFailure(SERVER);
+    this.registry.recordConnectionFailure(SERVER, BOB);
     assertTrue(this.registry.isAvoided(SERVER));
 
     this.now.addAndGet(20_000L);
@@ -49,8 +57,7 @@ class BackendHealthRegistryCircuitTest {
 
   @Test
   void theNextSuccessRehabilitatesIt() {
-    this.registry.recordConnectionFailure(SERVER);
-    this.registry.recordConnectionFailure(SERVER);
+    failTwice(this.registry);
     this.now.addAndGet(20_000L);
 
     this.registry.recordConnectionSuccess(SERVER);
@@ -61,8 +68,7 @@ class BackendHealthRegistryCircuitTest {
   @Test
   void forgettingAServerForgetsItsCircuitToo() {
     // Witness: a service restarted under the same name must not inherit the dead one's failures.
-    this.registry.recordConnectionFailure(SERVER);
-    this.registry.recordConnectionFailure(SERVER);
+    failTwice(this.registry);
 
     this.registry.forget(SERVER);
 
@@ -71,8 +77,7 @@ class BackendHealthRegistryCircuitTest {
 
   @Test
   void aHealthReportAndTheCircuitAreIndependentEvidence() {
-    this.registry.recordConnectionFailure(SERVER);
-    this.registry.recordConnectionFailure(SERVER);
+    failTwice(this.registry);
 
     // A circuit says nothing about load, and a missing report says nothing about connections.
     assertEquals(BackendHealthRegistry.UNKNOWN_MSPT, this.registry.getMspt(SERVER));
@@ -85,11 +90,11 @@ class BackendHealthRegistryCircuitTest {
     final BackendHealthRegistry byDefault = new BackendHealthRegistry();
 
     for (int i = 0; i < BackendCircuitBreaker.DEFAULT_FAILURES - 1; i++) {
-      byDefault.recordConnectionFailure(SERVER);
+      byDefault.recordConnectionFailure(SERVER, i % 2 == 0 ? ALICE : BOB);
     }
     assertFalse(byDefault.isAvoided(SERVER));
 
-    byDefault.recordConnectionFailure(SERVER);
+    byDefault.recordConnectionFailure(SERVER, BOB);
     assertTrue(byDefault.isAvoided(SERVER));
   }
 }

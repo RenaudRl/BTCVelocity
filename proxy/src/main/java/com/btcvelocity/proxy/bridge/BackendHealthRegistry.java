@@ -20,6 +20,7 @@ package com.btcvelocity.proxy.bridge;
 import com.btcvelocity.api.bridge.BridgeMessage;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import org.apache.logging.log4j.LogManager;
@@ -121,9 +122,11 @@ public final class BackendHealthRegistry {
    * Records that the proxy failed to connect a player to a backend.
    *
    * @param serverName the backend
+   * @param player     the player whose connection failed: one player failing again and again
+   *                   never opens the circuit
    */
-  public void recordConnectionFailure(final String serverName) {
-    if (circuit.recordFailure(serverName)) {
+  public void recordConnectionFailure(final String serverName, final UUID player) {
+    if (circuit.recordFailure(serverName, player)) {
       LOGGER.warn("Backend {} failed to take players repeatedly: routing avoids it for a while",
           serverName);
     }
