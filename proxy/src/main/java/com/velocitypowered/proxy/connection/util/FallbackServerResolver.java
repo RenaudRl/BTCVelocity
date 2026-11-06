@@ -70,22 +70,11 @@ public class FallbackServerResolver {
           .map(FallbackServerResolver::normalizeHostString)
           .orElse(null);
 
-      if (virtualHost != null) {
+      String forcedHost = matchForcedHost(velocityServer, virtualHost);
+      if (forcedHost != null) {
         List<String> forcedHosts = velocityServer.getConfiguration()
             .getForcedHosts()
-            .getOrDefault(virtualHost, emptyList());
-
-        // Check for wildcard ("*.example.com" matches "anything.example.com")
-        if (forcedHosts.isEmpty()) {
-          for (Map.Entry<String, List<String>> entry : velocityServer.getConfiguration().getForcedHosts().entrySet()) {
-            String pattern = entry.getKey().toLowerCase(Locale.ROOT);
-            if (pattern.startsWith("*.") && virtualHost.endsWith(pattern.substring(1))) {
-              forcedHosts = entry.getValue();
-              break;
-            }
-          }
-        }
-
+            .getOrDefault(forcedHost, emptyList());
         if (!forcedHosts.isEmpty()) {
           return unmodifiableList(forcedHosts);
         }
@@ -93,5 +82,36 @@ public class FallbackServerResolver {
     }
 
     return unmodifiableList(velocityServer.getConfiguration().getAttemptConnectionOrder());
+  }
+
+  /**
+   * Returns the forced-host entry that applies to a virtual host (exact match, then the first
+   * {@code *.<suffix>} match), as written in the configuration.
+   *
+   * @param velocityServer the Velocity server instance providing configuration access
+   * @param virtualHost the normalized virtual host, or {@code null}
+   * @return the configured forced-host key, or {@code null} when none applies
+   */
+  public static @Nullable String matchForcedHost(
+      VelocityServer velocityServer,
+      @Nullable String virtualHost
+  ) {
+    if (virtualHost == null) {
+      return null;
+    }
+
+    Map<String, List<String>> configured = velocityServer.getConfiguration().getForcedHosts();
+    if (!configured.getOrDefault(virtualHost, emptyList()).isEmpty()) {
+      return virtualHost;
+    }
+
+    // Check for wildcard ("*.example.com" matches "anything.example.com")
+    for (String key : configured.keySet()) {
+      String pattern = key.toLowerCase(Locale.ROOT);
+      if (pattern.startsWith("*.") && virtualHost.endsWith(pattern.substring(1))) {
+        return key;
+      }
+    }
+    return null;
   }
 }

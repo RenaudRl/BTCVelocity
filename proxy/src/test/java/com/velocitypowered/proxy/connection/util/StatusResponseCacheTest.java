@@ -136,17 +136,48 @@ class StatusResponseCacheTest {
   }
 
   @Test
-  void eachProtocolVersionAndEachHostHasItsOwnEntry() throws Exception {
-    ttl("5");
+  void eachProtocolVersionAndEachForcedHostHasItsOwnEntry() throws Exception {
+    ttl("5"); // the shipped toml forces lobby.example.com and factions.example.com
     ping(client(ProtocolVersion.MINECRAFT_1_21, "play.example.com"));
     ping(client(ProtocolVersion.MINECRAFT_1_20_2, "play.example.com"));
-    ping(client(ProtocolVersion.MINECRAFT_1_21, "forced.example.com"));
-    ping(client(ProtocolVersion.MINECRAFT_1_21, null));
+    ping(client(ProtocolVersion.MINECRAFT_1_21, "lobby.example.com"));
+    ping(client(ProtocolVersion.MINECRAFT_1_21, "factions.example.com"));
     assertEquals(4, events.get());
 
     // The host is compared in lower case, like forced hosts are.
-    ping(client(ProtocolVersion.MINECRAFT_1_21, "PLAY.example.com"));
+    ping(client(ProtocolVersion.MINECRAFT_1_21, "LOBBY.example.com"));
     assertEquals(4, events.get());
+  }
+
+  @Test
+  void inventedHostsShareASingleEntry() throws Exception {
+    ttl("5");
+    for (int i = 0; i < 1000; i++) {
+      ping(client(ProtocolVersion.MINECRAFT_1_21, "invented-" + i + ".example.org"));
+    }
+    ping(client(ProtocolVersion.MINECRAFT_1_21, null));
+    assertEquals(1, events.get());
+
+    // A forced host keeps its own entry next to the shared one.
+    ping(client(ProtocolVersion.MINECRAFT_1_21, "lobby.example.com"));
+    ping(client(ProtocolVersion.MINECRAFT_1_21, "invented-1.example.org"));
+    assertEquals(2, events.get());
+  }
+
+  @Test
+  void aWildcardForcedHostIsOneEntryForAllItsSubdomains() {
+    final VelocityServer wild = mock(VelocityServer.class);
+    final VelocityConfiguration config = mock(VelocityConfiguration.class);
+    when(wild.getConfiguration()).thenReturn(config);
+    when(config.getForcedHosts()).thenReturn(
+        java.util.Map.of("*.play.example.com", java.util.List.of("lobby"),
+            "exact.example.com", java.util.List.of("survival")));
+
+    assertEquals("*.play.example.com", FallbackServerResolver.matchForcedHost(wild, "a.play.example.com"));
+    assertEquals("*.play.example.com", FallbackServerResolver.matchForcedHost(wild, "b.play.example.com"));
+    assertEquals("exact.example.com", FallbackServerResolver.matchForcedHost(wild, "exact.example.com"));
+    assertEquals(null, FallbackServerResolver.matchForcedHost(wild, "other.example.com"));
+    assertEquals(null, FallbackServerResolver.matchForcedHost(wild, null));
   }
 
   @Test

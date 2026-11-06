@@ -42,9 +42,9 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 public final class StatusPingCache {
 
   /*
-   * The host comes from the client and is the only unbounded part of the key. Past this many
-   * entries a new key is simply not cached (the build is done as without a cache); the figure is
-   * a safety bound, not a tuning knob.
+   * The callers keep the key small (protocol versions are an enum, hosts are reduced to the
+   * configured forced hosts), so this is only a safety net: past it a new key is simply not
+   * cached (the build is done as without a cache). It is not a tuning knob.
    */
   private static final int MAX_ENTRIES = 512;
 
@@ -53,10 +53,11 @@ public final class StatusPingCache {
 
   /**
    * What makes two clients receive the same response: their protocol version (the version string
-   * and the JSON format depend on it) and the host they typed (forced hosts, per-host listeners).
+   * and the JSON format depend on it) and the forced host they matched.
    *
    * @param version the client's protocol version
-   * @param virtualHost the normalized virtual host, or {@code null} when the client sent none
+   * @param virtualHost the configured forced-host entry the client's host matched, or {@code null}
+   *     for any host that matches none (one shared entry)
    */
   public record Key(ProtocolVersion version, @Nullable String virtualHost) {
   }
