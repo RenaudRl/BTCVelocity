@@ -23,6 +23,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.btcvelocity.api.connection.ListenerOrigin;
+import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
 import com.btcvelocity.proxy.bridge.VelocityBridgeChannel;
 import com.btcvelocity.proxy.bridge.WorldRegistry;
@@ -449,6 +450,11 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     return backendHealthRegistry;
   }
 
+  @Override
+  public boolean isBackendAvoided(final String serverName) {
+    return backendHealthRegistry != null && backendHealthRegistry.isAvoided(serverName);
+  }
+
   /**
    * Returns the {@link WorldRegistry} that tracks which worlds are loaded on which backends.
    *
@@ -638,7 +644,12 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
     // Initialize the btc:bridge channel for proxy <-> backend messaging
     bridgeChannel = new VelocityBridgeChannel(this);
-    backendHealthRegistry = new BackendHealthRegistry();
+    backendHealthRegistry = new BackendHealthRegistry(BackendHealthRegistry.DEFAULT_FRESHNESS_MILLIS,
+        System::currentTimeMillis, new BackendCircuitBreaker(
+            configuration.getBackendCircuitFailures(),
+            configuration.getBackendCircuitWindowSeconds() * 1_000L,
+            configuration.getBackendCircuitOpenSeconds() * 1_000L,
+            System::currentTimeMillis));
     worldRegistry = new WorldRegistry();
     bridgeChannel.registerListener(backendHealthRegistry::onHealth);
     bridgeChannel.registerListener(worldRegistry::onWorldLoaded);

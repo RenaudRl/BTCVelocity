@@ -239,6 +239,22 @@ public interface ProxyServer extends Audience {
   ClusterPlayerService getClusterPlayerService();
 
   /**
+   * Returns whether the proxy currently advises against sending players to a backend because
+   * connections to it keep failing.
+   *
+   * <p>It is a passive circuit breaker fed by the connections the proxy really makes: after
+   * several failures within a window the backend is avoided for a delay, then tried again, and the
+   * next success clears it. Nothing is removed from the server map, so this is a hint for routing
+   * code that chooses a destination (such as an arrival or fallback policy), not a block.</p>
+   *
+   * @param serverName the name of the backend server
+   * @return {@code true} while the proxy advises routing to leave the backend alone
+   */
+  default boolean isBackendAvoided(String serverName) {
+    return false;
+  }
+
+  /**
    * Gets the {@link StorageService} used to persist player data and proxy state.
    *
    * @return the storage service, or {@code null} if PostgreSQL storage is not enabled

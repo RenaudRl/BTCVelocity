@@ -388,6 +388,11 @@ public final class BtcArrivalRouterPlugin {
       if (!this.policy.accepts(name) || excluded.contains(name)) {
         continue;
       }
+      // Its connections keep failing (proxy-side circuit breaker): the limbo holds the player
+      // until it is tried again, instead of sending them to a backend likely to drop them.
+      if (this.proxy.isBackendAvoided(name)) {
+        continue;
+      }
       candidates.add(new ArrivalCandidate(name, this.counts.of(name)));
     }
 

@@ -116,6 +116,10 @@ public class ServerMap {
         "Server with name %s replaced whilst unregistering", serverInfo.getName());
 
     if (server != null) {
+      // A gone service takes its failures with it: one registered again under this name is new.
+      if (server.getBackendHealthRegistry() != null) {
+        server.getBackendHealthRegistry().forget(serverInfo.getName());
+      }
       server.getEventManager().fireAndForget(new ServerUnregisteredEvent(rs));
     }
   }

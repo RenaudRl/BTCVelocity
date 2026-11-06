@@ -95,6 +95,35 @@ class BtcArrivalRouterClusterCountTest {
   }
 
   @Test
+  void aBackendTheProxyAvoidsIsNotChosenEvenWhenItIsTheLeastPopulated() {
+    // Arrange — Lobby-1 is empty but its connections keep failing
+    this.server("Lobby-1", 0);
+    var healthy = this.server("Lobby-2", 9);
+    when(this.proxy.isBackendAvoided("Lobby-1")).thenReturn(true);
+    when(this.cluster.getPlayersOnServerCount("Lobby-1")).thenReturn(0);
+    when(this.cluster.getPlayersOnServerCount("Lobby-2")).thenReturn(9);
+
+    // Act + Assert
+    assertSame(healthy, this.arrivalOf());
+  }
+
+  @Test
+  void aBackendComesBackIntoTheChoiceOnceTheProxyStopsAvoidingIt() {
+    // Arrange
+    var recovering = this.server("Lobby-1", 0);
+    this.server("Lobby-2", 9);
+    when(this.cluster.getPlayersOnServerCount("Lobby-1")).thenReturn(0);
+    when(this.cluster.getPlayersOnServerCount("Lobby-2")).thenReturn(9);
+    when(this.proxy.isBackendAvoided("Lobby-1")).thenReturn(true, false);
+
+    // Act — the first arrival avoids it, a later one (past the cache) does not
+    this.arrivalOf();
+
+    // Assert
+    assertSame(recovering, this.arrivalOf());
+  }
+
+  @Test
   void aServerOutsideThePolicyIsNotCounted() {
     // Arrange — a server the policy does not cover costs no cluster call
     this.server("Lobby-1", 0);

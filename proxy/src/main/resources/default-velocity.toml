@@ -432,6 +432,20 @@ custom-brand-backend = "Paper"
 # 3 to 10 is a good value against ping floods.
 status-cache-ttl = 0
 
+# Passive circuit breaker on backends. Nothing is probed: it watches the connections the proxy makes
+# for its players. When this many connections to one backend fail within the window below, plugins
+# that choose a destination (btc-arrival-router) avoid that backend for the open delay, then try it
+# again: the next success clears it, a failure avoids it again. A backend that answers and refuses
+# the player (full, whitelist) is not a failure. Servers are never removed from the proxy.
+# 0 turns it off. Read at startup.
+backend-circuit-failures = 3
+
+# Seconds in which the failed connections are counted.
+backend-circuit-window-seconds = 30
+
+# Seconds a backend is avoided before it is tried again.
+backend-circuit-open-seconds = 30
+
 [slash-servers]
 # Defines "/<name>" aliases for servers - here "/faction" and "/factions" would both send you to the server named
 # "factions", for example.

@@ -17,6 +17,7 @@
 
 package com.btcvelocity.proxy.config.migration;
 
+import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.velocitypowered.proxy.config.migration.ConfigurationMigration;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -191,6 +192,26 @@ public class BtcConfigMigrations {
                 + " 3 to 10 is a good value against ping floods.",
             "advanced.status-cache-ttl",
             0
+        ),
+        migration(
+            "Passive circuit breaker on backends. Nothing is probed: it watches the connections the proxy makes\n"
+                + " for its players. When this many connections to one backend fail within the window below, plugins\n"
+                + " that choose a destination (btc-arrival-router) avoid that backend for the open delay, then try it\n"
+                + " again: the next success clears it, a failure avoids it again. A backend that answers and refuses\n"
+                + " the player (full, whitelist) is not a failure. Servers are never removed from the proxy.\n"
+                + " 0 turns it off. Read at startup.",
+            "advanced.backend-circuit-failures",
+            BackendCircuitBreaker.DEFAULT_FAILURES
+        ),
+        migration(
+            "Seconds in which the failed connections are counted.",
+            "advanced.backend-circuit-window-seconds",
+            BackendCircuitBreaker.DEFAULT_WINDOW_SECONDS
+        ),
+        migration(
+            "Seconds a backend is avoided before it is tried again.",
+            "advanced.backend-circuit-open-seconds",
+            BackendCircuitBreaker.DEFAULT_OPEN_SECONDS
         ),
 
         // [observability]
