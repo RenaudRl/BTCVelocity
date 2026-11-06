@@ -193,6 +193,17 @@ public final class ConnectionManager {
   }
 
   /**
+   * The address a bind really got, which differs from the requested one when the port was 0.
+   *
+   * @param requested the address given to {@code bind}
+   * @return the local address of its first endpoint, or {@code null} if it is not bound
+   */
+  @Nullable InetSocketAddress localAddressOf(final InetSocketAddress requested) {
+    return this.endpoints.get(requested).stream().findFirst()
+        .map(endpoint -> (InetSocketAddress) endpoint.getChannel().localAddress()).orElse(null);
+  }
+
+  /**
    * Binds a GS4 listener to the specified {@code hostname} and {@code port}.
    *
    * @param hostname the hostname to bind to
