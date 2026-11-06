@@ -19,11 +19,9 @@ package com.btcvelocity.proxy.redis;
 
 import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,8 +31,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Netty loops and Lettuce I/O threads hand their Redis work to this executor instead of
  * blocking on it. A single worker keeps writes in issue order, so the writes for one player
- * (connect, then switch, then disconnect) can never be reordered. A full queue rejects the task
- * rather than growing without bound; callers rely on the periodic repair to catch up.</p>
+ * (switch, then disconnect) can never be reordered. A full queue rejects the task rather than
+ * growing without bound; callers rely on the periodic repair to catch up. Nothing that decides
+ * who may log in runs here: a full queue must never let a duplicate in.</p>
  */
 public final class OrderedRedisExecutor {
 
@@ -82,28 +81,6 @@ public final class OrderedRedisExecutor {
     }
   }
 
-  /**
-   * Queues a task that produces a value.
-   *
-   * @param task the task to run on the worker
-   * @param <T> the value type
-   * @return a future completed with the value, or exceptionally if the task failed or was rejected
-   */
-  public <T> @NotNull CompletableFuture<T> supply(final @NotNull Supplier<T> task) {
-    final CompletableFuture<T> future = new CompletableFuture<>();
-    final boolean queued = execute(() -> {
-      try {
-        future.complete(task.get());
-      } catch (RuntimeException e) {
-        future.completeExceptionally(e);
-        throw e;
-      }
-    });
-    if (!queued) {
-      future.completeExceptionally(new RejectedExecutionException(this.name + " rejected the task"));
-    }
-    return future;
-  }
 
   /**
    * Stops accepting tasks and waits for the queued ones, then drops whatever is left.

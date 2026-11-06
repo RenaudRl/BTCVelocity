@@ -31,9 +31,12 @@ import com.velocitypowered.api.scheduler.Scheduler;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisFuture;
 import io.lettuce.core.RedisURI;
+import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.api.async.RedisAsyncCommands;
 import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
@@ -76,6 +79,61 @@ public final class LettuceProvider extends AbstractRedisProvider {
    * How long {@link #disconnect()} waits for queued messages to be handled.
    */
   private static final Duration MESSAGE_DRAIN_GRACE = Duration.ofSeconds(2);
+
+  /**
+   * Commands waiting on one connection before new ones are rejected, instead of piling up in
+   * memory while Redis does not answer.
+   */
+  private static final int REQUEST_QUEUE_SIZE = 10_000;
+
+  /**
+   * Lua: lower-cased {@code proxyId} of a JSON entry, or nil. Shared by the owner-aware scripts.
+   * Every key is passed in KEYS, as Dragonfly requires.
+   */
+  private static final String OWNER_FUNCTION = "local function owner(json) "
+      + "local ok, entry = pcall(cjson.decode, json) "
+      + "if ok and type(entry) == 'table' and type(entry.proxyId) == 'string' then "
+      + "return string.lower(entry.proxyId) end "
+      + "return nil end\n";
+
+  /**
+   * KEYS[1] hash, ARGV: field, json, proxyId, force ("1"). Writes unless another proxy owns the
+   * field (or force); returns that proxy's entry, or nil.
+   */
+  private static final String CLAIM_SCRIPT = OWNER_FUNCTION
+      + "local current = redis.call('HGET', KEYS[1], ARGV[1])\n"
+      + "if current then\n"
+      + "  local holder = owner(current)\n"
+      + "  if holder and holder ~= string.lower(ARGV[3]) then\n"
+      + "    if ARGV[4] == '1' then redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]) end\n"
+      + "    return current\n"
+      + "  end\n"
+      + "end\n"
+      + "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])\n"
+      + "return false\n";
+
+  /**
+   * KEYS[1] hash, ARGV: field, proxyId. Deletes the field only if that proxy owns it.
+   */
+  private static final String REMOVE_IF_OWNER_SCRIPT = OWNER_FUNCTION
+      + "local current = redis.call('HGET', KEYS[1], ARGV[1])\n"
+      + "if current and owner(current) == string.lower(ARGV[2]) then\n"
+      + "  return redis.call('HDEL', KEYS[1], ARGV[1])\n"
+      + "end\n"
+      + "return 0\n";
+
+  /**
+   * KEYS[1] hash, ARGV: proxyId. Deletes every field that proxy owns.
+   */
+  private static final String REMOVE_ALL_OWNED_SCRIPT = OWNER_FUNCTION
+      + "local all = redis.call('HGETALL', KEYS[1])\n"
+      + "local removed = 0\n"
+      + "for i = 1, #all, 2 do\n"
+      + "  if owner(all[i + 1]) == string.lower(ARGV[1]) then\n"
+      + "    removed = removed + redis.call('HDEL', KEYS[1], all[i])\n"
+      + "  end\n"
+      + "end\n"
+      + "return removed\n";
 
   /**
    * Runs the pub/sub handlers off Lettuce's I/O thread, in arrival order. Handlers may call the
@@ -131,9 +189,12 @@ public final class LettuceProvider extends AbstractRedisProvider {
             .withSsl(config.isUseSsl())
             .withTimeout(COMMAND_TIMEOUT)
             .build());
-    // Without this, async commands never time out and the sync ones wait Lettuce's 60 s default.
+    // Without the timeout, async commands never time out and the sync ones wait Lettuce's 60 s
+    // default. While disconnected, commands fail at once instead of queueing until a reconnect.
     this.client.setOptions(ClientOptions.builder()
         .timeoutOptions(TimeoutOptions.enabled(COMMAND_TIMEOUT))
+        .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
+        .requestQueueSize(REQUEST_QUEUE_SIZE)
         .build());
   }
 
@@ -288,7 +349,7 @@ public final class LettuceProvider extends AbstractRedisProvider {
   public <K, V extends DepotEntry<K, V>> @NotNull Depot<K, V> createDepot(final Class<V> valueClass) {
     Preconditions.checkState(this.depotConnection != null,
         "depot connection is not initialized; call restart() first");
-    return new LettuceDepot<>(valueClass, this.depotConnection.sync());
+    return new LettuceDepot<>(valueClass, this.depotConnection);
   }
 
   /**
@@ -544,16 +605,22 @@ public final class LettuceProvider extends AbstractRedisProvider {
     private final RedisCommands<String, String> connection;
 
     /**
+     * The async API of the same connection: commands from both keep their issue order.
+     */
+    private final RedisAsyncCommands<String, String> async;
+
+    /**
      * Constructs a new {@link LettuceDepot} instance using the shared depot connection.
      *
      * @param valueClass the class of the depot value
-     * @param connection the shared sync Redis commands used for hash operations
+     * @param connection the shared Redis connection used for hash operations
      */
     public LettuceDepot(final @NotNull Class<V> valueClass,
-                        final @NotNull RedisCommands<String, String> connection) {
+                        final @NotNull StatefulRedisConnection<String, String> connection) {
       this.name = valueClass.getSimpleName().toLowerCase();
       this.valueClass = valueClass;
-      this.connection = connection;
+      this.connection = connection.sync();
+      this.async = connection.async();
     }
 
     /**
@@ -616,6 +683,30 @@ public final class LettuceProvider extends AbstractRedisProvider {
     @Override
     public Collection<V> values() {
       return this.connection.hvals(this.name).stream().map(this::deserialize).toList();
+    }
+
+    @Override
+    public CompletableFuture<@Nullable V> claim(final @NotNull V value, final @NotNull String proxyId,
+                                                final boolean force) {
+      final RedisFuture<String> previous = this.async.eval(CLAIM_SCRIPT, ScriptOutputType.VALUE,
+          new String[] {this.name}, parseKey(value.getUniqueId()), serialize(value),
+          proxyId, force ? "1" : "0");
+      value.setDepot(this);
+      return previous.toCompletableFuture().thenApply(json -> json == null ? null : deserialize(json));
+    }
+
+    @Override
+    public boolean removeIfOwner(final @NotNull K key, final @NotNull String proxyId) {
+      final Long removed = this.connection.eval(REMOVE_IF_OWNER_SCRIPT, ScriptOutputType.INTEGER,
+          new String[] {this.name}, parseKey(key), proxyId);
+      return removed != null && removed > 0;
+    }
+
+    @Override
+    public long removeAllOwnedBy(final @NotNull String proxyId) {
+      final Long removed = this.connection.eval(REMOVE_ALL_OWNED_SCRIPT, ScriptOutputType.INTEGER,
+          new String[] {this.name}, proxyId);
+      return removed == null ? 0 : removed;
     }
 
     /**

@@ -18,6 +18,7 @@
 package com.btcvelocity.proxy.redis.depot;
 
 import java.util.Collection;
+import java.util.concurrent.CompletableFuture;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -78,6 +79,42 @@ public interface Depot<K, V extends DepotEntry<K, V>> {
    * @return a collection of all keys in the depot
    */
   Collection<String> keys();
+
+  /**
+   * Atomically writes {@code value} unless the stored entry belongs to another proxy (its
+   * {@code proxyId} differs, ignoring case). With {@code force}, writes it anyway.
+   *
+   * @param value the value to write
+   * @param proxyId the proxy claiming the entry
+   * @param force whether to take the entry over from another proxy
+   * @return a future of the entry another proxy held before the call, or of {@code null} if the
+   *         entry was absent or already this proxy's; failed if the store did not answer
+   */
+  default CompletableFuture<@Nullable V> claim(final @NotNull V value, final @NotNull String proxyId,
+                                               final boolean force) {
+    throw new UnsupportedOperationException("claim");
+  }
+
+  /**
+   * Atomically removes the entry for {@code key} if {@code proxyId} owns it.
+   *
+   * @param key the key to remove
+   * @param proxyId the proxy that must own the entry
+   * @return {@code true} if it was removed
+   */
+  default boolean removeIfOwner(final @NotNull K key, final @NotNull String proxyId) {
+    throw new UnsupportedOperationException("removeIfOwner");
+  }
+
+  /**
+   * Atomically removes every entry {@code proxyId} owns, in one round trip.
+   *
+   * @param proxyId the owning proxy
+   * @return the number of entries removed
+   */
+  default long removeAllOwnedBy(final @NotNull String proxyId) {
+    throw new UnsupportedOperationException("removeAllOwnedBy");
+  }
 
   /**
    * Returns the number of entries in the depot.

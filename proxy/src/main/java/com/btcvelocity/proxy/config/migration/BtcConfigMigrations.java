@@ -268,6 +268,13 @@ public class BtcConfigMigrations {
             "redis.proxy-id",
             ""
         ),
+        migration(
+            "What to do with a login when Redis does not answer the duplicate-login check within 500 ms.\n"
+                + " \"deny\" refuses it: a player can never be online on two proxies at once.\n"
+                + " \"allow\" lets the player in unchecked, at the risk of one player holding two sessions.",
+            "redis.login-check-failure",
+            "deny"
+        ),
 
         // [queue]
         migration(

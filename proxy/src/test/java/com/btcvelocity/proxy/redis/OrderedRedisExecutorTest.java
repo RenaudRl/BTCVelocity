@@ -20,14 +20,12 @@ package com.btcvelocity.proxy.redis;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import org.junit.jupiter.api.AfterEach;
@@ -76,23 +74,20 @@ class OrderedRedisExecutorTest {
     assertTrue(executor.execute(() -> { }));
     final long before = System.nanoTime();
     assertFalse(executor.execute(() -> { }));
-    final ExecutionException rejected = assertThrows(ExecutionException.class,
-        () -> executor.supply(() -> 1).get(1, TimeUnit.SECONDS));
     assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - before) < 1000);
-    assertTrue(rejected.getCause() instanceof java.util.concurrent.RejectedExecutionException);
 
     release.countDown();
   }
 
   @Test
-  void aFailingTaskFailsItsFutureAndKeepsTheWorkerAlive() throws Exception {
-    final ExecutionException failed = assertThrows(ExecutionException.class,
-        () -> executor.supply(() -> {
-          throw new IllegalStateException("redis down");
-        }).get(5, TimeUnit.SECONDS));
-    assertTrue(failed.getCause() instanceof IllegalStateException);
+  void aFailingTaskKeepsTheWorkerAlive() throws Exception {
+    final CountDownLatch ran = new CountDownLatch(1);
+    assertTrue(executor.execute(() -> {
+      throw new IllegalStateException("redis down");
+    }));
+    assertTrue(executor.execute(ran::countDown));
 
-    assertEquals(42, executor.supply(() -> 42).get(5, TimeUnit.SECONDS));
+    assertTrue(ran.await(5, TimeUnit.SECONDS));
   }
 
   private static void awaitQuietly(final CountDownLatch latch) {

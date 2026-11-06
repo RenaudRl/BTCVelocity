@@ -19,7 +19,6 @@ package com.btcvelocity.proxy.redis.depot.proxy;
 
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.depot.AbstractDepotService;
-import com.btcvelocity.proxy.redis.depot.player.PlayerEntry;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.time.Duration;
@@ -196,9 +195,8 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   private void reapProxy(final @NotNull String proxyId) {
     LOGGER.warn("Reaping proxy {} from redis. This proxy shut down improperly.", proxyId);
 
-    for (final PlayerEntry playerEntry : this.redis.getPlayerService().getPlayerEntriesOnProxy(proxyId)) {
-      playerEntry.remove();
-    }
+    // Owner-guarded: a player that already moved to a live proxy keeps that proxy's entry.
+    this.redis.getPlayerService().removeEntriesOf(proxyId);
 
     this.depot.remove(proxyId);
   }

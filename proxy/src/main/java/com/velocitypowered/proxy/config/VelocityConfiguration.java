@@ -535,6 +535,13 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     // The cluster hands players to sibling proxies with transferToHost (/transfer, shutdown); a
     // sibling that refuses transfers kicks them instead. Each proxy only knows its own setting.
+    if (!Redis.LOGIN_CHECK_DENY.equals(getRedis().loginCheckFailure)
+        && !Redis.LOGIN_CHECK_ALLOW.equals(getRedis().loginCheckFailure)) {
+      LOGGER.error("Invalid redis.login-check-failure '{}': use \"deny\" or \"allow\"",
+          getRedis().loginCheckFailure);
+      valid = false;
+    }
+
     if (getRedis().isEnabled() && !isAcceptTransfers()) {
       LOGGER.warn("Redis cluster is enabled but accepts-transfers is false: players sent to this "
           + "proxy by a sibling (/transfer, proxy shutdown) will be kicked. Set "
@@ -2775,6 +2782,16 @@ public final class VelocityConfiguration implements ProxyConfig {
     @Expose
     private @Nullable String proxyId;
 
+    static final String LOGIN_CHECK_DENY = "deny";
+    static final String LOGIN_CHECK_ALLOW = "allow";
+
+    /**
+     * What a login gets when Redis does not answer the duplicate-login check in time:
+     * {@code deny} (no player is ever on two proxies at once) or {@code allow}.
+     */
+    @Expose
+    private String loginCheckFailure = LOGIN_CHECK_DENY;
+
     private Redis(final CommentedConfig config) {
       if (config == null) {
         return;
@@ -2797,6 +2814,18 @@ public final class VelocityConfiguration implements ProxyConfig {
       if (this.proxyId == null || this.proxyId.isEmpty()) {
         this.proxyId = null;
       }
+
+      this.loginCheckFailure = config.getOrElse("login-check-failure", LOGIN_CHECK_DENY)
+          .toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Whether a login goes on when Redis does not answer the duplicate-login check in time.
+     *
+     * @return {@code true} for {@code login-check-failure = "allow"}
+     */
+    public boolean isLoginAllowedWhenUnchecked() {
+      return LOGIN_CHECK_ALLOW.equals(loginCheckFailure);
     }
 
     public boolean isEnabled() {

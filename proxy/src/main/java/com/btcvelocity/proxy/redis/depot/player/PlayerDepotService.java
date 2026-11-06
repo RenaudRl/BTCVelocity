@@ -40,6 +40,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -52,15 +53,16 @@ import org.slf4j.LoggerFactory;
  * functionality to track certain information about a single player, or multiple players.
  *
  * <p>The player lifecycle hooks are called from Netty event loops. They never touch Redis on the
- * calling thread: every write goes through one ordered worker ({@link OrderedRedisExecutor}), and
- * the counts read on hot paths come from a snapshot refreshed in the background.</p>
+ * calling thread: the login check is one async atomic claim, every later write goes through one
+ * ordered worker ({@link OrderedRedisExecutor}), and the counts read on hot paths come from a
+ * snapshot refreshed in the background. Every write and removal is owner-guarded in Redis, so a
+ * proxy never overwrites nor deletes an entry another proxy holds.</p>
  */
 public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerEntry> {
 
   /**
-   * How long a login waits for the cross-proxy duplicate check before letting the player in.
-   * Redis is optional: when it does not answer in time, the login goes on and the periodic
-   * repair registers the player once Redis is back.
+   * How long a login waits for the cross-proxy duplicate check. Past it, the login is refused or
+   * let in unchecked, following {@code redis.login-check-failure}.
    */
   public static final Duration CONNECT_CHECK_TIMEOUT = Duration.ofMillis(500);
 
@@ -124,6 +126,11 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   private volatile @Nullable Snapshot snapshot;
 
   /**
+   * Set by {@link #releaseAll()}: this proxy hands its players over and writes nothing more.
+   */
+  private volatile boolean released;
+
+  /**
    * Constructs a new {@link PlayerDepotService}.
    *
    * @param redis the {@link VelocityRedis} instance
@@ -152,39 +159,82 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
 
     // Remove by owner rather than by local players: by now the players are gone locally, and the
     // disconnect writes they queued were skipped by the shutdown flag.
-    for (PlayerEntry entry : getPlayerEntriesOnProxy(this.redis.getProxyId())) {
-      entry.remove();
-    }
+    this.depot.removeAllOwnedBy(this.redis.getProxyId());
   }
 
   /**
-   * Called when a {@link ConnectedPlayer} connects to the proxy. Returns at once; the Redis work
-   * runs on the ordered worker.
+   * Removes every entry of this proxy in one round trip and stops writing new ones. Called on
+   * shutdown before the players are transferred, so the receiving proxy does not see them here.
+   */
+  public void releaseAll() {
+    this.released = true;
+    this.depot.removeAllOwnedBy(this.redis.getProxyId());
+  }
+
+  /**
+   * Removes every entry owned by another proxy, e.g. one that died, in one round trip.
+   *
+   * @param proxyId the owning proxy
+   */
+  public void removeEntriesOf(final @NotNull String proxyId) {
+    this.depot.removeAllOwnedBy(proxyId);
+  }
+
+  /**
+   * Called when a {@link ConnectedPlayer} connects to the proxy. Claims the player's entry in one
+   * atomic Redis call, off the ordered worker so a busy worker never delays or skips the check.
    *
    * @param player the player that connected
-   * @return a future completed with {@code false} if the player was refused (and disconnected),
-   *         {@code true} otherwise, including when Redis does not answer within
-   *         {@link #CONNECT_CHECK_TIMEOUT}
+   * @return a future completed with {@code false} if the player was refused (and disconnected):
+   *         held by another proxy, or Redis did not answer within {@link #CONNECT_CHECK_TIMEOUT}
+   *         and {@code login-check-failure} is {@code deny}
    */
   public CompletableFuture<Boolean> onPlayerConnect(final ConnectedPlayer player) {
-    if (this.redis.isShutdown()) {
+    if (this.redis.isShutdown() || this.released || !isCurrentSession(player)) {
       return CompletableFuture.completedFuture(false);
     }
 
-    return this.worker.supply(() -> connectNow(player))
-        .completeOnTimeout(null, CONNECT_CHECK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
-        .exceptionally(throwable -> null)
-        .thenApply(allowed -> {
-          if (allowed != null) {
-            return allowed;
+    final boolean kickExisting = this.server.getConfiguration().isKickExistingPlayers();
+    CompletableFuture<@Nullable PlayerEntry> claim;
+    try {
+      claim = this.depot.claim(newEntry(player), this.redis.getProxyId(), kickExisting);
+    } catch (RuntimeException e) {
+      claim = CompletableFuture.failedFuture(e);
+    }
+
+    return claim
+        .orTimeout(CONNECT_CHECK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+        .handle((holder, failure) -> {
+          if (failure != null) {
+            return onLoginCheckFailed(player);
           }
-          final long quiet = this.uncheckedLogins.acquire();
-          if (quiet >= 0) {
-            LOGGER.warn("Redis did not answer the duplicate-login check for {}; letting them in "
-                + "unchecked ({} other unchecked logins not logged)", player.getUsername(), quiet);
+          if (holder == null) {
+            return true;
           }
-          return Boolean.TRUE;
+          if (kickExisting) {
+            final Component reason = Component.translatable("multiplayer.disconnect.duplicate_login");
+            this.redis.publish(new VelocityKick(player.getUniqueId(), reason, holder.getProxyId()));
+            return true;
+          }
+          player.disconnect0(Component.translatable("velocity.error.already-connected-proxy.remote"),
+              true);
+          return false;
         });
+  }
+
+  private boolean onLoginCheckFailed(final ConnectedPlayer player) {
+    final boolean allow = this.server.getConfiguration().getRedis().isLoginAllowedWhenUnchecked();
+    final long quiet = this.uncheckedLogins.acquire();
+    if (quiet >= 0) {
+      LOGGER.warn("Redis did not answer the duplicate-login check for {} within {} ms: {} "
+          + "(login-check-failure = {}; {} similar logins not logged)", player.getUsername(),
+          CONNECT_CHECK_TIMEOUT.toMillis(), allow ? "let in unchecked" : "refused",
+          allow ? "allow" : "deny", quiet);
+    }
+    if (!allow) {
+      player.disconnect0(Component.translatable("velocity.error.login-check-unavailable"), true);
+    }
+    return allow;
   }
 
   /**
@@ -205,15 +255,7 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * @param serverName the name of the server that the player switched to
    */
   public void onPlayerSwitchServer(final ConnectedPlayer player, final String serverName) {
-    this.worker.execute(() -> {
-      final PlayerEntry playerEntry = this.getPlayerEntry(player.getUniqueId());
-      if (playerEntry == null) {
-        return;
-      }
-
-      playerEntry.setServerName(serverName);
-      playerEntry.upsert();
-    });
+    this.worker.execute(() -> updateOwnEntry(player, entry -> entry.setServerName(serverName)));
   }
 
   /**
@@ -223,15 +265,23 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * @param settings the new settings
    */
   public void onPlayerSettingsChange(final ConnectedPlayer player, final PlayerSettings settings) {
-    this.worker.execute(() -> {
-      final PlayerEntry playerEntry = this.getPlayerEntry(player.getUniqueId());
-      if (playerEntry == null) {
-        return;
-      }
+    this.worker.execute(() -> updateOwnEntry(player,
+        entry -> entry.setClientListingAllowed(settings.isClientListingAllowed())));
+  }
 
-      playerEntry.setClientListingAllowed(settings.isClientListingAllowed());
-      playerEntry.upsert();
-    });
+  /**
+   * Runs on the worker: changes this session's entry, never another proxy's.
+   */
+  private void updateOwnEntry(final ConnectedPlayer player, final Consumer<PlayerEntry> change) {
+    if (!isWriting() || !isCurrentSession(player)) {
+      return;
+    }
+    final PlayerEntry entry = this.depot.get(player.getUniqueId());
+    if (entry == null || !ownedHere(entry)) {
+      return;
+    }
+    change.accept(entry);
+    this.depot.claim(entry, this.redis.getProxyId(), false).join();
   }
 
   /**
@@ -342,62 +392,18 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     return List.copyOf(this.queryAll(playerEntry -> playerEntry.getProxyId().equalsIgnoreCase(proxyId)));
   }
 
-  /**
-   * Upserts a player's entry in the depot. If an entry for the given player already exists,
-   * it is updated with the latest details. If it doesn't exist, a new entry is created.
-   *
-   * @param player the {@link ConnectedPlayer} object representing the player for whom the entry is to be upserted; must not be null
-   * @return the {@link PlayerEntry} object representing the player's entry; never null
-   */
-  public @NotNull PlayerEntry upsertPlayerEntry(final @NotNull ConnectedPlayer player) {
-    final PlayerEntry playerEntry = new PlayerEntry(player, this.redis.getProxyId());
-    playerEntry.setDepot(this.depot);
-
-    this.depot.upsert(playerEntry);
-    return playerEntry;
+  private PlayerEntry newEntry(final ConnectedPlayer player) {
+    final PlayerEntry entry = new PlayerEntry(player, this.redis.getProxyId());
+    entry.setDepot(this.depot);
+    return entry;
   }
 
   /**
-   * Runs on the worker: refuses a duplicate held by another proxy, then registers the player.
-   */
-  private boolean connectNow(final ConnectedPlayer player) {
-    if (this.redis.isShutdown() || !isCurrentSession(player)) {
-      // A stale task must neither kick the live session nor write a ghost entry.
-      return false;
-    }
-
-    final PlayerEntry existing = this.depot.get(player.getUniqueId());
-    // An entry owned by this proxy is a leftover of the player's previous session here, whose
-    // removal may still be queued: registerConnection() already arbitrated local duplicates.
-    if (existing != null && !existing.getProxyId().equalsIgnoreCase(this.redis.getProxyId())) {
-      if (this.server.getConfiguration().isKickExistingPlayers()) {
-        final Component component = Component.translatable("multiplayer.disconnect.duplicate_login");
-        this.redis.publish(new VelocityKick(player.getUniqueId(), component, existing.getProxyId()));
-      } else {
-        final Component component = Component.translatable("velocity.error.already-connected-proxy.remote");
-        player.disconnect0(component, true);
-        return false;
-      }
-    }
-
-    this.upsertPlayerEntry(player);
-    return true;
-  }
-
-  /**
-   * Runs on the worker: removes the player's entry if this proxy and this session still own it.
+   * Runs on the worker: removes the player's entry if this proxy owns it and no newer session of
+   * the player lives here. An entry another proxy claimed meanwhile is left alone.
    */
   private void disconnectNow(final ConnectedPlayer player) {
-    if (this.redis.isShutdown()) {
-      return;
-    }
-
-    final PlayerEntry existing = this.depot.get(player.getUniqueId());
-    if (existing == null) {
-      return;
-    }
-
-    if (!existing.getProxyId().equalsIgnoreCase(this.redis.getProxyId())) {
+    if (!isWriting()) {
       return;
     }
 
@@ -406,11 +412,22 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
       return;
     }
 
-    this.depot.remove(player.getUniqueId());
+    this.depot.removeIfOwner(player.getUniqueId(), this.redis.getProxyId());
   }
 
   private boolean isCurrentSession(final ConnectedPlayer player) {
     return this.server.getPlayer(player.getUniqueId()).orElse(null) == player;
+  }
+
+  private boolean ownedHere(final PlayerEntry entry) {
+    return entry.getProxyId().equalsIgnoreCase(this.redis.getProxyId());
+  }
+
+  /**
+   * Whether worker writes still apply: not after shutdown, nor after {@link #releaseAll()}.
+   */
+  private boolean isWriting() {
+    return !this.redis.isShutdown() && !this.released;
   }
 
   /**
@@ -439,7 +456,7 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * once Redis answers again. Runs on the worker, so it is ordered with the lifecycle writes.
    */
   void refreshNow() {
-    if (this.redis.isShutdown()) {
+    if (!isWriting()) {
       return;
     }
 
@@ -450,18 +467,19 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
       byId.putIfAbsent(entry.getUniqueId(), entry);
     }
 
+    // Owner-guarded both ways: an entry another proxy claimed since the read above is never
+    // overwritten nor removed.
     for (ConnectedPlayer player : this.server.getAllPlayers()) {
       final PlayerEntry entry = byId.get(player.getUniqueId());
-      if (entry == null || (entry.getProxyId().equalsIgnoreCase(proxyId)
+      if (entry == null || (ownedHere(entry)
           && !Objects.equals(entry.getServerName(), currentServerName(player)))) {
-        this.upsertPlayerEntry(player);
+        this.depot.claim(newEntry(player), proxyId, false).join();
       }
     }
 
     for (PlayerEntry entry : entries) {
-      if (entry.getProxyId().equalsIgnoreCase(proxyId)
-          && this.server.getPlayer(entry.getUniqueId()).isEmpty()) {
-        entry.remove();
+      if (ownedHere(entry) && this.server.getPlayer(entry.getUniqueId()).isEmpty()) {
+        this.depot.removeIfOwner(entry.getUniqueId(), proxyId);
       }
     }
 
