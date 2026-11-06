@@ -1951,15 +1951,16 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
         return;
       }
       final String name = destination.getServerInfo().getName();
-      switch (BackendConnectionOutcome.classify(
+      final BackendConnectionOutcome outcome = BackendConnectionOutcome.classify(
           exception == null && result != null && result.isSuccessful(),
           exception != null,
           !isActive() || attempt.isGracefulDisconnect(),
           attempt.isProxySideFailure(),
-          attempt.wasClosedByBackend())) {
-        case FAILURE -> health.recordConnectionFailure(name, getUniqueId());
-        case SUCCESS -> health.recordConnectionSuccess(name);
-        case IGNORE -> { }
+          attempt.wasClosedByBackend());
+      if (outcome == BackendConnectionOutcome.FAILURE) {
+        health.recordConnectionFailure(name, getUniqueId());
+      } else if (outcome == BackendConnectionOutcome.SUCCESS) {
+        health.recordConnectionSuccess(name);
       }
     }
 
