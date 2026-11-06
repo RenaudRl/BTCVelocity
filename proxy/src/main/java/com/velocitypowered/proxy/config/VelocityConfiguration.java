@@ -26,6 +26,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.gson.annotations.Expose;
 import com.btcvelocity.proxy.config.migration.BtcConfigMigrations;
 import com.btcvelocity.proxy.observability.MetricsEndpoint;
+import com.btcvelocity.proxy.security.GeyserListenerAddress;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.api.proxy.config.BackendServerConfig;
 import com.velocitypowered.api.proxy.config.ProxyConfig;
@@ -472,6 +473,30 @@ public final class VelocityConfiguration implements ProxyConfig {
       valid = false;
     }
 
+    for (String entry : advanced.geyserTrustedProxies.invalidEntries()) {
+      LOGGER.error("Invalid geyser-listener-trusted-proxies entry '{}' (expected address or "
+          + "address/prefix, at most /8 for IPv4 and /7 for IPv6)", entry);
+      valid = false;
+    }
+
+    if (!advanced.geyserListener.isEmpty()) {
+      try {
+        final InetSocketAddress geyser = GeyserListenerAddress.parse(advanced.geyserListener);
+        // The same port is refused whatever the addresses: "[::]" and "0.0.0.0" are both wildcards,
+        // and a host name in bind may resolve to anything. (--port is only known to the server,
+        // which binds this listener first: a clash with it fails the startup.)
+        if (AddressUtil.parseAddress(bind).getPort() == geyser.getPort()) {
+          LOGGER.error("'geyser-listener' {} uses the same port as 'bind' {}: Geyser needs its own"
+              + " port.", advanced.geyserListener, bind);
+          valid = false;
+        }
+      } catch (IllegalArgumentException | IllegalStateException e) {
+        LOGGER.error("Invalid geyser-listener '{}' (expected a literal address and a port, host:port"
+            + " or [ipv6]:port, never a host name): {}", advanced.geyserListener, e.getMessage());
+        valid = false;
+      }
+    }
+
     valid &= observability.validate();
 
     if (advanced.loginRatelimit < 0) {
@@ -834,6 +859,27 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   public TrustedProxies getProxyProtocolTrustedProxies() {
     return advanced.getTrustedProxies();
+  }
+
+  /**
+   * The Geyser listener, always behind the PROXY protocol.
+   *
+   * @return its address, or empty when {@code advanced.geyser-listener} is not set
+   * @throws IllegalArgumentException if the value is invalid (what {@link #validate()} refuses)
+   */
+  public Optional<InetSocketAddress> getGeyserListener() {
+    final String value = advanced.getGeyserListener();
+    return value.isEmpty() ? Optional.empty() : Optional.of(GeyserListenerAddress.parse(value));
+  }
+
+  /**
+   * The sources allowed to send a PROXY header to the Geyser listener, a list of its own so that a
+   * compromised backend in a private range cannot claim the Geyser origin.
+   *
+   * @return the trusted sources, loopback only by default
+   */
+  public TrustedProxies getGeyserListenerTrustedProxies() {
+    return advanced.getGeyserTrustedProxies();
   }
 
   public boolean useTcpFastOpen() {
@@ -2067,6 +2113,17 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     private TrustedProxies trustedProxies = TrustedProxies.parse(TrustedProxies.DEFAULT_ENTRIES);
 
+    /** The Geyser listener as {@code host:port}; empty disables it. */
+    @Expose
+    private String geyserListener = "";
+
+    /** Sources allowed to send a PROXY header to the Geyser listener: loopback only by default. */
+    @Expose
+    private List<String> geyserListenerTrustedProxies = GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES;
+
+    private TrustedProxies geyserTrustedProxies =
+        TrustedProxies.parse(GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES);
+
     @Expose
     private boolean tcpFastOpen = false;
 
@@ -2158,6 +2215,15 @@ public final class VelocityConfiguration implements ProxyConfig {
     private Advanced() {
     }
 
+    /** A scalar written instead of an array is read as a one-entry list; validate() judges it. */
+    private static List<String> entriesOf(final Object value, final List<String> defaults) {
+      return switch (value) {
+        case null -> defaults;
+        case List<?> list -> list.stream().map(String::valueOf).toList();
+        default -> List.of(String.valueOf(value));
+      };
+    }
+
     private Advanced(final CommentedConfig config) {
       if (config != null) {
         this.compressionThreshold = config.getIntOrElse("compression-threshold", 256);
@@ -2171,13 +2237,14 @@ public final class VelocityConfiguration implements ProxyConfig {
           this.proxyProtocol = config.getOrElse("proxy-protocol", false);
         }
         // A scalar written instead of an array is read as a one-entry list; validate() judges it.
-        final Object trusted = config.get("haproxy-protocol-trusted-proxies");
-        this.proxyProtocolTrustedProxies = switch (trusted) {
-          case null -> TrustedProxies.DEFAULT_ENTRIES;
-          case List<?> list -> list.stream().map(String::valueOf).toList();
-          default -> List.of(String.valueOf(trusted));
-        };
+        this.proxyProtocolTrustedProxies = entriesOf(config.get("haproxy-protocol-trusted-proxies"),
+            TrustedProxies.DEFAULT_ENTRIES);
         this.trustedProxies = TrustedProxies.parse(this.proxyProtocolTrustedProxies);
+        this.geyserListenerTrustedProxies = entriesOf(config.get("geyser-listener-trusted-proxies"),
+            GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES);
+        this.geyserTrustedProxies = TrustedProxies.parse(this.geyserListenerTrustedProxies);
+        final Object geyser = config.get("geyser-listener");
+        this.geyserListener = geyser == null ? "" : String.valueOf(geyser).trim();
         this.tcpFastOpen = config.getOrElse("tcp-fast-open", false);
         this.bungeePluginMessageChannel = config.getOrElse("bungee-plugin-message-channel", true);
         this.showPingRequests = config.getOrElse("show-ping-requests", false);
@@ -2236,6 +2303,14 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     public TrustedProxies getTrustedProxies() {
       return trustedProxies;
+    }
+
+    public String getGeyserListener() {
+      return geyserListener;
+    }
+
+    public TrustedProxies getGeyserTrustedProxies() {
+      return geyserTrustedProxies;
     }
 
     public boolean isTcpFastOpen() {

@@ -295,6 +295,103 @@ class AdmissionEngineTest {
     assertEquals(Action.REFUSE, engine.decide(java("B", GEYSER), Phase.PRE_LOGIN).action());
   }
 
+  // --- the proxy's own Geyser listener ----------------------------------------------------------
+
+  @Test
+  void aConnectionOfTheGeyserListenerIsTreatedAsGeyserEvenWithAnEmptyList() {
+    // Arrange - geyser-addresses is empty and the address is a listed datacenter
+    final AdmissionEngine engine = engine("");
+    assertTrue(config("").geyserAddresses().isEmpty());
+
+    // Act
+    final Verdict atPreLogin =
+        engine.decide(Attempt.claimed("BedrockPlayer", DATACENTER_HOST, true), Phase.PRE_LOGIN);
+    final Verdict atLogin = engine.decide(
+        Attempt.claimed(".BedrockPlayer", DATACENTER_HOST, true)
+            .authenticated(".BedrockPlayer", OTHER_UUID, true, null), Phase.LOGIN);
+
+    // Assert - the pre-login waits for Floodgate like for an address of geyser-addresses; at the
+    // login the connection address is the player's real one (PROXY protocol) and is judged
+    assertEquals(Action.DEFER, atPreLogin.action());
+    assertEquals(Basis.GEYSER_ORIGIN, atPreLogin.basis());
+    assertEquals(Origin.GEYSER_UNCONFIRMED, atPreLogin.origin());
+    assertEquals(Action.REFUSE, atLogin.action());
+    assertEquals(Basis.LISTED, atLogin.basis());
+    assertEquals(Origin.GEYSER_FLOODGATE, atLogin.origin());
+    assertEquals(DATACENTER_HOST, atLogin.judged());
+  }
+
+  @Test
+  void aBedrockPlayerOfTheGeyserListenerWithNoRecordedAddressIsJudgedOnTheConnectionAddress() {
+    final Verdict admitted = engine("").decide(
+        Attempt.claimed(".Alex", HOME, true).authenticated(".Alex", OTHER_UUID, true, null),
+        Phase.LOGIN);
+
+    assertEquals(Action.ADMIT, admitted.action());
+    assertEquals(Basis.CLEAN, admitted.basis());
+    assertEquals(HOME, admitted.judged());
+    assertEquals(Origin.GEYSER_FLOODGATE, admitted.origin());
+  }
+
+  @Test
+  void aGeyserListenerConnectionFromAGeyserAddressStillKeepsTheSharedAddressRule() {
+    // geyser-addresses names the address the PROXY header gave: no real address is known
+    final Verdict verdict = engine(WITH_GEYSER).decide(
+        Attempt.claimed(".Alex", GEYSER, true).authenticated(".Alex", OTHER_UUID, true, null),
+        Phase.LOGIN);
+
+    assertEquals(Action.ADMIT, verdict.action());
+    assertEquals(Basis.BEDROCK_IP_UNKNOWN, verdict.basis());
+  }
+
+  @Test
+  void aBedrockPlayerOfTheGeyserListenerIsJudgedOnItsRealAddress() {
+    final Verdict refused = engine("").decide(
+        Attempt.claimed(".Bot", HOME, true).authenticated(".Bot", OTHER_UUID, true, DATACENTER_HOST),
+        Phase.LOGIN);
+    final Verdict admitted = engine("").decide(
+        Attempt.claimed(".Alex", DATACENTER_HOST, true).authenticated(".Alex", OTHER_UUID, true, HOME),
+        Phase.LOGIN);
+
+    assertEquals(Action.REFUSE, refused.action());
+    assertEquals(DATACENTER_HOST, refused.judged());
+    assertEquals(Action.ADMIT, admitted.action());
+    assertEquals(HOME, admitted.judged());
+  }
+
+  @Test
+  void aNonFloodgateConnectionOfTheGeyserListenerIsFlaggedAndJudgedOnItsAddress() {
+    final Verdict verdict = engine("").decide(
+        Attempt.claimed("Sneaky", DATACENTER_HOST, true)
+            .authenticated("Sneaky", OTHER_UUID, false, null), Phase.LOGIN);
+
+    assertEquals(Action.REFUSE, verdict.action());
+    assertEquals(Origin.GEYSER_ADDRESS_NOT_FLOODGATE, verdict.origin());
+  }
+
+  @Test
+  void theMainListenerIsJudgedAsBefore() {
+    final AdmissionEngine engine = engine("");
+
+    assertEquals(Action.REFUSE,
+        engine.decide(Attempt.claimed("Steve", DATACENTER_HOST, false), Phase.PRE_LOGIN).action());
+    assertEquals(Action.REFUSE, engine.decide(java("Steve", DATACENTER_HOST), Phase.PRE_LOGIN).action());
+    assertEquals(Action.ADMIT, engine.decide(java("Steve", HOME), Phase.PRE_LOGIN).action());
+  }
+
+  @Test
+  void theGeyserListenerFlagSurvivesTheLoginRecheckOfThePreLogin() {
+    // decideAtLogin judges the pre-login again from what it knew: it must still know the listener
+    final Optional<Verdict> atLogin = engine("").decideAtLogin(
+        Attempt.claimed(".Alex", DATACENTER_HOST, true)
+            .authenticated(".Alex", OTHER_UUID, true, null));
+
+    assertTrue(atLogin.isPresent());
+    assertEquals(Origin.GEYSER_FLOODGATE, atLogin.get().origin(),
+        "without the flag the pre-login would have refused it as a direct connection");
+    assertEquals(Basis.LISTED, atLogin.get().basis());
+  }
+
   // --- exemptions (M7) ------------------------------------------------------------------------
 
   @Test

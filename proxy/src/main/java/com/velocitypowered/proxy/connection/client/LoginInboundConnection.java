@@ -17,6 +17,7 @@
 
 package com.velocitypowered.proxy.connection.client;
 
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.velocitypowered.api.network.HandshakeIntent;
 import com.velocitypowered.api.network.ProtocolState;
 import com.velocitypowered.api.network.ProtocolVersion;
@@ -43,7 +44,7 @@ import space.vectrix.flare.fastutil.Int2ObjectSyncMap;
 /**
  * Handles the actual login stage of a player logging in.
  */
-public class LoginInboundConnection implements LoginPhaseConnection, KeyIdentifiable {
+public class LoginInboundConnection implements LoginPhaseConnection, KeyIdentifiable, ListenerOrigin {
 
   private static final AtomicIntegerFieldUpdater<LoginInboundConnection> SEQUENCE_UPDATER =
       AtomicIntegerFieldUpdater.newUpdater(LoginInboundConnection.class, "sequenceCounter");
@@ -71,6 +72,11 @@ public class LoginInboundConnection implements LoginPhaseConnection, KeyIdentifi
   @Override
   public InetSocketAddress getRemoteAddress() {
     return delegate.getRemoteAddress();
+  }
+
+  @Override
+  public Optional<String> getListenerName() {
+    return delegate.getListenerName();
   }
 
   @Override

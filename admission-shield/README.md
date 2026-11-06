@@ -13,7 +13,7 @@ trafic sortant est le téléchargement périodique des listes (X4BNet `lists_vpn
 | Décision | au pré-login ; reportée au login pour une exemption nominative ou un joueur Floodgate. Un refus de pré-login est **ré-appliqué** au login, au cas où un autre plugin l'aurait levé |
 | Exemptions | joueur = pseudo **et** UUID ensemble (un UUID seul est une erreur de configuration) ; réseaux en CIDR avec `expires` **exigé pour toute nouvelle entrée** (une entrée existante sans date reste honorée, avec un WARN), `reason` conseillé (voir « Exemptions datées ») |
 | ASN | base IP→ASN d'iptoasn.com ; `ADM-VPN-ASN` pour les systèmes de `asn.deny-asns` (vide, `observe` par défaut) ; mots-clés de nom signalés au staff seul (voir « ASN ») |
-| Geyser | `geyser-addresses` **vide par défaut** tant que 13.1 n'a pas mesuré l'adresse vue au proxy. Une connexion venue d'une de ces adresses sans être joueur Floodgate est journalisée `geyser-address-not-floodgate`, signalée en WARN et jugée normalement |
+| Geyser | `geyser-addresses` **vide par défaut** tant que 13.1 n'a pas mesuré l'adresse vue au proxy. Une connexion venue d'une de ces adresses sans être joueur Floodgate est journalisée `geyser-address-not-floodgate`, signalée en WARN et jugée normalement. Une connexion de l'écoute `geyser` du proxy (`advanced.geyser-listener` de `velocity.toml`) est traitée comme venant de Geyser même si la liste est vide. Avec le PROXY protocol son adresse est l'IP réelle du joueur : un joueur Floodgate y est jugé sur l'adresse que Floodgate a retenue, à défaut sur celle de la connexion, au lieu d'être admis en `bedrock, ip réelle inconnue` ; elle entre dans le plafond par réseau comme toute autre. Seule une adresse de `geyser-addresses` (mode à adresse partagée) garde l'exemption et l'admission sans jugement |
 | Journal | une ligne `key=value` par refus, observation ou exemption, sur le logger `btc.admission.journal` ; `identity=declared` au pré-login, `authenticated` au login |
 | Staff | `/admission why <pseudo\|ip>`, `/admission status` (`btc.admission.staff`) ; alerte en jeu à chaque refus, au plus un message toutes les 10 s |
 
@@ -39,7 +39,8 @@ Technique de Gate (Minekube) : borner le bloc, pas l'adresse, pour ne pas punir 
   et défaut ; `burst` < `attempts` est relevé à `attempts`.
 - **Jamais appliquée à** : une adresse non publique (loopback, privée, `100.64.0.0/10`,
   lien-local, ULA : jamais comptée), les `geyser-addresses` (Bedrock arrive de l'adresse de Geyser,
-  le pré-login y reste différé comme avant) et `exemptions.networks`.
+  le pré-login y reste différé comme avant) et `exemptions.networks`. L'écoute `geyser` du proxy,
+  elle, est comptée : son adresse est l'IP réelle du joueur (PROXY protocol).
 - **Exemptions de joueur** : elles exigent pseudo **et** UUID, or le pré-login ne connaît que le
   pseudo déclaré, que n'importe qui peut taper. Un pseudo que porte une exemption n'excuse donc
   **pas** la tentative (sinon un bot taperait le nom d'un staff) : au-delà de la limite, la décision

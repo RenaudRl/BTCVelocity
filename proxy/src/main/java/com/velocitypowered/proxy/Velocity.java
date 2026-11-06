@@ -80,7 +80,18 @@ public class Velocity {
     long startTime = System.nanoTime();
 
     VelocityServer server = new VelocityServer(options);
-    server.start();
+    try {
+      server.start();
+    } catch (Throwable t) {
+      // A failed start (a bind that fails, for instance) must not leave a JVM without a listener.
+      LOGGER.error("The proxy could not start, exiting", t);
+      try {
+        server.shutdown(false);
+      } catch (Throwable ignored) {
+        // shutdown asserts when the start failed before the managers existed: exit all the same
+      }
+      System.exit(1);
+    }
     Runtime.getRuntime().addShutdownHook(new Thread(() -> server.shutdown(false),
         "Shutdown thread"));
 

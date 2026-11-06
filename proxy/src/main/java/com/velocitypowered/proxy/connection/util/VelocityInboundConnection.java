@@ -17,16 +17,23 @@
 
 package com.velocitypowered.proxy.connection.util;
 
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.velocitypowered.api.proxy.InboundConnection;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
  * Base internal interface for a {@link InboundConnection}.
  */
-public interface VelocityInboundConnection extends InboundConnection {
+public interface VelocityInboundConnection extends InboundConnection, ListenerOrigin {
 
   MinecraftConnection getConnection();
+
+  @Override
+  default Optional<String> getListenerName() {
+    return getConnection().getListenerName();
+  }
 
   @Override
   default UUID getSessionId() {

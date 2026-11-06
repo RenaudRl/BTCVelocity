@@ -22,9 +22,11 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
 import com.btcvelocity.proxy.bridge.VelocityBridgeChannel;
 import com.btcvelocity.proxy.bridge.WorldRegistry;
+import com.btcvelocity.proxy.network.TrackedListener;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayerService;
 import com.btcvelocity.proxy.cluster.VelocityClusterProxyService;
 import com.btcvelocity.proxy.cluster.local.LocalClusterPlayerService;
@@ -202,6 +204,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
   private final ConnectionManager cm;
 
+  /** The Geyser listener, with the address it is really bound to (not the one a config names). */
+  private final TrackedListener geyserListener;
+
   private final ProxyOptions options;
 
   private @MonotonicNonNull VelocityConfiguration configuration;
@@ -331,6 +336,8 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     scheduler = new VelocityScheduler(pluginManager);
     console = new VelocityConsole(this);
     cm = new ConnectionManager(this);
+    geyserListener = new TrackedListener("geyser",
+        address -> cm.bind(address, ListenerOrigin.GEYSER), cm::close);
     servers = new ServerMap(this);
     startTime = System.currentTimeMillis();
     serverListPingHandler = new ServerListPingHandler(this);
@@ -660,6 +667,10 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     // init console permissions after plugins are loaded
     console.setupPermissions();
 
+    // The Geyser listener first: if it cannot be bound the proxy fails to start, instead of
+    // running half-way with players able to join but not Geyser.
+    this.geyserListener.start(configuration.getGeyserListener());
+
     final Integer port = this.options.getPort();
     if (port != null) {
       LOGGER.debug("Overriding bind port to {} from command line option", port);
@@ -895,6 +906,10 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       this.cm.bind(newConfiguration.getBind());
       this.cm.close(configuration.getBind());
     }
+
+    // The Geyser listener, after the main one so that an address can move from one to the other.
+    // It compares with the address it is bound to: this.configuration is already the new one.
+    this.geyserListener.reload(newConfiguration.getGeyserListener());
 
     boolean queryPortChanged = newConfiguration.getQueryPort() != configuration.getQueryPort();
     boolean queryAlreadyEnabled = configuration.isQueryEnabled();

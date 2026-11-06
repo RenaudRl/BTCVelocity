@@ -17,6 +17,7 @@
 
 package com.btcvelocity.admission;
 
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.ResultedEvent;
 import com.velocitypowered.api.event.Subscribe;
@@ -28,6 +29,7 @@ import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import com.velocitypowered.api.proxy.InboundConnection;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
@@ -226,7 +228,8 @@ public final class BtcAdmissionShieldPlugin {
     if (remote == null) {
       return;
     }
-    final Attempt attempt = Attempt.claimed(event.getUsername(), remote);
+    final Attempt attempt = Attempt.claimed(event.getUsername(), remote,
+        viaGeyserListener(event.getConnection()));
     final Verdict verdict = current.decidePreLogin(attempt);
     final Optional<AdmissionJournal.Entry> entry = this.journal.record(
         attempt, verdict, Phase.PRE_LOGIN, this.config.modeFor(verdict));
@@ -257,9 +260,9 @@ public final class BtcAdmissionShieldPlugin {
       return;
     }
     final UUID uuid = player.getUniqueId();
-    final Attempt attempt = Attempt.claimed(player.getUsername(), remote).authenticated(
-        player.getUsername(), uuid, this.bedrock.isFloodgatePlayer(uuid),
-        this.bedrock.realAddressOf(uuid).orElse(null));
+    final Attempt attempt = Attempt.claimed(player.getUsername(), remote, viaGeyserListener(player))
+        .authenticated(player.getUsername(), uuid, this.bedrock.isFloodgatePlayer(uuid),
+            this.bedrock.realAddressOf(uuid).orElse(null));
     current.wouldRefuseInAddition(attempt).ifPresent(extra -> {
       final boolean counted = extra.ipClass() == IpClass.ASN
           ? this.asnStore.noteWouldRefuse(uuid)
@@ -305,6 +308,10 @@ public final class BtcAdmissionShieldPlugin {
           verdict.ipClass() == null ? "no class" : verdict.ipClass().key());
       player.disconnect(refusal(verdict));
     });
+  }
+
+  private static boolean viaGeyserListener(final InboundConnection connection) {
+    return ListenerOrigin.of(connection).filter(ListenerOrigin.GEYSER::equals).isPresent();
   }
 
   private void tellStaff(final String message) {

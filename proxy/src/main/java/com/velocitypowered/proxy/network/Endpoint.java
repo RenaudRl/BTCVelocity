@@ -30,9 +30,29 @@ public final class Endpoint {
 
   private final ListenerType type;
 
+  private final boolean announced;
+
   public Endpoint(final Channel channel, final ListenerType type) {
+    this(channel, type, true);
+  }
+
+  /**
+   * Creates an endpoint.
+   *
+   * @param channel the server channel
+   * @param type the type of listener
+   * @param announced whether plugins are told when it opens and closes ({@code ListenerBoundEvent},
+   *     {@code ListenerCloseEvent}); a listener that is not the proxy's Minecraft listener must not
+   *     be taken for it (Geyser starts on the bound event of a Minecraft listener)
+   */
+  public Endpoint(final Channel channel, final ListenerType type, final boolean announced) {
     this.channel = Preconditions.checkNotNull(channel, "channel");
     this.type = Preconditions.checkNotNull(type, "type");
+    this.announced = announced;
+  }
+
+  public boolean isAnnounced() {
+    return announced;
   }
 
   public Channel getChannel() {

@@ -105,6 +105,20 @@ public final class ConnectionManager {
    * @param address the address to bind to
    */
   public void bind(final InetSocketAddress address) {
+    bind(address, null);
+  }
+
+  /**
+   * Binds a Minecraft listener to the specified {@code address}, under a name.
+   *
+   * <p>A named listener marks its channels ({@link Connections#LISTENER}), so that the pipeline and
+   * the plugins know which listener accepted them. It always expects the PROXY protocol, see
+   * {@link ServerChannelInitializer}.
+   *
+   * @param address the address to bind to
+   * @param listener the name of the listener, or {@code null} for the main one
+   */
+  public void bind(final InetSocketAddress address, final @Nullable String listener) {
     final ServerBootstrap bootstrap = new ServerBootstrap()
         .channelFactory(this.transportType.serverSocketChannelFactory)
         .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, SERVER_WRITE_MARK)
@@ -112,19 +126,27 @@ public final class ConnectionManager {
         .childOption(ChannelOption.TCP_NODELAY, true)
         .childOption(ChannelOption.IP_TOS, 0x18)
         .localAddress(address);
+    // Before Netty's acceptor: refuses a source that may not send a PROXY header, unregistered.
+    bootstrap.handler(new ListenerSourceFilter(this.server, listener));
+    if (listener != null) {
+      bootstrap.childAttr(Connections.LISTENER, listener);
+    }
 
     if (server.getConfiguration().useTcpFastOpen()) {
       bootstrap.option(ChannelOption.TCP_FASTOPEN, 3);
     }
 
-    if (server.getConfiguration().isEnableReusePort()) {
+    // A named listener is bound once, without SO_REUSEPORT: another process could otherwise bind
+    // the same port and receive part of the connections.
+    final boolean reusePort = listener == null && server.getConfiguration().isEnableReusePort();
+    if (reusePort) {
       // We don't need a boss group, since each worker will bind to the socket
       bootstrap.option(UnixChannelOption.SO_REUSEPORT, true).group(this.workerGroup);
     } else {
       bootstrap.group(this.bossGroup, this.workerGroup);
     }
 
-    final int binds = server.getConfiguration().isEnableReusePort()
+    final int binds = reusePort
         ? ((MultithreadEventExecutorGroup) this.workerGroup).executorCount() : 1;
 
     for (int bind = 0; bind < binds; bind++) {
@@ -134,22 +156,31 @@ public final class ConnectionManager {
           .addListener((ChannelFutureListener) future -> {
             final Channel channel = future.channel();
             if (future.isSuccess()) {
-              this.endpoints.put(address, new Endpoint(channel, ListenerType.MINECRAFT));
+              this.endpoints.put(address,
+                  new Endpoint(channel, ListenerType.MINECRAFT, listener == null));
 
               LOGGER.info("Listening on {}", channel.localAddress());
 
               if (finalBind == 0) {
                 // Warn people with console access that HAProxy is in use, see PR: #1436
-                if (this.server.getConfiguration().isProxyProtocol()) {
+                if (listener != null || this.server.getConfiguration().isProxyProtocol()) {
                   LOGGER.warn(
                       "Using HAProxy and listening on {}: only {} may send a PROXY header, other "
-                          + "connections are closed (haproxy-protocol-trusted-proxies).",
+                          + "connections are closed ({}).",
                       channel.localAddress(),
-                      this.server.getConfiguration().getProxyProtocolTrustedProxies().describe());
+                      ServerChannelInitializer.trustedSources(this.server.getConfiguration(), listener)
+                          .describe(),
+                      listener != null ? "geyser-listener-trusted-proxies"
+                          : "haproxy-protocol-trusted-proxies");
                 }
 
-                // Fire the proxy bound event after the socket is bound
-                server.getEventManager().fireAndForget(new ListenerBoundEvent(address, ListenerType.MINECRAFT));
+                // Fire the proxy bound event after the socket is bound. Not for a named listener:
+                // Geyser-Velocity starts its Bedrock side on the bound event of a MINECRAFT
+                // listener and must not take the Geyser listener (a loopback port) for the proxy's.
+                if (listener == null) {
+                  server.getEventManager().fireAndForget(
+                      new ListenerBoundEvent(address, ListenerType.MINECRAFT));
+                }
               }
             } else {
               LOGGER.error("Can't bind to {}", address, future.cause());
@@ -162,6 +193,17 @@ public final class ConnectionManager {
         break;
       }
     }
+  }
+
+  /**
+   * The address a bind really got, which differs from the requested one when the port was 0.
+   *
+   * @param requested the address given to {@code bind}
+   * @return the local address of its first endpoint, or {@code null} if it is not bound
+   */
+  @Nullable InetSocketAddress localAddressOf(final InetSocketAddress requested) {
+    return this.endpoints.get(requested).stream().findFirst()
+        .map(endpoint -> (InetSocketAddress) endpoint.getChannel().localAddress()).orElse(null);
   }
 
   /**
@@ -223,11 +265,14 @@ public final class ConnectionManager {
     Collection<Endpoint> endpoints = this.endpoints.removeAll(oldBind);
     Preconditions.checkState(!endpoints.isEmpty(), "Endpoint was not registered");
 
-    ListenerType type = endpoints.iterator().next().getType();
+    final Endpoint first = endpoints.iterator().next();
+    ListenerType type = first.getType();
 
     // Fire proxy close event to notify plugins of socket close. We block since plugins
     // should have a chance to be notified before the server stops accepting connections.
-    server.getEventManager().fire(new ListenerCloseEvent(oldBind, type)).join();
+    if (first.isAnnounced()) {
+      server.getEventManager().fire(new ListenerCloseEvent(oldBind, type)).join();
+    }
 
     for (Endpoint endpoint : endpoints) {
       Channel serverChannel = endpoint.getChannel();
@@ -245,11 +290,14 @@ public final class ConnectionManager {
     for (final Map.Entry<InetSocketAddress, Collection<Endpoint>> entry : this.endpoints.asMap().entrySet()) {
       final InetSocketAddress address = entry.getKey();
       final Collection<Endpoint> endpoints = entry.getValue();
-      ListenerType type = endpoints.iterator().next().getType();
+      final Endpoint first = endpoints.iterator().next();
+      ListenerType type = first.getType();
 
       // Fire proxy close event to notify plugins of socket close. We block since plugins
       // should have a chance to be notified before the server stops accepting connections.
-      server.getEventManager().fire(new ListenerCloseEvent(address, type)).join();
+      if (first.isAnnounced()) {
+        server.getEventManager().fire(new ListenerCloseEvent(address, type)).join();
+      }
 
       for (Endpoint endpoint : endpoints) {
         LOGGER.info("Closing endpoint {}", address);

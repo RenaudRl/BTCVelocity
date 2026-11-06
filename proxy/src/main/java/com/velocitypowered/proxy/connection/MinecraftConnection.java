@@ -70,8 +70,10 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.EventLoop;
 import io.netty.handler.codec.haproxy.HAProxyMessage;
+import io.netty.handler.codec.haproxy.HAProxyProxiedProtocol;
 import io.netty.handler.timeout.ReadTimeoutException;
 import io.netty.util.ReferenceCountUtil;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.security.GeneralSecurityException;
@@ -79,6 +81,7 @@ import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.SecretKey;
@@ -207,8 +210,16 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
             activeSessionHandler.handleGeneric(pkt);
           }
         }
-        case HAProxyMessage proxyMessage -> this.remoteAddress = new InetSocketAddress(proxyMessage.sourceAddress(),
-            proxyMessage.sourcePort());
+        case HAProxyMessage proxyMessage -> {
+          final InetSocketAddress source = proxiedSource(proxyMessage);
+          if (source == null) {
+            LOGGER.debug("{}: closing, unsupported PROXY header ({})", association,
+                proxyMessage.proxiedProtocol());
+            close();
+          } else {
+            this.remoteAddress = source;
+          }
+        }
         case ByteBuf buf -> {
           if (activeSessionHandler instanceof ClientPlaySessionHandler) {
             if (MAX_CLIENT_PACKET_SIZE > 0 && buf.readableBytes() > MAX_CLIENT_PACKET_SIZE) {
@@ -228,6 +239,28 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
       }
     } finally {
       ReferenceCountUtil.release(msg);
+    }
+  }
+
+  /**
+   * The client address a PROXY header announces. Only TCP over IPv4 or IPv6 is accepted, and the
+   * address is read as a literal: for any other protocol (UNIX sockets, UDP, unknown) the "address"
+   * is free text, and handing it to {@code new InetSocketAddress(String, int)} would resolve it
+   * through DNS on the event loop.
+   *
+   * @param message the decoded PROXY header
+   * @return the address, or {@code null} if the header is not one this proxy accepts
+   */
+  static @Nullable InetSocketAddress proxiedSource(final HAProxyMessage message) {
+    if (message.proxiedProtocol() != HAProxyProxiedProtocol.TCP4
+        && message.proxiedProtocol() != HAProxyProxiedProtocol.TCP6) {
+      return null;
+    }
+    try {
+      return new InetSocketAddress(InetAddress.ofLiteral(message.sourceAddress()),
+          message.sourcePort());
+    } catch (IllegalArgumentException | NullPointerException malformed) {
+      return null;
     }
   }
 
@@ -388,6 +421,15 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
 
   public @Nullable UUID getSessionId() {
     return sessionId;
+  }
+
+  /**
+   * The name of the listener that accepted this connection.
+   *
+   * @return the name, or empty for the main listener
+   */
+  public Optional<String> getListenerName() {
+    return Optional.ofNullable(channel.attr(Connections.LISTENER).get());
   }
 
   public boolean isClosed() {

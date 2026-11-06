@@ -17,10 +17,22 @@
 
 package com.velocitypowered.proxy.network;
 
+import io.netty.util.AttributeKey;
+
 /**
  * Constants used for the pipeline.
  */
 public final class Connections {
+
+  /** Name of the listener that accepted a channel; absent on the main listener. */
+  public static final AttributeKey<String> LISTENER = AttributeKey.valueOf("btc-listener");
+
+  /**
+   * Whether the source filter admitted a channel as a PROXY protocol sender; absent or false means
+   * no PROXY decoder. Set once on the boss thread, so the pipeline never re-reads the configuration.
+   */
+  public static final AttributeKey<Boolean> PROXY_PROTOCOL =
+      AttributeKey.valueOf("btc-proxy-protocol");
 
   public static final String CIPHER_DECODER = "cipher-decoder";
 

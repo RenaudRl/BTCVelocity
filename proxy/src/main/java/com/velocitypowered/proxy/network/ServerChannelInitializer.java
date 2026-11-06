@@ -25,6 +25,8 @@ import static com.velocitypowered.proxy.network.Connections.MINECRAFT_DECODER;
 import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 import static com.velocitypowered.proxy.network.Connections.READ_TIMEOUT;
 
+import com.btcvelocity.api.connection.ListenerOrigin;
+import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
@@ -42,20 +44,14 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
 import io.netty.handler.timeout.ReadTimeoutHandler;
-import java.net.InetSocketAddress;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * Server channel initializer.
  */
 public class ServerChannelInitializer extends ChannelInitializer<Channel> {
-
-  private static final Logger LOGGER = LogManager.getLogger(ServerChannelInitializer.class);
-  private static final AtomicBoolean UNTRUSTED_WARNED = new AtomicBoolean();
 
   private final VelocityServer server;
 
@@ -63,23 +59,40 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
     this.server = server;
   }
 
+  /**
+   * Whether a channel must speak the PROXY protocol: the Geyser listener always does (Geyser sends
+   * it with {@code advanced.java.use-haproxy-protocol}), the main one follows {@code haproxy-protocol}.
+   *
+   * @param listener the name of the listener that accepted the channel, {@code null} for the main one
+   * @param mainListenerFlag the {@code haproxy-protocol} setting
+   * @return {@code true} if a PROXY header is expected
+   */
+  static boolean expectsProxyProtocol(final @Nullable String listener, final boolean mainListenerFlag) {
+    return ListenerOrigin.GEYSER.equals(listener) || mainListenerFlag;
+  }
+
+  /**
+   * The sources allowed to send a PROXY header on a listener: the Geyser listener has a list of its
+   * own (loopback by default), so that a backend in a private range cannot claim the Geyser origin.
+   *
+   * @param configuration the current configuration
+   * @param listener the name of the listener that accepted the channel, {@code null} for the main one
+   * @return the trusted sources of that listener
+   */
+  static TrustedProxies trustedSources(final VelocityConfiguration configuration,
+      final @Nullable String listener) {
+    return ListenerOrigin.GEYSER.equals(listener)
+        ? configuration.getGeyserListenerTrustedProxies()
+        : configuration.getProxyProtocolTrustedProxies();
+  }
+
   @Override
   protected void initChannel(final Channel ch) {
-    final boolean proxyProtocol = this.server.getConfiguration().isProxyProtocol();
-    // An untrusted peer could forge the client address in its PROXY header: drop it unread.
-    if (proxyProtocol && !(ch.remoteAddress() instanceof InetSocketAddress peer
-        && this.server.getConfiguration().getProxyProtocolTrustedProxies()
-            .contains(peer.getAddress()))) {
-      // First refusal at warn so a misconfigured relay is visible; later ones at debug (log flood).
-      if (UNTRUSTED_WARNED.compareAndSet(false, true)) {
-        LOGGER.warn("Refusing PROXY protocol connection from untrusted source {} (add your relay to "
-            + "haproxy-protocol-trusted-proxies; further refusals are logged at debug)", ch.remoteAddress());
-      } else {
-        LOGGER.debug("Refusing PROXY protocol connection from untrusted source {}", ch.remoteAddress());
-      }
-      ch.close();
-      return;
-    }
+    // A source that may not send a PROXY header never gets here: ListenerSourceFilter closes it
+    // on the server channel, before this initializer (or any plugin wrapping it) is called.
+    // The filter's decision, not the configuration (it may have been reloaded since). A channel the
+    // filter never saw has no decision: no PROXY decoder for a source nobody verified.
+    final boolean proxyProtocol = Boolean.TRUE.equals(ch.attr(Connections.PROXY_PROTOCOL).get());
 
     ch.pipeline()
         .addLast(LEGACY_PING_DECODER, new LegacyPingDecoder())

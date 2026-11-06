@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2026 Velocity Contributors
+ * Copyright (C) 2018-2026 Velocity Contributors
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,13 +29,31 @@ import org.jspecify.annotations.Nullable;
  * @param remote the address the connection comes from, as the proxy sees it
  * @param floodgatePlayer whether Floodgate knows this player as a Bedrock player (login only)
  * @param bedrockReal the real address of a Bedrock player as Floodgate recorded it, when known
+ * @param viaGeyserListener whether the connection was accepted by the proxy's {@code geyser}
+ *     listener: it is then treated as coming from Geyser, whatever its address. With the PROXY
+ *     protocol that address is the player's real one
  */
 public record Attempt(
     String username,
     @Nullable UUID uuid,
     InetAddress remote,
     boolean floodgatePlayer,
-    @Nullable InetAddress bedrockReal) {
+    @Nullable InetAddress bedrockReal,
+    boolean viaGeyserListener) {
+
+  /**
+   * A connection that did not come through the Geyser listener.
+   *
+   * @param username the username
+   * @param uuid the account UUID, if known
+   * @param remote the address of the connection
+   * @param floodgatePlayer whether Floodgate knows the player as Bedrock
+   * @param bedrockReal Floodgate's record of the player's real address, if any
+   */
+  public Attempt(final String username, final @Nullable UUID uuid, final InetAddress remote,
+      final boolean floodgatePlayer, final @Nullable InetAddress bedrockReal) {
+    this(username, uuid, remote, floodgatePlayer, bedrockReal, false);
+  }
 
   /**
    * A connection at the pre-login: an address and a claimed name, nothing proven.
@@ -45,7 +63,20 @@ public record Attempt(
    * @return the attempt
    */
   public static Attempt claimed(final String username, final InetAddress remote) {
-    return new Attempt(username, null, remote, false, null);
+    return claimed(username, remote, false);
+  }
+
+  /**
+   * A connection at the pre-login, knowing which listener accepted it.
+   *
+   * @param username the claimed username
+   * @param remote the address of the connection
+   * @param viaGeyserListener whether the proxy's {@code geyser} listener accepted it
+   * @return the attempt
+   */
+  public static Attempt claimed(final String username, final InetAddress remote,
+      final boolean viaGeyserListener) {
+    return new Attempt(username, null, remote, false, null, viaGeyserListener);
   }
 
   /**
@@ -60,6 +91,6 @@ public record Attempt(
   public Attempt authenticated(final String authenticatedName, final UUID authenticatedUuid,
       final boolean isFloodgatePlayer, final @Nullable InetAddress realAddress) {
     return new Attempt(authenticatedName, authenticatedUuid, this.remote, isFloodgatePlayer,
-        realAddress);
+        realAddress, this.viaGeyserListener);
   }
 }
