@@ -2899,7 +2899,12 @@ public final class VelocityConfiguration implements ProxyConfig {
      */
     private List<String> queueOnJoinServers;
 
-    private Queue(final CommentedConfig config) {
+    // A whole number in the toml ("send-delay = 2") is read as an Integer, not a Double.
+    private static double seconds(final CommentedConfig config, final String key, final double def) {
+      return config.<Number>getOrElse(key, def).doubleValue();
+    }
+
+    Queue(final CommentedConfig config) {
       if (config == null) {
         return;
       }
@@ -2907,10 +2912,10 @@ public final class VelocityConfiguration implements ProxyConfig {
       this.enabled = config.getOrElse("enabled", false);
       this.noQueueServers = config.getOrElse("no-queue-servers", List.of());
       this.allowMultiQueue = config.getOrElse("allow-multi-queue", false);
-      this.sendDelay = config.getOrElse("send-delay", 1.0);
-      this.queueDelay = config.getOrElse("queue-delay", 0.0);
-      this.messageDelay = config.getOrElse("message-delay", 1.0);
-      this.backendPingInterval = config.getOrElse("backend-ping-interval", 5.0);
+      this.sendDelay = seconds(config, "send-delay", 1.0);
+      this.queueDelay = seconds(config, "queue-delay", 0.0);
+      this.messageDelay = seconds(config, "message-delay", 1.0);
+      this.backendPingInterval = seconds(config, "backend-ping-interval", 5.0);
       this.maxBatchSize = config.getOrElse("max-batch-size", 5);
       this.maxSendRetries = config.getOrElse("max-send-retries", 10);
       this.removePlayerOnServerSwitch = config.getOrElse("remove-player-on-server-switch", true);
