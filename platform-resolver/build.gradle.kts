@@ -15,6 +15,9 @@ dependencies {
     compileOnly(libs.floodgate.api) { isTransitive = false }
 
     testImplementation(project(":velocity-api"))
+    testImplementation(libs.mockito)
+    // compileOnly is invisible to tests; the tests need the real FloodgateApi type.
+    testImplementation(libs.floodgate.api) { isTransitive = false }
     compileOnly(libs.jspecify)
 }
 
