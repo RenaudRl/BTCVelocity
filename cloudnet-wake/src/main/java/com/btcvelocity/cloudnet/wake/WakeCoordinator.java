@@ -92,6 +92,9 @@ final class WakeCoordinator {
   private final TimeoutScheduler scheduler;
   private final Map<String, Session> sessions = new ConcurrentHashMap<>();
   private final Map<UUID, String> holds = new ConcurrentHashMap<>();
+  // Players whose connection to the limbo is under way; the value is a message an abort could not
+  // deliver yet (a player switching server loses it), sent once the connection has settled.
+  private final Map<UUID, Optional<Component>> parking = new ConcurrentHashMap<>();
 
   WakeCoordinator(ProxyServer proxy, Logger logger, WakeSettings settings, WakeMessages messages,
                   ServiceStarter starter, TimeoutScheduler scheduler) {
@@ -155,6 +158,7 @@ final class WakeCoordinator {
    */
   void onDisconnect(UUID player) {
     this.holds.remove(player);
+    this.parking.remove(player);
   }
 
   private boolean request(Player player, String task) {
@@ -170,6 +174,7 @@ final class WakeCoordinator {
 
     UUID id = player.getUniqueId();
     this.holds.put(id, task);
+    this.parking.put(id, Optional.empty());
     Session session = this.sessions.compute(task, (key, existing) -> {
       Session joined = existing != null ? existing : new Session(key);
       joined.players.add(id);
@@ -179,9 +184,18 @@ final class WakeCoordinator {
     if (session.begun.compareAndSet(false, true)) {
       this.begin(session);
     }
+    if (!task.equals(this.holds.get(id))) {
+      // The session already ended (start refused at once): the player stays where they are, and
+      // an abort that was deferred while "parking" is delivered here.
+      this.parking.remove(id).ifPresent(player::sendMessage);
+      return true;
+    }
     player.createConnectionRequest(limbo.get()).connect().whenComplete(this.guarded("park",
         (result, error) -> this.onParked(player, task, result, error),
-        () -> this.holds.remove(id, task)));
+        () -> {
+          this.holds.remove(id, task);
+          this.parking.remove(id);
+        }));
     // A registration between the first look and joining the session fired its event too early.
     this.registeredInstance(task).ifPresent(server ->
         this.finish(session, parked -> this.transfer(parked, task, server)));
@@ -304,12 +318,27 @@ final class WakeCoordinator {
   }
 
   private void abort(Player player, String task, String messageKey) {
-    player.sendMessage(this.text(messageKey, task));
-    this.holds.remove(player.getUniqueId(), task);
+    UUID id = player.getUniqueId();
+    this.holds.remove(id, task);
+    Component message = this.text(messageKey, task);
+    boolean[] deferred = new boolean[1];
+    // Atomic against onParked: either the message is parked here, or it is sent right now.
+    this.parking.computeIfPresent(id, (key, pending) -> {
+      deferred[0] = true;
+      return pending.isPresent() ? pending : Optional.of(message);
+    });
+    if (!deferred[0]) {
+      player.sendMessage(message);
+    }
   }
 
   private void onParked(Player player, String task, ConnectionRequestBuilder.Result result,
                         Throwable error) {
+    Optional<Component> pending = this.parking.remove(player.getUniqueId());
+    if (pending.isPresent()) {
+      player.sendMessage(pending.get());
+      return;
+    }
     var status = error == null
         ? result.getStatus() : ConnectionRequestBuilder.Status.CONNECTION_CANCELLED;
     switch (status) {
