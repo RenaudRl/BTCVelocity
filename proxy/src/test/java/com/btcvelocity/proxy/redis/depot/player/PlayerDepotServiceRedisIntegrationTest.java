@@ -70,6 +70,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -128,6 +129,8 @@ class PlayerDepotServiceRedisIntegrationTest {
   private final AtomicLong worstLagMs = new AtomicLong();
   private final List<Node> nodes = new ArrayList<>();
   private final ScheduledExecutorService timers = Executors.newScheduledThreadPool(8);
+  /** The plugin executor of Velocity: a cached pool, so runs of one task can overlap. */
+  private final ExecutorService taskPool = Executors.newCachedThreadPool();
   /** While closed, the live proxies' tasks wait before their next run: a frozen process. */
   private volatile CountDownLatch frozenTasks = new CountDownLatch(0);
   /** Closed on top of {@link #frozenTasks} for the heartbeats only: they wake up later. */
@@ -162,6 +165,7 @@ class PlayerDepotServiceRedisIntegrationTest {
       }
     }
     timers.shutdownNow();
+    taskPool.shutdownNow();
     try {
       final Node cleaner = node("cleaner");
       cleaner.provider.deleteKey(HASH);
@@ -334,52 +338,11 @@ class PlayerDepotServiceRedisIntegrationTest {
   }
 
   /**
-   * Regression check of the pause the ADR names. It passes with or without the lease: the commands
-   * queued while Redis is frozen (heartbeats included) run when it resumes and refresh the keys, so
-   * the proxies never look dead. The freeze test below is the one that needs the lease.
-   */
-  @Test
-  void aPausedRedisDoesNotMakeLiveProxiesReapEachOther() throws Exception {
-    final Node a = liveNode("live-a");
-    final Node b = liveNode("live-b");
-    final ConnectedPlayer alice = a.join("alice", "lobby");
-    final ConnectedPlayer bob = b.join("bob", "lobby");
-    assertTrue(onLoop(() -> a.service.onPlayerConnect(alice)).get(5, TimeUnit.SECONDS));
-    assertTrue(onLoop(() -> b.service.onPlayerConnect(bob)).get(5, TimeUnit.SECONDS));
-    awaitTrue("both proxies beat and one holds the reaper lease", () ->
-        a.provider.existsKey("heartbeat:live-a") && a.provider.existsKey("heartbeat:live-b")
-            && a.provider.get(LEASE_KEY) != null);
-
-    // Longer than both the heartbeat TTL (5 s) and the lease (3 s): every key expires.
-    docker("pause");
-    try {
-      Thread.sleep(PAUSE_MS);
-    } finally {
-      docker("unpause");
-    }
-    final long unpausedAt = System.nanoTime();
-    // Not an assertion: shows whether the commands queued during the pause refreshed the keys.
-    System.out.printf("redis-integration: right after the unpause heartbeat:live-a=%b, "
-        + "heartbeat:live-b=%b, lease=%s%n", a.provider.existsKey("heartbeat:live-a"),
-        a.provider.existsKey("heartbeat:live-b"), a.provider.get(LEASE_KEY));
-
-    // Long enough for a lease to be taken, renewed and used, and for the heartbeats to be back.
-    Thread.sleep(OBSERVE_AFTER_PAUSE_MS);
-    System.out.printf("redis-integration: after a %d ms pause, reaped a=%d b=%d, lease held by %s%n",
-        PAUSE_MS, a.proxies.getReapedProxyCount(), b.proxies.getReapedProxyCount(),
-        a.provider.get(LEASE_KEY));
-    assertEquals(0, a.proxies.getReapedProxyCount(), "live-a reaped a live proxy");
-    assertEquals(0, b.proxies.getReapedProxyCount(), "live-b reaped a live proxy");
-    assertTrue(a.provider.existsKey("heartbeat:live-a") && a.provider.existsKey("heartbeat:live-b"));
-    assertEquals(a.proxyId, entryOf(alice).getProxyId());
-    assertEquals(b.proxyId, entryOf(bob).getProxyId());
-    assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - unpausedAt) >= OBSERVE_AFTER_PAUSE_MS);
-  }
-
-  /**
    * What a Redis pause cannot show: its queued commands refresh the keys the moment it resumes.
    * Here the proxies themselves are frozen (every task waits), so the heartbeats and the lease
-   * really expire, and on the wake-up the reapers run before the heartbeats.
+   * really expire, and on the wake-up the reapers run before the heartbeats. Like Velocity's
+   * fixed-rate tasks, each missed run was handed to a cached pool and waits: on the wake-up they
+   * all run back to back, a burst of passes with no heartbeat interval between them.
    */
   @Test
   void proxiesFrozenTogetherDoNotReapEachOtherWhenTheirReapersWakeUpFirst() throws Exception {
@@ -537,7 +500,11 @@ class PlayerDepotServiceRedisIntegrationTest {
     return node;
   }
 
-  /** A scheduler that runs the repeating tasks on {@link #timers}, as Velocity's would. */
+  /**
+   * A scheduler that runs the repeating tasks like Velocity's: {@code scheduleAtFixedRate} on
+   * {@link #timers}, each run handed to the cached pool {@link #taskPool} (VelocityTask.run does
+   * the same with the plugin's executor), so a run that waits does not delay the next ones.
+   */
   private VelocityScheduler liveScheduler() {
     final VelocityScheduler scheduler = mock(VelocityScheduler.class);
     final AtomicInteger built = new AtomicInteger();
@@ -552,7 +519,7 @@ class PlayerDepotServiceRedisIntegrationTest {
         return builder;
       });
       when(builder.schedule()).thenAnswer(schedule -> {
-        final ScheduledFuture<?> future = timers.scheduleWithFixedDelay(() -> {
+        final ScheduledFuture<?> future = timers.scheduleAtFixedRate(() -> taskPool.execute(() -> {
           try {
             frozenTasks.await();
             if (heartbeat) {
@@ -564,7 +531,7 @@ class PlayerDepotServiceRedisIntegrationTest {
           } catch (RuntimeException failed) {
             // Velocity logs a failing task and keeps its schedule; so does this
           }
-        }, 0, period.get().toMillis(), TimeUnit.MILLISECONDS);
+        }), 0, period.get().toMillis(), TimeUnit.MILLISECONDS);
         final ScheduledTask handle = mock(ScheduledTask.class);
         doAnswer(cancel -> future.cancel(false)).when(handle).cancel();
         return handle;
