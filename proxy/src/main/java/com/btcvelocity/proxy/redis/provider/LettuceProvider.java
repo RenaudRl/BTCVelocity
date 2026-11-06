@@ -287,24 +287,23 @@ public final class LettuceProvider extends AbstractRedisProvider {
     this.messageHandlers.shutdown(MESSAGE_DRAIN_GRACE);
 
     if (!this.isConnected()) {
-      LOGGER.warn("Attempted to disconnect from Redis, but no connection was established");
-      return;
+      LOGGER.warn("Disconnecting from Redis while it is unreachable");
     }
 
-    if (publisher.getStatefulConnection().isOpen()) {
+    // Closed even when not open: a closed connection stops its reconnect attempts, and the client
+    // shutdown releases Lettuce's threads, whatever state Redis is in.
+    if (publisher != null) {
       publisher.getStatefulConnection().close();
+      publisher = null;
     }
-    publisher = null;
 
-    if (syncPublisher.getStatefulConnection().isOpen()) {
+    if (syncPublisher != null) {
       syncPublisher.getStatefulConnection().close();
+      syncPublisher = null;
     }
-    syncPublisher = null;
 
     if (this.depotConnection != null) {
-      if (this.depotConnection.isOpen()) {
-        this.depotConnection.close();
-      }
+      this.depotConnection.close();
       this.depotConnection = null;
     }
 
