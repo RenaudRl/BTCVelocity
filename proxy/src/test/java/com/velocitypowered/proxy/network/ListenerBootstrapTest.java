@@ -46,6 +46,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
@@ -168,8 +169,10 @@ class ListenerBootstrapTest {
       int read = 0;
       try {
         read = in.read();
-      } catch (IOException reset) {
-        read = -1; // closed with unread data: the peer may report a reset instead of an end
+      } catch (SocketException reset) {
+        // closed with unread data: the peer may report a reset instead of an end. A read timeout
+        // (SocketTimeoutException, not a SocketException) must fail the test: nothing closed.
+        read = -1;
       }
 
       assertEquals(-1, read, "the server closes the connection without answering");
