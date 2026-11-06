@@ -248,6 +248,9 @@ public final class BtcArrivalRouterPlugin {
       return;
     }
     for (Player player : limboServer.get().getPlayersConnected()) {
+      if (this.isQueued(player)) {
+        continue; // the queue owns their turn; releasing them here would drop them from it
+      }
       Optional<RegisteredServer> chosen =
           this.destinationFor(player, this.attempts.of(player.getUniqueId()));
       if (chosen.isPresent()) {
@@ -272,9 +275,24 @@ public final class BtcArrivalRouterPlugin {
         .map(current -> this.isLimbo(current.getServerInfo().getName()))
         .orElse(false);
     if (inLimbo) {
-      player.sendMessage(this.messages.get(
-          this.heldByMaintenance(player) ? "limbo.maintenance" : "limbo.waiting"));
+      player.sendMessage(this.messages.get(this.limboMessageKey(player)));
     }
+  }
+
+  // Why the player is in the limbo: maintenance outranks the queue, which outranks "no lobby".
+  private String limboMessageKey(Player player) {
+    if (this.heldByMaintenance(player)) {
+      return "limbo.maintenance";
+    }
+    return this.isQueued(player) ? "limbo.queue" : "limbo.waiting";
+  }
+
+  /**
+   * Whether the proxy queue holds this player. The queue sends its own players to the limbo when
+   * {@code [queue] queue-server} names it, and moves them out itself when their turn comes.
+   */
+  private boolean isQueued(Player player) {
+    return this.proxy.isQueueEnabled() && this.proxy.getQueueManager().isQueued(player);
   }
 
   void setMaintenance(boolean maintenance) {
