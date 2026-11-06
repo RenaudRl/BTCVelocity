@@ -3278,7 +3278,7 @@ public final class VelocityConfiguration implements ProxyConfig {
     /**
      * Gets whether anti-decompression-bomb protection is enabled.
      *
-     * @return {@code true} if the protection handlers should be wired into the pipeline
+     * @return {@code true} if the decompression guard should be given to the compression decoder
      */
     public boolean isEnabled() {
       return enabled;

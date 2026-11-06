@@ -619,9 +619,10 @@ max-compression-ratio = 100
 # Default: 2097152 (2 MiB), the usual maximum size of a single Minecraft packet.
 ratio-check-min-decompressed-size = 2097152
 
-# The number of violations tolerated before the offending connection is closed.
-# Each violating packet is dropped (not forwarded), and after this many
-# violations the connection is terminated. Default: 3.
+# The number of violations after which the offending connection is closed.
+# The first (max-violations - 1) violating packets are dropped (not forwarded)
+# and tolerated; the max-violations-th one closes the connection. Default: 3
+# (two packets dropped, the third closes).
 max-violations = 3
 
 [server-links]
