@@ -24,6 +24,7 @@ import com.google.common.base.MoreObjects;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.gson.annotations.Expose;
+import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.btcvelocity.proxy.config.migration.BtcConfigMigrations;
 import com.btcvelocity.proxy.observability.MetricsEndpoint;
 import com.btcvelocity.proxy.security.GeyserListenerAddress;
@@ -511,6 +512,19 @@ public final class VelocityConfiguration implements ProxyConfig {
     if (!(advanced.statusCacheTtl >= 0) && advanced.statusCacheTtl != STATUS_CACHE_OFF) {
       LOGGER.error("Invalid status-cache-ttl {}: use seconds >= 0, or -1 to disable",
           advanced.statusCacheTtl);
+      valid = false;
+    }
+
+    // 0 turns the breaker off; the window and the delay only matter while it is on.
+    if (advanced.backendCircuitFailures < 0) {
+      LOGGER.error("Invalid backend-circuit-failures {}: use 0 to disable or a count >= 1",
+          advanced.backendCircuitFailures);
+      valid = false;
+    } else if (advanced.backendCircuitFailures > 0
+        && (advanced.backendCircuitWindowSeconds < 1 || advanced.backendCircuitOpenSeconds < 1)) {
+      LOGGER.error("Invalid backend-circuit-window-seconds {} or backend-circuit-open-seconds {}: "
+          + "both must be >= 1", advanced.backendCircuitWindowSeconds,
+          advanced.backendCircuitOpenSeconds);
       valid = false;
     }
 
@@ -1002,6 +1016,34 @@ public final class VelocityConfiguration implements ProxyConfig {
    */
   public double getStatusCacheTtl() {
     return advanced.getStatusCacheTtl();
+  }
+
+  /**
+   * Returns how many failed connections to a backend, within the window, make routing avoid it;
+   * zero turns the passive circuit breaker off.
+   *
+   * @return the failure count that opens a backend's circuit
+   */
+  public int getBackendCircuitFailures() {
+    return advanced.backendCircuitFailures;
+  }
+
+  /**
+   * Returns the span, in seconds, in which failed connections to a backend are counted.
+   *
+   * @return the circuit breaker window
+   */
+  public int getBackendCircuitWindowSeconds() {
+    return advanced.backendCircuitWindowSeconds;
+  }
+
+  /**
+   * Returns how long, in seconds, routing avoids a backend whose circuit opened.
+   *
+   * @return the open delay of the circuit breaker
+   */
+  public int getBackendCircuitOpenSeconds() {
+    return advanced.backendCircuitOpenSeconds;
   }
 
   /**
@@ -2237,6 +2279,18 @@ public final class VelocityConfiguration implements ProxyConfig {
     @Expose
     private double statusCacheTtl = 0;
 
+    /** Failed connections to a backend within the window that make routing avoid it; 0 = off. */
+    @Expose
+    private int backendCircuitFailures = BackendCircuitBreaker.DEFAULT_FAILURES;
+
+    /** Seconds in which those failed connections are counted. */
+    @Expose
+    private int backendCircuitWindowSeconds = BackendCircuitBreaker.DEFAULT_WINDOW_SECONDS;
+
+    /** Seconds routing avoids a backend before trying it again. */
+    @Expose
+    private int backendCircuitOpenSeconds = BackendCircuitBreaker.DEFAULT_OPEN_SECONDS;
+
     private Advanced() {
     }
 
@@ -2292,6 +2346,12 @@ public final class VelocityConfiguration implements ProxyConfig {
         this.backendBrandCustom = config.getOrElse("custom-brand-backend", "Paper");
         // A whole number in the toml ("status-cache-ttl = 5") is read as an Integer, not a Double.
         this.statusCacheTtl = config.<Number>getOrElse("status-cache-ttl", 0).doubleValue();
+        this.backendCircuitFailures = config.getIntOrElse("backend-circuit-failures",
+            BackendCircuitBreaker.DEFAULT_FAILURES);
+        this.backendCircuitWindowSeconds = config.getIntOrElse("backend-circuit-window-seconds",
+            BackendCircuitBreaker.DEFAULT_WINDOW_SECONDS);
+        this.backendCircuitOpenSeconds = config.getIntOrElse("backend-circuit-open-seconds",
+            BackendCircuitBreaker.DEFAULT_OPEN_SECONDS);
       }
 
       this.serverBrandAsString = LegacyComponentSerializer.legacySection()
@@ -2444,6 +2504,9 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", kickAfterRateLimitedTabCompletes=" + kickAfterRateLimitedTabCompletes
           + ", allowIllegalCharactersInChat=" + allowIllegalCharactersInChat
           + ", statusCacheTtl=" + statusCacheTtl
+          + ", backendCircuitFailures=" + backendCircuitFailures
+          + ", backendCircuitWindowSeconds=" + backendCircuitWindowSeconds
+          + ", backendCircuitOpenSeconds=" + backendCircuitOpenSeconds
           + '}';
     }
   }

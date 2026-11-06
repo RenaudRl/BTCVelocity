@@ -20,8 +20,11 @@ package com.btcvelocity.proxy.bridge;
 import com.btcvelocity.api.bridge.BridgeMessage;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * Thread-safe registry of the latest {@link BridgeMessage.Health} report received from each
@@ -44,8 +47,15 @@ import java.util.function.LongSupplier;
  * all. Without this, a backend that dies silently keeps its last good report forever, and the
  * proxy goes on believing a dead server is healthy — the registry would answer a question nobody
  * can still answer. An unknown state must never read as a good state.</p>
+ *
+ * <p><b>Reports are not the only evidence.</b> The registry also holds a passive
+ * {@link BackendCircuitBreaker}: failed and successful connections the proxy makes for its players
+ * feed it, and {@link #isAvoided} tells routing to leave a backend that keeps failing alone, with
+ * no probe and no report needed.</p>
  */
 public final class BackendHealthRegistry {
+
+  private static final Logger LOGGER = LogManager.getLogger(BackendHealthRegistry.class);
 
   /**
    * The mspt value returned for servers that have never reported, chosen to be well above any
@@ -68,14 +78,27 @@ public final class BackendHealthRegistry {
   private final Map<String, Entry> healthByServer = new ConcurrentHashMap<>();
   private final long freshnessMillis;
   private final LongSupplier clock;
+  private final BackendCircuitBreaker circuit;
 
   /** A report and the instant it was received by the proxy. */
   private record Entry(BridgeMessage.Health health, long receivedAt) {
   }
 
-  /** Creates a registry using the default freshness window and the system clock. */
+  /** Creates a registry using the default freshness window, breaker thresholds and system clock. */
   public BackendHealthRegistry() {
     this(DEFAULT_FRESHNESS_MILLIS, System::currentTimeMillis);
+  }
+
+  /**
+   * Creates a registry with the default breaker thresholds.
+   *
+   * @param freshnessMillis how long a report stays current, in milliseconds
+   * @param clock           the source of the current time, in milliseconds
+   */
+  public BackendHealthRegistry(final long freshnessMillis, final LongSupplier clock) {
+    this(freshnessMillis, clock, new BackendCircuitBreaker(BackendCircuitBreaker.DEFAULT_FAILURES,
+        BackendCircuitBreaker.DEFAULT_WINDOW_SECONDS * 1_000L,
+        BackendCircuitBreaker.DEFAULT_OPEN_SECONDS * 1_000L, clock));
   }
 
   /**
@@ -83,13 +106,61 @@ public final class BackendHealthRegistry {
    *
    * @param freshnessMillis how long a report stays current, in milliseconds
    * @param clock           the source of the current time, in milliseconds
+   * @param circuit         the passive breaker fed by the proxy's real connections
    */
-  public BackendHealthRegistry(final long freshnessMillis, final LongSupplier clock) {
+  public BackendHealthRegistry(final long freshnessMillis, final LongSupplier clock,
+                               final BackendCircuitBreaker circuit) {
     if (freshnessMillis <= 0) {
       throw new IllegalArgumentException("freshness must be positive");
     }
     this.freshnessMillis = freshnessMillis;
     this.clock = clock;
+    this.circuit = circuit;
+  }
+
+  /**
+   * Records that the proxy failed to connect a player to a backend.
+   *
+   * @param serverName the backend
+   * @param player     the player whose connection failed: one player failing again and again
+   *                   never opens the circuit
+   */
+  public void recordConnectionFailure(final String serverName, final UUID player) {
+    if (circuit.recordFailure(serverName, player)) {
+      LOGGER.warn("Backend {} failed to take players repeatedly: routing avoids it for a while",
+          serverName);
+    }
+  }
+
+  /**
+   * Records that the proxy connected a player to a backend: it is clear again.
+   *
+   * @param serverName the backend
+   */
+  public void recordConnectionSuccess(final String serverName) {
+    if (circuit.recordSuccess(serverName)) {
+      LOGGER.info("Backend {} takes players again: routing no longer avoids it", serverName);
+    }
+  }
+
+  /**
+   * Returns whether routing should leave a backend alone because its connections keep failing.
+   *
+   * @param serverName the backend
+   * @return {@code true} while its circuit is open; it is tried again once the delay is over
+   */
+  public boolean isAvoided(final String serverName) {
+    return circuit.isAvoided(serverName);
+  }
+
+  /**
+   * Returns where the backend stands in the passive breaker.
+   *
+   * @param serverName the backend
+   * @return its circuit state
+   */
+  public BackendCircuitBreaker.State circuitState(final String serverName) {
+    return circuit.state(serverName);
   }
 
   /**
@@ -123,6 +194,7 @@ public final class BackendHealthRegistry {
    */
   public void forget(final String serverName) {
     healthByServer.remove(serverName);
+    circuit.forget(serverName);
   }
 
   /**

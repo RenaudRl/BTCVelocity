@@ -77,6 +77,15 @@ que c'est ce plugin qui l'a placé.
 
 ## Limite connue
 
-Le comptage est celui que **ce** proxy voit. Avec plusieurs proxies devant les mêmes backends,
-chacun équilibre sur sa propre vue — ce qui répartit les joueurs sans qu'aucun n'interroge le
-nœud, mais ne constitue pas une vérité réseau.
+Le comptage vient de `ClusterPlayerService#getPlayersOnServerCount` : avec Redis, c'est la somme
+sur tous les proxys, donc le « moins peuplé » l'est vraiment. Sans Redis, c'est le comptage local
+(même nombre). Si le cluster échoue (Redis coupé), le plugin compte localement pendant 10 s au lieu
+de réessayer à chaque joueur, puis redemande. Un comptage est réutilisé 1 s (pas de cache quand le
+service est local). Avec Redis, l'appel est un aller-retour **bloquant** : tant que 5.6 n'est pas
+fait, il part de la boucle qui traite l'événement.
+
+Le disjoncteur passif du proxy (`backend-circuit-failures` dans `[advanced]`, éteint par défaut) est
+un conseil, pas un refus : un backend évité n'est choisi que si rien d'autre ne reste, pas de limbo
+pour retenir le joueur, et la maintenance l'emporte. Son état est propre à chaque proxy. Un backend
+à l'essai (délai écoulé) reçoit un seul joueur du limbo par balayage ; les arrivées et les
+redirections après expulsion ne sont pas limitées ainsi.

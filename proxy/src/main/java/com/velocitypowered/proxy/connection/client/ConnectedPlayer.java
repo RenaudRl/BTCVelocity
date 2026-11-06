@@ -28,6 +28,8 @@ import com.google.common.base.Preconditions;
 import com.google.gson.JsonObject;
 import com.btcvelocity.api.permission.PermissionResolver;
 import com.btcvelocity.api.queue.QueueState;
+import com.btcvelocity.proxy.bridge.BackendConnectionOutcome;
+import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
 import com.btcvelocity.proxy.permission.PermissionUtils;
 import com.btcvelocity.proxy.queue.VelocityQueue;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
@@ -1921,6 +1923,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
           connectionInFlight = con;
 
           return con.connect().whenCompleteAsync((result, exception) -> {
+            recordBackendOutcome(realDestination, con, result, exception);
             if (result != null && !result.isSuccessful() && !result.isSafe()) {
               handleConnectionException(result.getAttemptedConnection(),
                   // The only way for the reason to be null is if the result is safe
@@ -1932,6 +1935,33 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
           }, connection.eventLoop());
         }, connection.eventLoop());
       });
+    }
+
+    /**
+     * Feeds the passive circuit breaker with how the attempt ended; see
+     * {@link BackendConnectionOutcome#classify}. A backend that answered and refused the player
+     * (full, whitelist), a player who left while connecting and an error raised by the proxy or a
+     * plugin say nothing about the backend.
+     */
+    private void recordBackendOutcome(final VelocityRegisteredServer destination,
+                                      final VelocityServerConnection attempt,
+                                      final Impl result, final Throwable exception) {
+      final BackendHealthRegistry health = server.getBackendHealthRegistry();
+      if (health == null) {
+        return;
+      }
+      final String name = destination.getServerInfo().getName();
+      final BackendConnectionOutcome outcome = BackendConnectionOutcome.classify(
+          exception == null && result != null && result.isSuccessful(),
+          exception != null,
+          !isActive() || attempt.isGracefulDisconnect(),
+          attempt.isProxySideFailure(),
+          attempt.wasClosedByBackend());
+      if (outcome == BackendConnectionOutcome.FAILURE) {
+        health.recordConnectionFailure(name, getUniqueId());
+      } else if (outcome == BackendConnectionOutcome.SUCCESS) {
+        health.recordConnectionSuccess(name);
+      }
     }
 
     private void resetIfInFlightIs(final VelocityServerConnection establishedConnection) {

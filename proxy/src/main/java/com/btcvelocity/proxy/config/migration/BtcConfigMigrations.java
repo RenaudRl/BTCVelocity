@@ -17,6 +17,7 @@
 
 package com.btcvelocity.proxy.config.migration;
 
+import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.velocitypowered.proxy.config.migration.ConfigurationMigration;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -191,6 +192,30 @@ public class BtcConfigMigrations {
                 + " 3 to 10 is a good value against ping floods.",
             "advanced.status-cache-ttl",
             0
+        ),
+        migration(
+            "Passive circuit breaker on backends. Nothing is probed: it watches the connections the proxy makes\n"
+                + " for its players. When this many different players have failed to connect to one backend within\n"
+                + " the window below (at least 2; a success resets the count to zero), routing plugins\n"
+                + " that choose a destination avoid that backend for the open delay, then try it again: the next\n"
+                + " success clears it, a failure of a new player avoids it again. One player failing over and over\n"
+                + " never opens it. A backend that answers and refuses the player (full, whitelist) is not a failure.\n"
+                + " Servers are never removed from the proxy. The state is per proxy: it is not shared through Redis,\n"
+                + " each proxy learns from the connections it makes itself.\n"
+                + " 0 turns it off, and it is off by default: 3 is the value to use once the behaviour has been\n"
+                + " validated on the bench. Read at startup.",
+            "advanced.backend-circuit-failures",
+            BackendCircuitBreaker.DEFAULT_FAILURES
+        ),
+        migration(
+            "Seconds in which the failed connections are counted.",
+            "advanced.backend-circuit-window-seconds",
+            BackendCircuitBreaker.DEFAULT_WINDOW_SECONDS
+        ),
+        migration(
+            "Seconds a backend is avoided before it is tried again.",
+            "advanced.backend-circuit-open-seconds",
+            BackendCircuitBreaker.DEFAULT_OPEN_SECONDS
         ),
 
         // [observability]

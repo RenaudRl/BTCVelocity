@@ -40,6 +40,11 @@ public final class LocalClusterPlayerService implements VelocityClusterPlayerSer
   }
 
   @Override
+  public boolean isClustered() {
+    return false;
+  }
+
+  @Override
   public int getTotalPlayerCount() {
     return this.server.getLocalPlayerCount();
   }

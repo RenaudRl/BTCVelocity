@@ -34,6 +34,7 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -98,6 +99,7 @@ public final class BtcArrivalRouterPlugin {
   private final String limbo;
   private final Path dataDirectory;
   private final ArrivalAttempts attempts = new ArrivalAttempts();
+  private final PlayerCounts counts;
   private ArrivalMessages messages = ArrivalMessages.defaults();
   private volatile boolean maintenance;
 
@@ -116,6 +118,23 @@ public final class BtcArrivalRouterPlugin {
     this.policy = policy;
     this.limbo = limbo == null || limbo.isBlank() ? null : limbo.trim();
     this.dataDirectory = dataDirectory;
+    this.counts = new PlayerCounts(this::clusterCount, this::localCount, this::isClustered,
+        System::currentTimeMillis, logger);
+  }
+
+  // Only a service that sees other proxies is worth a cached, fallback-guarded call.
+  private boolean isClustered() {
+    var cluster = this.proxy.getClusterPlayerService();
+    return cluster != null && cluster.isClustered();
+  }
+
+  // The cluster-wide count (every proxy, through Redis).
+  private int clusterCount(String serverName) {
+    return this.proxy.getClusterPlayerService().getPlayersOnServerCount(serverName);
+  }
+
+  private int localCount(String serverName) {
+    return this.proxy.getServer(serverName).map(server -> server.getPlayersConnected().size()).orElse(0);
   }
 
   @Subscribe
@@ -177,6 +196,9 @@ public final class BtcArrivalRouterPlugin {
       chosen = this.limboServer();
     }
     if (chosen.isEmpty()) {
+      chosen = this.lastResort(player, Set.of());
+    }
+    if (chosen.isEmpty()) {
       this.logger.warn("No arrival destination available for {}; the proxy will disconnect them.",
           player.getUsername());
       return;
@@ -218,6 +240,9 @@ public final class BtcArrivalRouterPlugin {
     if (chosen.isEmpty() && !this.isLimbo(from) && !stillInLimbo) {
       chosen = this.limboServer();
     }
+    if (chosen.isEmpty() && !stillInLimbo) {
+      chosen = this.lastResort(player, this.attempts.of(player.getUniqueId()));
+    }
     if (chosen.isEmpty()) {
       this.logger.info(
           "{} was kicked from {} and no other destination is left; leaving the disconnect as is.",
@@ -243,19 +268,27 @@ public final class BtcArrivalRouterPlugin {
    */
   // shortcut: a server declared in velocity.toml is never re-registered, so once it failed for a
   // player it is not retried until they reconnect; fine while destinations are CloudNet services.
+  // shortcut: only this sweep limits the trial of a half-open backend to one player; initial
+  // arrivals and kick redirects may still send several at once, each failure re-avoiding it.
   void releaseFromLimbo() {
     Optional<RegisteredServer> limboServer = this.limboServer();
     if (limboServer.isEmpty()) {
       return;
     }
+    // Half-open backends already given their trial player this sweep; the others wait or go elsewhere.
+    Set<String> onTrial = new HashSet<>();
     for (Player player : limboServer.get().getPlayersConnected()) {
       if (this.isQueued(player)) {
         continue; // the queue owns their turn; releasing them here would drop them from it
       }
-      Optional<RegisteredServer> chosen =
-          this.destinationFor(player, this.attempts.of(player.getUniqueId()));
+      Set<String> excluded = new HashSet<>(this.attempts.of(player.getUniqueId()));
+      excluded.addAll(onTrial);
+      Optional<RegisteredServer> chosen = this.destinationFor(player, excluded);
       if (chosen.isPresent()) {
         var target = chosen.get();
+        if (this.proxy.isBackendHalfOpen(target.getServerInfo().getName())) {
+          onTrial.add(target.getServerInfo().getName());
+        }
         // A plugin may park the player here on purpose (service being woken up for them).
         this.proxy.getEventManager().fire(new LimboHoldEvent(player)).thenAccept(hold -> {
           if (hold.isHeld()) {
@@ -312,7 +345,13 @@ public final class BtcArrivalRouterPlugin {
 
   // Maintenance is "no destination" for whoever cannot bypass it: the limbo fallback does the rest.
   private Optional<RegisteredServer> destinationFor(Player player, Set<String> excluded) {
-    return this.heldByMaintenance(player) ? Optional.empty() : this.choose(excluded);
+    return this.heldByMaintenance(player) ? Optional.empty() : this.choose(excluded, false);
+  }
+
+  // A backend the proxy avoids is advice, not a refusal: when nothing else is left and no limbo can
+  // hold the player, the least populated avoided one still beats a disconnect.
+  private Optional<RegisteredServer> lastResort(Player player, Set<String> excluded) {
+    return this.heldByMaintenance(player) ? Optional.empty() : this.choose(excluded, true);
   }
 
   private boolean heldByMaintenance(Player player) {
@@ -364,15 +403,23 @@ public final class BtcArrivalRouterPlugin {
     return Optional.ofNullable(this.limbo).flatMap(this.proxy::getServer);
   }
 
-  private Optional<RegisteredServer> choose(Set<String> excluded) {
+  // avoided false: the backends the proxy does not avoid; true: only the avoided ones.
+  private Optional<RegisteredServer> choose(Set<String> excluded, boolean avoided) {
     List<ArrivalCandidate> candidates = new ArrayList<>();
     for (RegisteredServer server : this.proxy.getAllServers()) {
-      if (this.isLimbo(server.getServerInfo().getName())) {
+      String name = server.getServerInfo().getName();
+      if (this.isLimbo(name)) {
         continue; // never a destination, even under a wildcard pattern
       }
-      candidates.add(new ArrivalCandidate(
-          server.getServerInfo().getName(),
-          server.getPlayersConnected().size()));
+      // Only what the policy could pick is counted: a cluster count can be a Redis round trip.
+      if (!this.policy.accepts(name) || excluded.contains(name)) {
+        continue;
+      }
+      // Its connections keep failing (proxy-side circuit breaker): preferably not sent there.
+      if (this.proxy.isBackendAvoided(name) != avoided) {
+        continue;
+      }
+      candidates.add(new ArrivalCandidate(name, this.counts.of(name)));
     }
 
     return this.policy.select(candidates, excluded)

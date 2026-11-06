@@ -20,12 +20,11 @@ package com.btcvelocity.arrival;
 /**
  * A server the proxy could send a player to, reduced to what the policy needs to choose.
  *
- * <p>The count is what <em>this</em> proxy sees on that server. With several proxies in front of
- * the same backends each one balances on its own view, which spreads players without any of them
- * asking the node a thing. Worth knowing before reading a balance as network-wide truth.
+ * <p>The count is the cluster's (every proxy, see {@link PlayerCounts}), or this proxy's alone
+ * while the cluster cannot answer. Without a cluster the two are the same number.
  *
  * @param name the Velocity server name
- * @param playerCount how many players this proxy currently has on it
+ * @param playerCount how many players are on it
  */
 public record ArrivalCandidate(String name, int playerCount) {
 }

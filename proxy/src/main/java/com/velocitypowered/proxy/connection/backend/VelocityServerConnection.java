@@ -73,7 +73,9 @@ public class VelocityServerConnection implements MinecraftConnectionAssociation,
 
   private boolean hasCompletedJoin = false;
   private boolean clientLoaded = false; // 1.21.4+
-  private boolean gracefulDisconnect = false;
+  private volatile boolean gracefulDisconnect = false;
+  private volatile boolean proxySideFailure = false;
+  private volatile boolean closedByBackend = false;
 
   private BackendConnectionPhase connectionPhase = BackendConnectionPhases.UNKNOWN;
 
@@ -347,8 +349,33 @@ public class VelocityServerConnection implements MinecraftConnectionAssociation,
     return clientLoaded;
   }
 
-  boolean isGracefulDisconnect() {
+  public boolean isGracefulDisconnect() {
     return gracefulDisconnect;
+  }
+
+  /**
+   * Marks that this attempt failed on the proxy's or a plugin's side (an event handler threw),
+   * which says nothing about the backend: the circuit breaker ignores it.
+   */
+  public void markProxySideFailure() {
+    this.proxySideFailure = true;
+  }
+
+  public boolean isProxySideFailure() {
+    return proxySideFailure;
+  }
+
+  /**
+   * Marks that the backend closed the connection on its own, without a packet, while the player
+   * was being configured or moved over: the same event as in the login phase, which fails with an
+   * exception, and one the circuit breaker counts.
+   */
+  public void markClosedByBackend() {
+    this.closedByBackend = true;
+  }
+
+  public boolean wasClosedByBackend() {
+    return closedByBackend;
   }
 
   public Map<Long, Long> getPendingPings() {
