@@ -183,6 +183,8 @@ public class VelocityQueueEntry implements QueueEntry {
           success = b;
         } else if (result instanceof ConnectionRequestBuilder.Result r) {
           success = r.isSuccessful();
+          // connect() never fires the kick handling: tell the player why the backend refused them.
+          player.handleServerDisconnectResult(foundServer, r);
         }
 
         if (success) {

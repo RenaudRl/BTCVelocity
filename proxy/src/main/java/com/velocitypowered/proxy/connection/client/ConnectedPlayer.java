@@ -946,6 +946,36 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
     handleKickEvent(originalEvent, friendlyReason, kickedFromCurrent);
   }
 
+  /**
+   * Handles a connection request that ended with
+   * {@link ConnectionRequestBuilder.Status#SERVER_DISCONNECTED}: fires the kick handling with the
+   * backend's disconnect reason (so the player is told why) and drops banned players from the queue.
+   * Any other status is ignored.
+   *
+   * @param server the server the player attempted to connect to
+   * @param result the result of the connection request
+   */
+  public void handleServerDisconnectResult(final VelocityRegisteredServer server,
+                                           final ConnectionRequestBuilder.Result result) {
+    if (result.getStatus() != ConnectionRequestBuilder.Status.SERVER_DISCONNECTED) {
+      return;
+    }
+
+    final Component reason = result.getReasonComponent()
+        .orElse(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
+    final boolean safe = !(result instanceof Impl impl) || impl.isSafe();
+    handleConnectionException(server,
+        DisconnectPacket.create(reason, getProtocolVersion(), connection.getState()), safe);
+
+    if (this.server.isQueueEnabled()) {
+      for (String r : this.server.getConfiguration().getQueue().getBannedReason()) {
+        if (ComponentUtils.containsString(reason, r)) {
+          this.server.getQueueManager().removePlayerEntirely(this);
+        }
+      }
+    }
+  }
+
   private void handleKickEvent(final KickedFromServerEvent originalEvent, final Component friendlyReason,
                                final boolean kickedFromCurrent) {
     server.getEventManager().fire(originalEvent).thenAcceptAsync(event -> {
@@ -1929,19 +1959,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
           case CONNECTION_CANCELLED -> {
             // Ignored; the plugin probably already handled this.
           }
-          case SERVER_DISCONNECTED -> {
-            final Component reason = status.getReasonComponent()
-                    .orElse(ConnectionMessages.INTERNAL_SERVER_CONNECTION_ERROR);
-            handleConnectionException(toConnect, DisconnectPacket.create(reason, getProtocolVersion(), connection.getState()), status.isSafe());
-
-            if (server.isQueueEnabled()) {
-              for (String r : server.getConfiguration().getQueue().getBannedReason()) {
-                if (ComponentUtils.containsString(reason, r)) {
-                  server.getQueueManager().removePlayerEntirely(ConnectedPlayer.this);
-                }
-              }
-            }
-          }
+          case SERVER_DISCONNECTED -> handleServerDisconnectResult(toConnect, status);
           default -> {
             // The only remaining value is successful (no need to do anything!)
           }
