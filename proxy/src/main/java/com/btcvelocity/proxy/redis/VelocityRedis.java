@@ -94,8 +94,11 @@ public final class VelocityRedis {
 
     this.server = server;
     this.packetSerializer = new PacketSerializer();
-    this.provider = new LettuceProvider(config, server.getScheduler(), this.packetSerializer);
-    this.provider.restart();
+    final LettuceProvider lettuce =
+        new LettuceProvider(config, server.getScheduler(), this.packetSerializer);
+    lettuce.restart();
+    lettuce.verifyScripting();
+    this.provider = lettuce;
 
     this.playerService = new PlayerDepotService(this);
     this.proxyService = new ProxyDepotService(this);

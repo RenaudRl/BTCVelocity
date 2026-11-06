@@ -42,6 +42,7 @@ import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.scheduler.VelocityScheduler;
+import io.lettuce.core.RedisCommandExecutionException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -53,10 +54,12 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TranslatableComponent;
 import org.junit.jupiter.api.AfterEach;
@@ -131,6 +134,21 @@ class PlayerDepotServiceTest {
 
     assertTrue(service.onPlayerConnect(alice).get(5, TimeUnit.SECONDS));
     verify(alice, never()).disconnect0(any(Component.class), anyBoolean());
+  }
+
+  @Test
+  void aRefusedScriptRefusesTheLoginAndIsNamedAsSuch() throws Exception {
+    final ConnectedPlayer alice = join("alice");
+    final RedisCommandExecutionException noPerm =
+        new RedisCommandExecutionException("NOPERM no permissions to run the 'eval' command");
+    depot.claimFailure = noPerm;
+
+    assertFalse(service.onPlayerConnect(alice).get(5, TimeUnit.SECONDS));
+    verify(alice).disconnect0(argThat(key(UNCHECKED)), anyBoolean());
+    assertEquals("the server refused the Lua script: " + noPerm.getMessage(),
+        PlayerDepotService.describeFailure(new CompletionException(noPerm)));
+    assertEquals("no answer within 500 ms",
+        PlayerDepotService.describeFailure(new TimeoutException()));
   }
 
   @Test
@@ -342,6 +360,7 @@ class PlayerDepotServiceTest {
     final Map<UUID, PlayerEntry> map = new ConcurrentHashMap<>();
     volatile CountDownLatch hang;
     volatile CountDownLatch claimHang;
+    volatile RuntimeException claimFailure;
 
     void put(final PlayerEntry entry) {
       map.put(entry.getUniqueId(), entry);
@@ -398,6 +417,9 @@ class PlayerDepotServiceTest {
     public CompletableFuture<PlayerEntry> claim(final PlayerEntry value, final String proxyId,
                                                 final boolean force) {
       final boolean worker = Thread.currentThread().getName().startsWith("btc-redis");
+      if (claimFailure != null) {
+        return CompletableFuture.failedFuture(claimFailure);
+      }
       return CompletableFuture.supplyAsync(() -> {
         await(worker ? hang : claimHang);
         synchronized (map) {

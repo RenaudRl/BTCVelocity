@@ -30,8 +30,12 @@ import com.google.gson.Gson;
 import com.velocitypowered.api.scheduler.Scheduler;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import io.lettuce.core.ClientOptions;
+import io.lettuce.core.RedisBusyException;
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisCommandExecutionException;
+import io.lettuce.core.RedisCommandTimeoutException;
 import io.lettuce.core.RedisFuture;
+import io.lettuce.core.RedisLoadingException;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.TimeoutOptions;
@@ -47,6 +51,8 @@ import java.util.Collection;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
@@ -95,6 +101,11 @@ public final class LettuceProvider extends AbstractRedisProvider {
       + "if ok and type(entry) == 'table' and type(entry.proxyId) == 'string' then "
       + "return string.lower(entry.proxyId) end "
       + "return nil end\n";
+
+  /**
+   * Lua with cjson, as the owner-aware scripts use it: answers 1 where they can run.
+   */
+  private static final String SCRIPTING_PROBE = "return cjson.decode('{\"a\":1}').a";
 
   /**
    * KEYS[1] hash, ARGV: field, json, proxyId, force ("1"). Writes unless another proxy owns the
@@ -196,6 +207,57 @@ public final class LettuceProvider extends AbstractRedisProvider {
         .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
         .requestQueueSize(REQUEST_QUEUE_SIZE)
         .build());
+  }
+
+  /**
+   * Checks once that the server runs the Lua scripts the player depot relies on. A server that
+   * refuses them (Lua disabled, ACL {@code -@scripting}, out of memory, no cjson) makes every
+   * duplicate-login check fail, so this names the cause at startup. Never blocks longer than one
+   * command: a server that cannot be reached is only warned about, as before.
+   *
+   * @return {@code false} if the server refused the script (logged as an error)
+   */
+  public boolean verifyScripting() {
+    try {
+      final Long answer = this.depotConnection.sync().eval(SCRIPTING_PROBE, ScriptOutputType.INTEGER);
+      if (answer != null && answer == 1) {
+        return true;
+      }
+      LOGGER.error("{} ran the Lua/cjson probe but answered {} instead of 1: the duplicate-login "
+          + "check cannot work.", this.config.getBackend(), answer);
+      return false;
+    } catch (RuntimeException e) {
+      if (isScriptRefusal(e)) {
+        LOGGER.error("{} refused the Lua scripts BTCVelocity needs ({}). Every duplicate-login "
+            + "check will fail: with redis.login-check-failure = \"deny\" NO player can log in. "
+            + "Allow EVAL with cjson (Lua enabled, no ACL -@scripting, memory not full).",
+            this.config.getBackend(), e.getMessage());
+        return false;
+      }
+      LOGGER.warn("Could not check {} Lua support at startup: {}", this.config.getBackend(),
+          e.toString());
+      return true;
+    }
+  }
+
+  /**
+   * Whether a failure is the server refusing a command (an error reply such as {@code ERR},
+   * {@code NOSCRIPT}, {@code NOPERM}, {@code OOM}), as opposed to the network or a timeout.
+   * {@code LOADING} and {@code BUSY} are passing server states, not refusals.
+   *
+   * @param failure the failure, possibly wrapped by a future
+   * @return {@code true} for an error reply that will come back on every try
+   */
+  public static boolean isScriptRefusal(final @NotNull Throwable failure) {
+    Throwable cause = failure;
+    while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+        && cause.getCause() != null) {
+      cause = cause.getCause();
+    }
+    return cause instanceof RedisCommandExecutionException
+        && !(cause instanceof RedisCommandTimeoutException)
+        && !(cause instanceof RedisLoadingException)
+        && !(cause instanceof RedisBusyException);
   }
 
   /**

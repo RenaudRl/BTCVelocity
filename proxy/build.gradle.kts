@@ -114,6 +114,8 @@ tasks {
                 excludeTags("redis-integration")
             }
         }
+        // -PredisImage=valkey/valkey:8.1.1-alpine: the image the stop test starts again.
+        project.findProperty("redisImage")?.let { systemProperty("btc.redis.image", it) }
     }
 
     withType<JavaCompile>().configureEach {

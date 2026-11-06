@@ -20,6 +20,7 @@ package com.btcvelocity.proxy.redis.depot.player;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -60,6 +61,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -76,7 +78,9 @@ import org.mockito.ArgumentMatcher;
  *
  * <p>Opt-in: start {@code docker run --rm -d --name btc-redis-56 -p 127.0.0.1:56379:6379
  * redis:7.4-alpine}, then {@code gradlew :velocity-proxy:test -PredisIntegration --tests
- * '*RedisIntegrationTest'}. One test stops the container and starts it again the same way.</p>
+ * '*RedisIntegrationTest'}. One test stops the container and starts it again the same way; for
+ * Valkey, start {@code valkey/valkey:8.1.1-alpine} instead and add
+ * {@code -PredisImage=valkey/valkey:8.1.1-alpine}.</p>
  */
 @Tag("redis-integration")
 class PlayerDepotServiceRedisIntegrationTest {
@@ -89,6 +93,8 @@ class PlayerDepotServiceRedisIntegrationTest {
   private static final long LOOP_LAG_BUDGET_MS = 100;
   private static final long CONVERGE_DEADLINE_MS = 30_000;
   private static final long SHUTDOWN_BUDGET_MS = 20_000;
+  /** The server image, also used to start it again after the stop test: -PredisImage=... */
+  private static final String IMAGE = System.getProperty("btc.redis.image", "redis:7.4-alpine");
 
   private final Map<UUID, String> servers = new ConcurrentHashMap<>();
   private final Map<String, VelocityServerConnection> connections = new ConcurrentHashMap<>();
@@ -218,6 +224,29 @@ class PlayerDepotServiceRedisIntegrationTest {
   }
 
   @Test
+  void theStartupProbePassesAndAServerRefusingScriptsIsNamed() throws Exception {
+    assertTrue(proxyA.provider.verifyScripting(), "Lua with cjson must run on " + IMAGE);
+
+    assertTrue(cli("ACL", "SETUSER", "noscript", "on", "nopass", "~*", "&*", "+@all",
+        "-@scripting").contains("OK"));
+    try {
+      final Node limited = node("proxy-c", "noscript");
+      assertFalse(limited.provider.verifyScripting());
+
+      final ConnectedPlayer alice = limited.join("alice", "lobby");
+      assertFalse(onLoop(() -> limited.service.onPlayerConnect(alice)).get(5, TimeUnit.SECONDS));
+      verify(alice).disconnect0(argThat(key("velocity.error.login-check-unavailable")),
+          anyBoolean());
+      final ExecutionException failure = assertThrows(ExecutionException.class, () ->
+          limited.raw.claim(new PlayerEntry(alice, limited.proxyId), limited.proxyId, false)
+              .get(5, TimeUnit.SECONDS));
+      assertTrue(LettuceProvider.isScriptRefusal(failure), failure.toString());
+    } finally {
+      cli("ACL", "DELUSER", "noscript");
+    }
+  }
+
+  @Test
   void aStoppedRedisStillLetsTheShutdownFinish() throws Exception {
     final ConnectedPlayer alice = proxyA.join("alice", "lobby");
     assertTrue(onLoop(() -> proxyA.service.onPlayerConnect(alice)).get(5, TimeUnit.SECONDS));
@@ -313,7 +342,11 @@ class PlayerDepotServiceRedisIntegrationTest {
   }
 
   private Node node(final String proxyId) {
-    final Node node = new Node(proxyId);
+    return node(proxyId, null);
+  }
+
+  private Node node(final String proxyId, final String username) {
+    final Node node = new Node(proxyId, username);
     nodes.add(node);
     return node;
   }
@@ -329,11 +362,12 @@ class PlayerDepotServiceRedisIntegrationTest {
     final Depot<UUID, PlayerEntry> raw;
     volatile boolean shutdown;
 
-    Node(final String proxyId) {
+    Node(final String proxyId, final String username) {
       this.proxyId = proxyId;
       final VelocityConfiguration.Redis config = mock(VelocityConfiguration.Redis.class);
       when(config.getHost()).thenReturn("127.0.0.1");
       when(config.getPort()).thenReturn(PORT);
+      when(config.getUsername()).thenReturn(username);
       when(config.getPassword()).thenReturn("");
       when(config.getBackend()).thenReturn("redis");
       provider = new LettuceProvider(config, mock(Scheduler.class, RETURNS_DEEP_STUBS),
@@ -387,12 +421,21 @@ class PlayerDepotServiceRedisIntegrationTest {
 
   private static void startRedis() throws IOException, InterruptedException {
     run("docker", "run", "--rm", "-d", "--name", CONTAINER, "-p", "127.0.0.1:" + PORT + ":6379",
-        "redis:7.4-alpine");
+        IMAGE);
     final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-    while (!run("docker", "exec", CONTAINER, "redis-cli", "ping").contains("PONG")) {
+    while (!cli("ping").contains("PONG")) {
       assertTrue(System.nanoTime() < deadline, "Redis did not come back");
       Thread.sleep(200);
     }
+  }
+
+  /** Runs the server's CLI in the container: valkey-cli on Valkey, redis-cli on Redis. */
+  private static String cli(final String... args) throws IOException, InterruptedException {
+    // "cli" is $0 for sh -c; the arguments follow as "$@".
+    final List<String> command = new ArrayList<>(List.of("docker", "exec", CONTAINER, "sh", "-c",
+        "exec $(command -v valkey-cli || command -v redis-cli) \"$@\"", "cli"));
+    command.addAll(List.of(args));
+    return run(command.toArray(String[]::new));
   }
 
   private static void docker(final String verb) throws IOException, InterruptedException {

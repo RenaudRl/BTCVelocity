@@ -22,6 +22,7 @@ import com.btcvelocity.proxy.redis.OrderedRedisExecutor;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.data.VelocityKick;
 import com.btcvelocity.proxy.redis.depot.AbstractDepotService;
+import com.btcvelocity.proxy.redis.provider.LettuceProvider;
 import com.velocitypowered.api.proxy.player.PlayerSettings;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.proxy.VelocityServer;
@@ -38,7 +39,9 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
@@ -206,7 +209,7 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
         .orTimeout(CONNECT_CHECK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
         .handle((holder, failure) -> {
           if (failure != null) {
-            return onLoginCheckFailed(player);
+            return onLoginCheckFailed(player, failure);
           }
           if (holder == null) {
             return true;
@@ -222,19 +225,35 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
         });
   }
 
-  private boolean onLoginCheckFailed(final ConnectedPlayer player) {
+  private boolean onLoginCheckFailed(final ConnectedPlayer player, final Throwable failure) {
     final boolean allow = this.server.getConfiguration().getRedis().isLoginAllowedWhenUnchecked();
     final long quiet = this.uncheckedLogins.acquire();
     if (quiet >= 0) {
-      LOGGER.warn("Redis did not answer the duplicate-login check for {} within {} ms: {} "
-          + "(login-check-failure = {}; {} similar logins not logged)", player.getUsername(),
-          CONNECT_CHECK_TIMEOUT.toMillis(), allow ? "let in unchecked" : "refused",
-          allow ? "allow" : "deny", quiet);
+      LOGGER.warn("The duplicate-login check for {} failed ({}): {} (login-check-failure = {}; "
+          + "{} similar logins not logged)", player.getUsername(), describeFailure(failure),
+          allow ? "let in unchecked" : "refused", allow ? "allow" : "deny", quiet);
     }
     if (!allow) {
       player.disconnect0(Component.translatable("velocity.error.login-check-unavailable"), true);
     }
     return allow;
+  }
+
+  /**
+   * Names why a login check failed: a script refused on every try is not a slow Redis.
+   */
+  static String describeFailure(final Throwable failure) {
+    Throwable cause = failure;
+    while (cause instanceof CompletionException && cause.getCause() != null) {
+      cause = cause.getCause();
+    }
+    if (cause instanceof TimeoutException) {
+      return "no answer within " + CONNECT_CHECK_TIMEOUT.toMillis() + " ms";
+    }
+    if (LettuceProvider.isScriptRefusal(cause)) {
+      return "the server refused the Lua script: " + cause.getMessage();
+    }
+    return cause.toString();
   }
 
   /**
