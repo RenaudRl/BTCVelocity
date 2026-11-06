@@ -2365,6 +2365,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", tabCompleteRateLimit=" + tabCompleteRateLimit
           + ", kickAfterRateLimitedTabCompletes=" + kickAfterRateLimitedTabCompletes
           + ", allowIllegalCharactersInChat=" + allowIllegalCharactersInChat
+          + ", statusCacheTtl=" + statusCacheTtl
           + '}';
     }
   }
