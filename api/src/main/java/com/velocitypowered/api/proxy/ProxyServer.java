@@ -247,6 +247,9 @@ public interface ProxyServer extends Audience {
    * next success clears it. Nothing is removed from the server map, so this is a hint for routing
    * code that chooses a destination (such as an arrival or fallback policy), not a block.</p>
    *
+   * <p>The state is per proxy: it is not shared through the cluster, each proxy learns from the
+   * connections it makes itself. It is also off unless the proxy configuration enables it.</p>
+   *
    * @param serverName the name of the backend server
    * @return {@code true} while the proxy advises routing to leave the backend alone
    */

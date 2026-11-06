@@ -45,7 +45,7 @@ import java.util.function.LongSupplier;
  * connections it makes itself.</p>
  *
  * <p>shortcut: the breaker lets every caller through while half-open; the single-trial rule lives
- * in the routing code that asks ({@code btc-arrival-router}'s sweep sends one player), not here.
+ * in the routing code that asks (see {@code ProxyServer#isBackendHalfOpen}), not here.
  * The first failure closes the door again, so the exposure elsewhere is the players routed during
  * one connection attempt; upgrade to a permit held here if a backend that accepts the TCP
  * connection and then hangs ever shows a stampede.</p>
