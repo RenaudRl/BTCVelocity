@@ -45,6 +45,7 @@ import com.btcvelocity.proxy.command.builtin.ProxyAliasCommand;
 import com.btcvelocity.proxy.command.builtin.QueueAdminCommand;
 import com.btcvelocity.proxy.command.builtin.SlashServerCommand;
 import com.btcvelocity.proxy.command.builtin.TransferCommand;
+import com.btcvelocity.proxy.observability.ObservabilityService;
 import com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory;
 import com.btcvelocity.proxy.queue.RedisVelocityQueueManager;
 import com.btcvelocity.proxy.queue.VelocityQueueManager;
@@ -308,6 +309,11 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
   private @MonotonicNonNull VelocityBridgeChannel bridgeChannel;
 
   /**
+   * The event loop watchdog and the local metrics listener, stopped at shutdown.
+   */
+  private volatile @Nullable ObservabilityService observability;
+
+  /**
    * Registry of the latest {@link com.btcvelocity.api.bridge.BridgeMessage.Health} reports
    * received from each backend via the bridge channel.
    */
@@ -333,6 +339,15 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
   public KeyPair getServerKeyPair() {
     return serverKeyPair;
+  }
+
+  /**
+   * Returns the queue manager, or {@code null} when it was not created at startup.
+   *
+   * @return the {@link VelocityQueueManager} or {@code null}
+   */
+  public @Nullable VelocityQueueManager getQueueManagerOrNull() {
+    return queueManager;
   }
 
   /**
@@ -663,6 +678,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       this.cm.queryBind(configuration.getBind().getHostString(), configuration.getQueryPort());
     }
 
+    this.observability = ObservabilityService.start(this, cm.getWorkerGroup(),
+        configuration.getObservability());
+
     final String defaultPackage = new String(new byte[] {'o', 'r', 'g', '.', 'b', 's', 't', 'a', 't', 's' });
     if (!MetricsBase.class.getPackage().getName().startsWith(defaultPackage)) {
       Metrics.VelocityMetrics.startMetrics(this, configuration.getMetrics());
@@ -800,6 +818,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
     final VelocityConfiguration oldConfiguration = this.configuration;
     this.configuration = newConfiguration;
+    if (!oldConfiguration.getObservability().equals(newConfiguration.getObservability())) {
+      LOGGER.warn("[observability] changed: restart the proxy to apply");
+    }
 
     reloadServerList();
 
@@ -1099,6 +1120,11 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     Runnable shutdownProcess = () -> {
       startedShutdown = true;
       LOGGER.info("Shutting down the proxy...");
+
+      final ObservabilityService runningObservability = observability;
+      if (runningObservability != null) {
+        runningObservability.close();
+      }
 
       // Stop accepting new connections, but keep DNS available to pre-shutdown handlers.
       cm.closeEndpoints(true);

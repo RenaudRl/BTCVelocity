@@ -182,6 +182,31 @@ public class BtcConfigMigrations {
             "Paper"
         ),
 
+        // [observability]
+        migration(
+            "Watches the Netty event loops: a loop that has not run a task for watchdog-threshold-ms is logged\n"
+                + " as a warning with its thread name and stack (at most once a minute per loop), and its lag is\n"
+                + " exported as a metric.",
+            "observability.watchdog-enabled",
+            true
+        ),
+        migration(
+            "Event loop lag, in milliseconds, above which a loop is reported as blocked.",
+            "observability.watchdog-threshold-ms",
+            100
+        ),
+        migration(
+            "Serves /metrics (Prometheus text format) and /healthz over HTTP, for a local scraper.",
+            "observability.prometheus-enabled",
+            false
+        ),
+        migration(
+            "Address and port of that listener. It has no authentication, so only a loopback address\n"
+                + " (127.0.0.1, [::1], localhost) is accepted: the proxy refuses to start with any other one.",
+            "observability.prometheus-bind",
+            "127.0.0.1:9225"
+        ),
+
         // [redis]
         migration(
             "Should Redis be used to communicate between multiple Velocity proxies?",
