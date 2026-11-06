@@ -90,8 +90,9 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
   protected void initChannel(final Channel ch) {
     // A source that may not send a PROXY header never gets here: ListenerSourceFilter closes it
     // on the server channel, before this initializer (or any plugin wrapping it) is called.
-    final boolean proxyProtocol = expectsProxyProtocol(ch.attr(Connections.LISTENER).get(),
-        this.server.getConfiguration().isProxyProtocol());
+    // The filter's decision, not the configuration (it may have been reloaded since). A channel the
+    // filter never saw has no decision: no PROXY decoder for a source nobody verified.
+    final boolean proxyProtocol = Boolean.TRUE.equals(ch.attr(Connections.PROXY_PROTOCOL).get());
 
     ch.pipeline()
         .addLast(LEGACY_PING_DECODER, new LegacyPingDecoder())

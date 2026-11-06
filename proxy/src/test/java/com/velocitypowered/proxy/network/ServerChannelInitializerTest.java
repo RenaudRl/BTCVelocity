@@ -60,8 +60,27 @@ class ServerChannelInitializerTest {
     if (listener != null) {
       channel.attr(Connections.LISTENER).set(listener);
     }
+    // what the source filter records when it admits the child
+    channel.attr(Connections.PROXY_PROTOCOL)
+        .set(ServerChannelInitializer.expectsProxyProtocol(listener, mainFlag));
     new ServerChannelInitializer(server).initChannel(channel);
     return channel;
+  }
+
+  @Test
+  void aChannelTheFilterNeverSawGetsNoProxyProtocolDecoder() {
+    final VelocityServer server = mock(VelocityServer.class);
+    final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
+    when(server.getConfiguration()).thenReturn(configuration);
+    when(configuration.isProxyProtocol()).thenReturn(true);
+    when(configuration.getPacketLimiterConfig())
+        .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);
+    final PeerChannel channel = new PeerChannel(PEER);
+    channel.attr(Connections.LISTENER).set("geyser");
+
+    new ServerChannelInitializer(server).initChannel(channel);
+
+    assertNull(channel.pipeline().get(HAProxyMessageDecoder.class));
   }
 
   @Test

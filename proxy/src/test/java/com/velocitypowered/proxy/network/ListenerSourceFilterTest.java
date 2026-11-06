@@ -30,6 +30,7 @@ import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -105,6 +106,23 @@ class ListenerSourceFilterTest {
     assertTrue(relay.isOpen());
     assertSame(relay, serverChannel.readInbound(), "only the admitted child goes on to the acceptor");
     assertNull(serverChannel.readInbound());
+  }
+
+  @Test
+  void theDecisionTakenAtTheFilterIsTheOneTheInitializerAppliesWhateverTheConfigBecomes() {
+    final VelocityServer server = server(false);
+    final VelocityConfiguration configuration = server.getConfiguration();
+    when(configuration.getPacketLimiterConfig())
+        .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);
+    final ListenerSourceFilter filter = new ListenerSourceFilter(server, null);
+    final PeerChannel child = new PeerChannel(STRANGER);
+
+    assertTrue(filter.admits(child), "flag off: admitted without a PROXY header");
+    when(configuration.isProxyProtocol()).thenReturn(true); // reload between filter and worker
+    new ServerChannelInitializer(server).initChannel(child);
+
+    assertNull(child.pipeline().get(HAProxyMessageDecoder.class),
+        "a connection admitted under the old value must not get a PROXY decoder");
   }
 
   /** The first refusal of each listener is a warn naming it, the following ones are debug. */

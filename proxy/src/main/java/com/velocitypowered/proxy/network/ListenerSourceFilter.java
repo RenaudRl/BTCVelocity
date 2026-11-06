@@ -38,7 +38,8 @@ import org.checkerframework.checker.nullness.qual.Nullable;
  * is built and no plugin that wraps the initializer (Floodgate) is ever called, so a stranger
  * cannot make the proxy log a thing per connection beyond the one line below.
  *
- * <p>The decision follows the current configuration, read at each connection.
+ * <p>The decision follows the configuration current at the connection, and is recorded on the child
+ * ({@link Connections#PROXY_PROTOCOL}) for the initializer.
  */
 @ChannelHandler.Sharable
 final class ListenerSourceFilter extends ChannelInboundHandlerAdapter {
@@ -67,13 +68,19 @@ final class ListenerSourceFilter extends ChannelInboundHandlerAdapter {
    * @return {@code false} if it must send a PROXY header and its source is not trusted
    */
   boolean admits(final Channel child) {
+    // One read of the configuration: the decision is stored on the child, and the initializer
+    // applies it without reading the configuration again (a reload in between changes nothing).
     final VelocityConfiguration configuration = this.server.getConfiguration();
-    if (!ServerChannelInitializer.expectsProxyProtocol(this.listener, configuration.isProxyProtocol())) {
-      return true;
+    final boolean expectsProxy =
+        ServerChannelInitializer.expectsProxyProtocol(this.listener, configuration.isProxyProtocol());
+    final boolean admitted = !expectsProxy
+        || child.remoteAddress() instanceof InetSocketAddress peer
+            && ServerChannelInitializer.trustedSources(configuration, this.listener)
+                .contains(peer.getAddress());
+    if (admitted) {
+      child.attr(Connections.PROXY_PROTOCOL).set(expectsProxy);
     }
-    return child.remoteAddress() instanceof InetSocketAddress peer
-        && ServerChannelInitializer.trustedSources(configuration, this.listener)
-            .contains(peer.getAddress());
+    return admitted;
   }
 
   @Override
