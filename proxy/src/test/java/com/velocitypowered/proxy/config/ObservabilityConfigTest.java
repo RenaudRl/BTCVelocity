@@ -66,7 +66,27 @@ class ObservabilityConfigTest {
       final VelocityConfiguration config = VelocityConfiguration.read(
           write(dir, "prometheus-bind = \"" + bind + "\""));
       assertTrue(config.validate(), bind);
+      // Guards against a replace() that found nothing and left the default bind in place.
+      assertEquals(bind, config.getObservability().getPrometheusBind());
     }
+  }
+
+  @Test
+  void anOldTomlWithoutTheSectionGetsTheDefaults(@TempDir final Path dir) throws IOException {
+    final String old = Files.readString(write(dir, DEFAULT_BIND)).replaceAll(
+        "(?s)\\r?\\n\\[observability\\].*?(?=\\r?\\n\\[|\\z)", "");
+    assertFalse(old.contains("[observability]"));
+    final Path file = dir.resolve("old.toml");
+    Files.writeString(file, old, StandardCharsets.UTF_8);
+
+    final VelocityConfiguration config = VelocityConfiguration.read(file);
+
+    assertTrue(config.validate());
+    assertEquals(new VelocityConfiguration.Observability(null), config.getObservability());
+    assertFalse(config.getObservability().isPrometheusEnabled());
+    assertEquals("127.0.0.1:9225", config.getObservability().getPrometheusBind());
+    assertTrue(config.getObservability().isWatchdogEnabled());
+    assertEquals(100, config.getObservability().getWatchdogThresholdMs());
   }
 
   @Test
