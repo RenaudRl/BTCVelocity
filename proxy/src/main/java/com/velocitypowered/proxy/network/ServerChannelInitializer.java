@@ -26,6 +26,7 @@ import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 import static com.velocitypowered.proxy.network.Connections.READ_TIMEOUT;
 
 import com.btcvelocity.api.connection.ListenerOrigin;
+import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
@@ -77,18 +78,34 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
     return ListenerOrigin.GEYSER.equals(listener) || mainListenerFlag;
   }
 
+  /**
+   * The sources allowed to send a PROXY header on a listener: the Geyser listener has a list of its
+   * own (loopback by default), so that a backend in a private range cannot claim the Geyser origin.
+   *
+   * @param configuration the current configuration
+   * @param listener the name of the listener that accepted the channel, {@code null} for the main one
+   * @return the trusted sources of that listener
+   */
+  static TrustedProxies trustedSources(final VelocityConfiguration configuration,
+      final @Nullable String listener) {
+    return ListenerOrigin.GEYSER.equals(listener)
+        ? configuration.getGeyserListenerTrustedProxies()
+        : configuration.getProxyProtocolTrustedProxies();
+  }
+
   @Override
   protected void initChannel(final Channel ch) {
-    final boolean proxyProtocol = expectsProxyProtocol(ch.attr(Connections.LISTENER).get(),
-        this.server.getConfiguration().isProxyProtocol());
+    final String listener = ch.attr(Connections.LISTENER).get();
+    final VelocityConfiguration configuration = this.server.getConfiguration();
+    final boolean proxyProtocol = expectsProxyProtocol(listener, configuration.isProxyProtocol());
     // An untrusted peer could forge the client address in its PROXY header: drop it unread.
     if (proxyProtocol && !(ch.remoteAddress() instanceof InetSocketAddress peer
-        && this.server.getConfiguration().getProxyProtocolTrustedProxies()
-            .contains(peer.getAddress()))) {
+        && trustedSources(configuration, listener).contains(peer.getAddress()))) {
       // First refusal at warn so a misconfigured relay is visible; later ones at debug (log flood).
       if (UNTRUSTED_WARNED.compareAndSet(false, true)) {
         LOGGER.warn("Refusing PROXY protocol connection from untrusted source {} (add your relay to "
-            + "haproxy-protocol-trusted-proxies; further refusals are logged at debug)", ch.remoteAddress());
+            + "{}; further refusals are logged at debug)", ch.remoteAddress(),
+            listener != null ? "geyser-listener-trusted-proxies" : "haproxy-protocol-trusted-proxies");
       } else {
         LOGGER.debug("Refusing PROXY protocol connection from untrusted source {}", ch.remoteAddress());
       }

@@ -468,6 +468,12 @@ public final class VelocityConfiguration implements ProxyConfig {
       valid = false;
     }
 
+    for (String entry : advanced.geyserTrustedProxies.invalidEntries()) {
+      LOGGER.error("Invalid geyser-listener-trusted-proxies entry '{}' (expected address or "
+          + "address/prefix, at most /8 for IPv4 and /7 for IPv6)", entry);
+      valid = false;
+    }
+
     if (!advanced.geyserListener.isEmpty()) {
       try {
         final InetSocketAddress geyser = GeyserListenerAddress.parse(advanced.geyserListener);
@@ -854,6 +860,16 @@ public final class VelocityConfiguration implements ProxyConfig {
   public Optional<InetSocketAddress> getGeyserListener() {
     final String value = advanced.getGeyserListener();
     return value.isEmpty() ? Optional.empty() : Optional.of(GeyserListenerAddress.parse(value));
+  }
+
+  /**
+   * The sources allowed to send a PROXY header to the Geyser listener, a list of its own so that a
+   * compromised backend in a private range cannot claim the Geyser origin.
+   *
+   * @return the trusted sources, loopback only by default
+   */
+  public TrustedProxies getGeyserListenerTrustedProxies() {
+    return advanced.getGeyserTrustedProxies();
   }
 
   public boolean useTcpFastOpen() {
@@ -2085,6 +2101,13 @@ public final class VelocityConfiguration implements ProxyConfig {
     @Expose
     private String geyserListener = "";
 
+    /** Sources allowed to send a PROXY header to the Geyser listener: loopback only by default. */
+    @Expose
+    private List<String> geyserListenerTrustedProxies = GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES;
+
+    private TrustedProxies geyserTrustedProxies =
+        TrustedProxies.parse(GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES);
+
     @Expose
     private boolean tcpFastOpen = false;
 
@@ -2176,6 +2199,15 @@ public final class VelocityConfiguration implements ProxyConfig {
     private Advanced() {
     }
 
+    /** A scalar written instead of an array is read as a one-entry list; validate() judges it. */
+    private static List<String> entriesOf(final Object value, final List<String> defaults) {
+      return switch (value) {
+        case null -> defaults;
+        case List<?> list -> list.stream().map(String::valueOf).toList();
+        default -> List.of(String.valueOf(value));
+      };
+    }
+
     private Advanced(final CommentedConfig config) {
       if (config != null) {
         this.compressionThreshold = config.getIntOrElse("compression-threshold", 256);
@@ -2189,13 +2221,12 @@ public final class VelocityConfiguration implements ProxyConfig {
           this.proxyProtocol = config.getOrElse("proxy-protocol", false);
         }
         // A scalar written instead of an array is read as a one-entry list; validate() judges it.
-        final Object trusted = config.get("haproxy-protocol-trusted-proxies");
-        this.proxyProtocolTrustedProxies = switch (trusted) {
-          case null -> TrustedProxies.DEFAULT_ENTRIES;
-          case List<?> list -> list.stream().map(String::valueOf).toList();
-          default -> List.of(String.valueOf(trusted));
-        };
+        this.proxyProtocolTrustedProxies = entriesOf(config.get("haproxy-protocol-trusted-proxies"),
+            TrustedProxies.DEFAULT_ENTRIES);
         this.trustedProxies = TrustedProxies.parse(this.proxyProtocolTrustedProxies);
+        this.geyserListenerTrustedProxies = entriesOf(config.get("geyser-listener-trusted-proxies"),
+            GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES);
+        this.geyserTrustedProxies = TrustedProxies.parse(this.geyserListenerTrustedProxies);
         final Object geyser = config.get("geyser-listener");
         this.geyserListener = geyser == null ? "" : String.valueOf(geyser).trim();
         this.tcpFastOpen = config.getOrElse("tcp-fast-open", false);
@@ -2260,6 +2291,10 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     public String getGeyserListener() {
       return geyserListener;
+    }
+
+    public TrustedProxies getGeyserTrustedProxies() {
+      return geyserTrustedProxies;
     }
 
     public boolean isTcpFastOpen() {

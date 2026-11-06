@@ -160,9 +160,12 @@ public final class ConnectionManager {
                 if (listener != null || this.server.getConfiguration().isProxyProtocol()) {
                   LOGGER.warn(
                       "Using HAProxy and listening on {}: only {} may send a PROXY header, other "
-                          + "connections are closed (haproxy-protocol-trusted-proxies).",
+                          + "connections are closed ({}).",
                       channel.localAddress(),
-                      this.server.getConfiguration().getProxyProtocolTrustedProxies().describe());
+                      ServerChannelInitializer.trustedSources(this.server.getConfiguration(), listener)
+                          .describe(),
+                      listener != null ? "geyser-listener-trusted-proxies"
+                          : "haproxy-protocol-trusted-proxies");
                 }
 
                 // Fire the proxy bound event after the socket is bound

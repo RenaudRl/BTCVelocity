@@ -19,12 +19,16 @@ package com.btcvelocity.proxy.security;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.List;
 
 /**
  * The address of {@code advanced.geyser-listener}: a literal {@code host:port}, never a host name
  * (same rule as {@link TrustedProxies}: nothing here touches DNS), with an explicit port.
  */
 public final class GeyserListenerAddress {
+
+  /** Loopback only: Geyser runs next to the proxy, nothing else may claim the Geyser origin. */
+  public static final List<String> DEFAULT_TRUSTED_PROXIES = List.of("127.0.0.0/8", "::1/128");
 
   private static final int MAX_PORT = 65535;
 

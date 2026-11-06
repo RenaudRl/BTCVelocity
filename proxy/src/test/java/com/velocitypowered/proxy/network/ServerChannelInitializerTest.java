@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.btcvelocity.proxy.security.GeyserListenerAddress;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
@@ -43,7 +44,9 @@ import org.junit.jupiter.api.Test;
  */
 class ServerChannelInitializerTest {
 
+  /** In the main list's default (RFC 1918), not in the Geyser listener's (loopback only). */
   private static final String TRUSTED_RELAY = "10.1.2.3";
+  private static final String LOOPBACK = "127.0.0.1";
   private static final String STRANGER = "203.0.113.9";
 
   /** A channel whose TCP peer is the given address, as a socket would report it. */
@@ -68,7 +71,9 @@ class ServerChannelInitializerTest {
     when(server.getConfiguration()).thenReturn(configuration);
     when(configuration.isProxyProtocol()).thenReturn(mainFlag);
     when(configuration.getProxyProtocolTrustedProxies())
-        .thenReturn(TrustedProxies.parse(List.of("10.0.0.0/8")));
+        .thenReturn(TrustedProxies.parse(TrustedProxies.DEFAULT_ENTRIES));
+    when(configuration.getGeyserListenerTrustedProxies())
+        .thenReturn(TrustedProxies.parse(GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES));
     when(configuration.getPacketLimiterConfig())
         .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);
     final PeerChannel channel = new PeerChannel(peer);
@@ -93,11 +98,22 @@ class ServerChannelInitializerTest {
 
   @Test
   void aTrustedRelayOnTheGeyserListenerGetsAProxyProtocolDecoderEvenWithTheFlagOff() {
-    final PeerChannel channel = open(TRUSTED_RELAY, "geyser", false);
+    final PeerChannel channel = open(LOOPBACK, "geyser", false);
 
     assertNotNull(channel.pipeline().get(HAProxyMessageDecoder.class));
     assertNotNull(channel.pipeline().get(MinecraftConnection.class));
     assertTrue(channel.isOpen());
+  }
+
+  @Test
+  void aPrivateSourceIsRefusedOnGeyserButAcceptedOnTheMainListenerWithTheDefaultLists() {
+    final PeerChannel onGeyser = open(TRUSTED_RELAY, "geyser", false);
+    final PeerChannel onMain = open(TRUSTED_RELAY, null, true);
+
+    assertFalse(onGeyser.isOpen(), "a backend in 10/8 must not be able to claim the Geyser origin");
+    assertNull(onGeyser.pipeline().get(MinecraftConnection.class));
+    assertTrue(onMain.isOpen());
+    assertNotNull(onMain.pipeline().get(HAProxyMessageDecoder.class));
   }
 
   @Test
@@ -131,7 +147,7 @@ class ServerChannelInitializerTest {
 
   @Test
   void aConnectionKnowsTheListenerThatAcceptedIt() {
-    final PeerChannel geyser = open(TRUSTED_RELAY, "geyser", false);
+    final PeerChannel geyser = open(LOOPBACK, "geyser", false);
     final PeerChannel main = open(TRUSTED_RELAY, null, false);
 
     assertEquals("geyser", geyser.pipeline().get(MinecraftConnection.class).getListenerName().orElseThrow());
