@@ -76,9 +76,14 @@ public final class BtcCloudNetWakePlugin {
   @Subscribe
   public void onProxyInitialize(ProxyInitializeEvent event) {
     var settings = WakeSettings.fromEnvironment(System::getenv);
+    if (settings.tasks().isEmpty()) {
+      this.logger.info("Wake on demand is off: set {} to enable it.", WakeSettings.TASKS_VARIABLE);
+      return;
+    }
     if (!settings.enabled()) {
-      this.logger.info("Wake on demand is off: set {} (tasks) and {} (limbo) to enable it.",
-          WakeSettings.TASKS_VARIABLE, WakeSettings.LIMBO_VARIABLE);
+      // Without the router's sweep a player parked in the limbo would never be sent back.
+      this.logger.warn("Wake on demand stays off: {} names tasks but {} is not set.",
+          WakeSettings.TASKS_VARIABLE, String.join(", ", settings.missingVariables()));
       return;
     }
     if (!runningAsCloudNetService()) {
@@ -101,10 +106,20 @@ public final class BtcCloudNetWakePlugin {
   @Subscribe
   public void onCommand(CommandExecuteEvent event) {
     var current = this.coordinator;
-    if (current != null && event.getCommandSource() instanceof Player player
+    if (current != null && untouched(event.getResult())
+        && event.getCommandSource() instanceof Player player
         && current.onServerCommand(player, event.getCommand())) {
       event.setResult(CommandExecuteEvent.CommandResult.denied());
     }
+  }
+
+  // Another plugin that denied, rewrote or forwarded the command has decided: leave it alone.
+  private static boolean untouched(CommandExecuteEvent.CommandResult result) {
+    return result.isAllowed() && result.getCommand().isEmpty() && !result.isForwardToServer();
+  }
+
+  void setCoordinator(WakeCoordinator coordinator) {
+    this.coordinator = coordinator;
   }
 
   @Subscribe

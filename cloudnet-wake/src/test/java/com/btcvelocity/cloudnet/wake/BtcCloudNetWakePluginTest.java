@@ -19,8 +19,10 @@ package com.btcvelocity.cloudnet.wake;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import com.btcvelocity.api.event.player.LimboHoldEvent;
 import com.velocitypowered.api.event.command.CommandExecuteEvent;
@@ -50,6 +52,46 @@ class BtcCloudNetWakePluginTest {
     // Assert
     assertTrue(command.getResult().isAllowed());
     verifyNoInteractions(this.proxy);
+  }
+
+  @Test
+  void aCommandAnotherPluginAlreadyDeniedOrRewroteIsNotTouched() {
+    // Arrange — an active plugin whose coordinator would take any /server over
+    var coordinator = mock(WakeCoordinator.class);
+    when(coordinator.onServerCommand(any(), any())).thenReturn(true);
+    this.plugin.setCoordinator(coordinator);
+    var player = mock(Player.class);
+    var denied = new CommandExecuteEvent(player, "server Donjon");
+    denied.setResult(CommandExecuteEvent.CommandResult.denied());
+    var rewritten = new CommandExecuteEvent(player, "server Donjon");
+    rewritten.setResult(CommandExecuteEvent.CommandResult.command("server Lobby"));
+    var forwarded = new CommandExecuteEvent(player, "server Donjon");
+    forwarded.setResult(CommandExecuteEvent.CommandResult.forwardToServer());
+
+    // Act
+    this.plugin.onCommand(denied);
+    this.plugin.onCommand(rewritten);
+    this.plugin.onCommand(forwarded);
+
+    // Assert
+    verifyNoInteractions(coordinator);
+    assertTrue(rewritten.getResult().getCommand().isPresent());
+    assertTrue(forwarded.getResult().isForwardToServer());
+  }
+
+  @Test
+  void anUntouchedCommandIsTakenOverWhenTheCoordinatorWantsIt() {
+    // Arrange — positive control for the test above
+    var coordinator = mock(WakeCoordinator.class);
+    when(coordinator.onServerCommand(any(), any())).thenReturn(true);
+    this.plugin.setCoordinator(coordinator);
+    var command = new CommandExecuteEvent(mock(Player.class), "server Donjon");
+
+    // Act
+    this.plugin.onCommand(command);
+
+    // Assert
+    assertFalse(command.getResult().isAllowed());
   }
 
   @Test

@@ -21,7 +21,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -57,6 +60,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import net.kyori.adventure.text.Component;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.Logger;
 import org.slf4j.helpers.NOPLogger;
 
 class WakeCoordinatorTest {
@@ -70,19 +74,20 @@ class WakeCoordinatorTest {
   private final List<RegisteredServer> registered = new CopyOnWriteArrayList<>();
   private final RegisteredServer limbo = this.server("limbo");
   private final List<Runnable> timers = new ArrayList<>();
+  private final List<Duration> delays = new ArrayList<>();
   private final AtomicInteger cancelled = new AtomicInteger();
   private final AtomicInteger starts = new AtomicInteger();
   private CompletableFuture<Outcome> startAnswer = new CompletableFuture<>();
   private final WakeMessages messages = WakeMessages.defaults();
   private final WakeCoordinator coordinator = new WakeCoordinator(
       this.proxy, NOPLogger.NOP_LOGGER,
-      new WakeSettings(List.of(TASK), TIMEOUT, "limbo"), this.messages,
+      new WakeSettings(List.of(TASK), TIMEOUT, "limbo", true), this.messages,
       task -> {
         this.starts.incrementAndGet();
         return this.startAnswer;
       },
       (delay, task) -> {
-        assertEquals(TIMEOUT, delay);
+        this.delays.add(delay);
         this.timers.add(task);
         return this.cancelled::incrementAndGet;
       });
@@ -192,7 +197,7 @@ class WakeCoordinatorTest {
         .thenReturn(CompletableFuture.completedFuture(mock(ServiceTask.class)));
     when(factory.createCloudServiceAsync(any())).thenReturn(new CompletableFuture<>());
     var wired = new WakeCoordinator(this.proxy, NOPLogger.NOP_LOGGER,
-        new WakeSettings(List.of(TASK), TIMEOUT, "limbo"), this.messages,
+        new WakeSettings(List.of(TASK), TIMEOUT, "limbo", true), this.messages,
         new CloudNetServiceStarter(NOPLogger.NOP_LOGGER, services, factory, tasks,
             task -> mock(ServiceConfiguration.class)),
         (delay, task) -> () -> { });
@@ -352,7 +357,7 @@ class WakeCoordinatorTest {
   void aStarterThatThrowsIsTreatedAsAFailedStart() {
     // Arrange
     var failing = new WakeCoordinator(this.proxy, NOPLogger.NOP_LOGGER,
-        new WakeSettings(List.of(TASK), TIMEOUT, "limbo"), this.messages,
+        new WakeSettings(List.of(TASK), TIMEOUT, "limbo", true), this.messages,
         task -> {
           throw new IllegalStateException("driver missing");
         },
@@ -378,6 +383,162 @@ class WakeCoordinatorTest {
     // Assert
     assertTrue(this.holds(player));
     verify(player, never()).sendMessage(any(Component.class));
+  }
+
+  /** A server the proxy can resolve but has not registered yet: the test registers it by event. */
+  private RegisteredServer notYetRegistered(String name) {
+    var server = this.server(name);
+    this.registered.remove(server);
+    return server;
+  }
+
+  /** A player whose first transfer to {@code donjon} answers the given statuses, in order. */
+  private Player playerTransferring(RegisteredServer donjon,
+                                    ConnectionRequestBuilder.Status... statuses) {
+    var player = this.player();
+    var toDonjon = mock(ConnectionRequestBuilder.class);
+    var answers = new ArrayList<CompletableFuture<ConnectionRequestBuilder.Result>>();
+    for (var status : statuses) {
+      var result = mock(ConnectionRequestBuilder.Result.class);
+      when(result.getStatus()).thenReturn(status);
+      when(result.isSuccessful()).thenReturn(status == ConnectionRequestBuilder.Status.SUCCESS);
+      answers.add(CompletableFuture.completedFuture(result));
+    }
+    when(toDonjon.connect()).thenReturn(answers.get(0),
+        answers.subList(1, answers.size()).toArray(new CompletableFuture[0]));
+    when(player.createConnectionRequest(donjon)).thenReturn(toDonjon);
+    return player;
+  }
+
+  private Component failedText() {
+    return this.messages.get("wake.failed", TASK, TIMEOUT.toSeconds());
+  }
+
+  @Test
+  void aTransferRefusedBecauseAConnectionIsInProgressIsRetriedNotReportedAsFailed() {
+    // Arrange — the server registers while the player is still joining the limbo
+    var donjon = this.notYetRegistered("Donjon-1");
+    var player = this.playerTransferring(donjon,
+        ConnectionRequestBuilder.Status.CONNECTION_IN_PROGRESS,
+        ConnectionRequestBuilder.Status.SUCCESS);
+    this.coordinator.onServerCommand(player, COMMAND);
+
+    // Act — first attempt: in progress
+    this.coordinator.onServerRegistered(donjon);
+
+    // Assert — still held, no failure text, a retry is queued
+    assertTrue(this.holds(player));
+    assertEquals(2, this.timers.size());
+    assertEquals(WakeCoordinator.TRANSFER_RETRY_DELAY, this.delays.get(1));
+    verify(player, never()).sendMessage(this.failedText());
+
+    // Act — the retry succeeds
+    this.timers.get(1).run();
+
+    // Assert — released once, one "ready" text, still no failure
+    assertFalse(this.holds(player));
+    verify(player, times(2)).createConnectionRequest(donjon);
+    verify(player, never()).sendMessage(this.failedText());
+    verify(player, times(1)).sendMessage(this.messages.get("wake.ready", TASK, TIMEOUT.toSeconds()));
+  }
+
+  @Test
+  void aTransferStuckInProgressGivesUpAfterTheBoundedRetriesWithTheFailureText() {
+    // Arrange
+    var donjon = this.notYetRegistered("Donjon-1");
+    var player = this.playerTransferring(donjon,
+        ConnectionRequestBuilder.Status.CONNECTION_IN_PROGRESS);
+    this.coordinator.onServerCommand(player, COMMAND);
+    this.coordinator.onServerRegistered(donjon);
+
+    // Act — every retry stays in progress
+    for (int retry = 1; retry < WakeCoordinator.TRANSFER_MAX_ATTEMPTS; retry++) {
+      assertTrue(this.holds(player));
+      this.timers.get(retry).run();
+    }
+
+    // Assert
+    assertFalse(this.holds(player));
+    verify(player, times(WakeCoordinator.TRANSFER_MAX_ATTEMPTS)).createConnectionRequest(donjon);
+    verify(player).sendMessage(this.failedText());
+  }
+
+  @Test
+  void aPlayerWhoLeavesBetweenTwoTransferAttemptsIsNotRetried() {
+    // Arrange
+    var donjon = this.notYetRegistered("Donjon-1");
+    var player = this.playerTransferring(donjon,
+        ConnectionRequestBuilder.Status.CONNECTION_IN_PROGRESS);
+    this.coordinator.onServerCommand(player, COMMAND);
+    this.coordinator.onServerRegistered(donjon);
+
+    // Act
+    this.coordinator.onDisconnect(player.getUniqueId());
+    this.timers.get(1).run();
+
+    // Assert
+    verify(player, times(1)).createConnectionRequest(donjon);
+  }
+
+  @Test
+  void aPlayerWhoseReleaseThrowsDoesNotStrandTheOthersNorKeepTheirOwnHold() {
+    // Arrange — two waiters; one of them cannot even be messaged
+    var broken = this.player();
+    var fine = this.player();
+    doThrow(new IllegalStateException("player gone")).when(broken).sendMessage(any(Component.class));
+    this.coordinator.onServerCommand(broken, COMMAND);
+    this.coordinator.onServerCommand(fine, COMMAND);
+
+    // Act
+    this.timers.get(0).run();
+
+    // Assert — whatever the iteration order, both are released and the other still got its text
+    assertFalse(this.holds(broken));
+    assertFalse(this.holds(fine));
+    assertEquals(this.messages.get("wake.timeout", TASK, TIMEOUT.toSeconds()), this.sentTo(fine));
+  }
+
+  @Test
+  void ifTheTimeoutCannotBeScheduledTheSessionClosesInFailureAndTheTaskIsNotStarted() {
+    // Arrange
+    var failing = new WakeCoordinator(this.proxy, NOPLogger.NOP_LOGGER,
+        new WakeSettings(List.of(TASK), TIMEOUT, "limbo", true), this.messages,
+        task -> {
+          this.starts.incrementAndGet();
+          return this.startAnswer;
+        },
+        (delay, task) -> {
+          throw new IllegalStateException("scheduler shut down");
+        });
+    var player = this.player();
+
+    // Act
+    var handled = failing.onServerCommand(player, COMMAND);
+
+    // Assert — taken over, told, not held, nothing started; a later request is not a joiner
+    assertTrue(handled);
+    assertEquals(this.failedText(), this.sentTo(player));
+    assertEquals(0, this.starts.get());
+    var again = this.player();
+    failing.onServerCommand(again, COMMAND);
+    assertEquals(this.failedText(), this.sentTo(again));
+  }
+
+  @Test
+  void anExceptionInACompletionCallbackIsLoggedNotSwallowed() {
+    // Arrange — the logger throws when the start outcome is logged, inside the callback
+    var logger = mock(Logger.class);
+    doThrow(new IllegalStateException("log failure")).when(logger)
+        .info(eq("Task {}: {}, waiting for it to register"), any(Object.class), any(Object.class));
+    var noisy = new WakeCoordinator(this.proxy, logger,
+        new WakeSettings(List.of(TASK), TIMEOUT, "limbo", true), this.messages,
+        task -> CompletableFuture.completedFuture(Outcome.STARTED), (delay, task) -> () -> { });
+
+    // Act
+    noisy.onServerCommand(this.player(), COMMAND);
+
+    // Assert
+    verify(logger).warn(anyString(), eq("start"), any(Throwable.class));
   }
 
   @Test

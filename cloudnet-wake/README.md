@@ -26,6 +26,7 @@ them to a lobby nor shows its "no lobby available" text.
 | `BTC_WAKE_TASKS` | unset (plugin off) | comma-separated CloudNet task names that may be woken |
 | `BTC_WAKE_TIMEOUT_SECONDS` | `120` | longest wait before the player goes back to a lobby |
 | `BTC_ARRIVAL_LIMBO` | unset (plugin off) | the waiting room, shared with `btc-arrival-router` |
+| `BTC_ARRIVAL_SERVERS` | unset (plugin off, WARN at start) | the router policy; without it the router runs no limbo sweep |
 
 Texts: `messages.properties` in the plugin's data directory (MiniMessage, `<task>` and `<seconds>`),
 created with the defaults on first start; a removed key falls back to its default.
@@ -37,3 +38,7 @@ created with the defaults on first start; a removed key falls back to its defaul
 - The requested name is the task name; a registered `<task>-<n>` is chosen by name order.
 - No cooldown after a failed start: each new request retries.
 - Needs `btc-arrival-router` (limbo sweep) to bring a player back to a lobby when the wait ends.
+- Known limits, not handled: sessions are per proxy (with several proxies each one wakes the task
+  on its own; the node's RUNNING check only softens it); no grace delay after a registration; an
+  instance that stays RUNNING but never turns Online is waited for until the timeout; a player who
+  leaves the limbo for another server while waiting is still pulled to the woken server.

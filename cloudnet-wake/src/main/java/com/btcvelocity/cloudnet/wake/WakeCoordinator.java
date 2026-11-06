@@ -32,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
 import org.slf4j.Logger;
@@ -68,6 +69,9 @@ final class WakeCoordinator {
   private static final String SERVER_PERMISSION = "velocity.command.server";
   private static final String INSTANCE_SEPARATORS = "-_.";
   private static final int SHORT_ID_LENGTH = 8;
+  // A transfer refused with CONNECTION_IN_PROGRESS is retried: 10 tries a second apart.
+  static final Duration TRANSFER_RETRY_DELAY = Duration.ofSeconds(1);
+  static final int TRANSFER_MAX_ATTEMPTS = 10;
 
   private static final class Session {
     private final String task;
@@ -175,8 +179,9 @@ final class WakeCoordinator {
     if (session.begun.compareAndSet(false, true)) {
       this.begin(session);
     }
-    player.createConnectionRequest(limbo.get()).connect()
-        .whenComplete((result, error) -> this.onParked(player, task, result, error));
+    player.createConnectionRequest(limbo.get()).connect().whenComplete(this.guarded("park",
+        (result, error) -> this.onParked(player, task, result, error),
+        () -> this.holds.remove(id, task)));
     // A registration between the first look and joining the session fired its event too early.
     this.registeredInstance(task).ifPresent(server ->
         this.finish(session, parked -> this.transfer(parked, task, server)));
@@ -184,8 +189,15 @@ final class WakeCoordinator {
   }
 
   private void begin(Session session) {
-    session.cancelTimeout =
-        this.scheduler.schedule(this.settings.timeout(), () -> this.expire(session));
+    try {
+      session.cancelTimeout =
+          this.scheduler.schedule(this.settings.timeout(), () -> this.expire(session));
+    } catch (RuntimeException error) {
+      // No timeout means a session that could never end: close it now rather than start the task.
+      this.logger.warn("Could not schedule the wake timeout of task {}", session.task, error);
+      this.finish(session, player -> this.abort(player, session.task, "wake.failed"));
+      return;
+    }
     this.logger.info("Waking task {} (timeout {} s)", session.task,
         this.settings.timeout().toSeconds());
     CompletableFuture<ServiceStarter.Outcome> started;
@@ -194,7 +206,8 @@ final class WakeCoordinator {
     } catch (RuntimeException error) {
       started = CompletableFuture.failedFuture(error);
     }
-    started.whenComplete((outcome, error) -> this.onStarted(session, outcome, error));
+    started.whenComplete(this.guarded("start",
+        (outcome, error) -> this.onStarted(session, outcome, error), () -> { }));
   }
 
   private void onStarted(Session session, ServiceStarter.Outcome outcome, Throwable error) {
@@ -223,7 +236,13 @@ final class WakeCoordinator {
     session.cancelTimeout.run();
     for (UUID id : session.players) {
       if (session.task.equals(this.holds.get(id))) {
-        this.proxy.getPlayer(id).ifPresentOrElse(action, () -> this.holds.remove(id, session.task));
+        // One player failing must neither strand the others nor keep their own hold forever.
+        try {
+          this.proxy.getPlayer(id).ifPresentOrElse(action, () -> this.holds.remove(id, session.task));
+        } catch (RuntimeException error) {
+          this.holds.remove(id, session.task);
+          this.logger.warn("Releasing player {} from task {} failed", shortId(id), session.task, error);
+        }
       }
     }
   }
@@ -232,14 +251,56 @@ final class WakeCoordinator {
   // sweep send the player to a lobby while they are on their way to the woken server.
   private void transfer(Player player, String task, RegisteredServer server) {
     player.sendMessage(this.text("wake.ready", task));
-    player.createConnectionRequest(server).connect().whenComplete((result, error) -> {
+    this.attemptTransfer(player, task, server, 1);
+  }
+
+  private void attemptTransfer(Player player, String task, RegisteredServer server, int attempt) {
+    UUID id = player.getUniqueId();
+    if (!task.equals(this.holds.get(id))) {
+      return; // left the proxy, or released by someone else meanwhile
+    }
+    player.createConnectionRequest(server).connect().whenComplete(this.guarded("transfer",
+        (result, error) -> this.onTransferSettled(player, task, server, attempt, result, error),
+        () -> this.holds.remove(id, task)));
+  }
+
+  private void onTransferSettled(Player player, String task, RegisteredServer server, int attempt,
+                                 ConnectionRequestBuilder.Result result, Throwable error) {
+    UUID id = player.getUniqueId();
+    // IN_PROGRESS is not a refusal: the player is still joining the limbo or already switching.
+    if (error == null && result.getStatus() == ConnectionRequestBuilder.Status.CONNECTION_IN_PROGRESS
+        && attempt < TRANSFER_MAX_ATTEMPTS) {
+      this.scheduler.schedule(TRANSFER_RETRY_DELAY, () -> this.retryTransfer(player, task, server, attempt + 1));
+      return;
+    }
+    this.holds.remove(id, task);
+    if (error != null || !result.isSuccessful()) {
+      this.logger.warn("Player {} could not be sent to {}", shortId(id),
+          server.getServerInfo().getName());
+      player.sendMessage(this.text("wake.failed", task));
+    }
+  }
+
+  private void retryTransfer(Player player, String task, RegisteredServer server, int attempt) {
+    try {
+      this.attemptTransfer(player, task, server, attempt);
+    } catch (RuntimeException error) {
       this.holds.remove(player.getUniqueId(), task);
-      if (error != null || !result.isSuccessful()) {
-        this.logger.warn("Player {} could not be sent to {}", shortId(player.getUniqueId()),
-            server.getServerInfo().getName());
-        player.sendMessage(this.text("wake.failed", task));
+      this.logger.warn("Transfer retry of player {} failed", shortId(player.getUniqueId()), error);
+    }
+  }
+
+  /** Wraps a completion callback: an exception is logged, and {@code cleanup} lifts the hold. */
+  private <T> BiConsumer<T, Throwable> guarded(String what, BiConsumer<T, Throwable> body,
+                                               Runnable cleanup) {
+    return (value, error) -> {
+      try {
+        body.accept(value, error);
+      } catch (RuntimeException failure) {
+        this.logger.warn("Wake callback {} failed", what, failure);
+        cleanup.run();
       }
-    });
+    };
   }
 
   private void abort(Player player, String task, String messageKey) {

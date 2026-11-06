@@ -49,11 +49,23 @@ class WakeSettingsTest {
 
     assertFalse(settings.enabled());
     assertNull(settings.limbo());
+    assertEquals(List.of(WakeSettings.LIMBO_VARIABLE, WakeSettings.ARRIVAL_SERVERS_VARIABLE),
+        settings.missingVariables());
+  }
+
+  @Test
+  void withoutTheRouterSweepThePluginStaysOffAndNamesTheMissingVariable() {
+    // The sweep only runs when BTC_ARRIVAL_SERVERS is set: without it nobody leaves the limbo.
+    var settings = read(Map.of(
+        WakeSettings.TASKS_VARIABLE, "Donjon", WakeSettings.LIMBO_VARIABLE, "limbo"));
+
+    assertFalse(settings.enabled());
+    assertEquals(List.of(WakeSettings.ARRIVAL_SERVERS_VARIABLE), settings.missingVariables());
   }
 
   @Test
   void aLimboWithoutTasksLeavesThePluginOff() {
-    assertFalse(read(Map.of(WakeSettings.LIMBO_VARIABLE, "limbo")).enabled());
+    assertFalse(read(Map.of(WakeSettings.LIMBO_VARIABLE, "limbo", WakeSettings.ARRIVAL_SERVERS_VARIABLE, "*")).enabled());
   }
 
   @Test
@@ -61,6 +73,7 @@ class WakeSettingsTest {
     var settings = read(Map.of(
         WakeSettings.TASKS_VARIABLE, " Donjon , Test,,Donjon ",
         WakeSettings.LIMBO_VARIABLE, "limbo",
+        WakeSettings.ARRIVAL_SERVERS_VARIABLE, "Lobby-*",
         WakeSettings.TIMEOUT_VARIABLE, "45"));
 
     assertTrue(settings.enabled());
