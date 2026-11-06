@@ -533,8 +533,6 @@ public final class VelocityConfiguration implements ProxyConfig {
       valid = false;
     }
 
-    // The cluster hands players to sibling proxies with transferToHost (/transfer, shutdown); a
-    // sibling that refuses transfers kicks them instead. Each proxy only knows its own setting.
     if (!Redis.LOGIN_CHECK_DENY.equals(getRedis().loginCheckFailure)
         && !Redis.LOGIN_CHECK_ALLOW.equals(getRedis().loginCheckFailure)) {
       LOGGER.error("Invalid redis.login-check-failure '{}': use \"deny\" or \"allow\"",
@@ -542,6 +540,8 @@ public final class VelocityConfiguration implements ProxyConfig {
       valid = false;
     }
 
+    // The cluster hands players to sibling proxies with transferToHost (/transfer, shutdown); a
+    // sibling that refuses transfers kicks them instead. Each proxy only knows its own setting.
     if (getRedis().isEnabled() && !isAcceptTransfers()) {
       LOGGER.warn("Redis cluster is enabled but accepts-transfers is false: players sent to this "
           + "proxy by a sibling (/transfer, proxy shutdown) will be kicked. Set "
