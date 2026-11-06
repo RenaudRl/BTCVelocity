@@ -28,7 +28,8 @@ import org.jetbrains.annotations.Nullable;
 /** Strict, bounded JSON codec for the version 2 bridge envelope. */
 public final class BridgeCodec {
 
-  private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+  // serializeNulls: the decoder requires targetWorld/worldName to be present (possibly null).
+  private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().serializeNulls().create();
   private static final Set<String> ENVELOPE_FIELDS = Set.of(
       "version", "messageId", "type", "sourceBackend", "targetBackend", "issuedAt",
       "expiresAt", "payload");

@@ -1110,26 +1110,14 @@ public final class VelocityConfiguration implements ProxyConfig {
             .build()) {
       config.load();
 
-      try {
-        ConfigDetector detector = new ConfigDetector(LOGGER);
-        ConfigDetector.ConfigAnalysis analysis = detector.analyzeConfiguration(path);
-
-        if (!analysis.missingOptions().isEmpty()) {
-          LOGGER.warn("Missing configuration options: {}", String.join(", ", analysis.missingOptions()));
-          LOGGER.warn("Run /velocity configcheck for full details");
-        }
-      } catch (IOException e) {
-        LOGGER.debug("Could not perform configuration check during configuration loading", e);
-      }
-
       final List<ConfigurationMigration> migrations = new ArrayList<>(List.of(
           new ForwardingMigration(),
           new KeyAuthenticationMigration(),
           new MotdMigration(),
           new MiniMessageTranslationsMigration(),
           new TransferIntegrationMigration(),
-          // BTC: MotdAlignmentMigration also gates on < 2.8 and is ours; it runs before the upstream
-          // PacketLimiterMigration, which then no-ops (PacketLimiterConfig.fromConfig fills missing keys).
+          // BTC: MotdAlignmentMigration gates on its own keys, not on config-version, so it cannot
+          // collide with the upstream 2.8 PacketLimiterMigration (which only adds missing keys).
           new MotdAlignmentMigration(),
           new PacketLimiterMigration(),
           // Must stay last among version migrations: bumps config-version to 2.9.
@@ -1142,6 +1130,19 @@ public final class VelocityConfiguration implements ProxyConfig {
         if (migration.shouldMigrate(config)) {
           migration.migrate(config, LOGGER);
         }
+      }
+
+      // After the migrations: before them, keys a migration is about to add were reported missing.
+      try {
+        ConfigDetector detector = new ConfigDetector(LOGGER);
+        ConfigDetector.ConfigAnalysis analysis = detector.analyzeConfiguration(path);
+
+        if (!analysis.missingOptions().isEmpty()) {
+          LOGGER.warn("Missing configuration options: {}", String.join(", ", analysis.missingOptions()));
+          LOGGER.warn("Run /velocity configcheck for full details");
+        }
+      } catch (IOException e) {
+        LOGGER.debug("Could not perform configuration check during configuration loading", e);
       }
 
       String forwardingSecretString = System.getenv().getOrDefault(

@@ -210,7 +210,8 @@ final class ClientChannelUpdates {
       return Optional.of(new CommonRegister(phase, channels.build()));
     } catch (RuntimeException e) {
       // Truncated buffer, bad VarInt, over-long string or invalid identifier.
-      LOGGER.debug("Ignoring c:register: undecodable payload ({})", e.toString());
+      // Type only: the exception message can quote the client-sent channel name.
+      LOGGER.debug("Ignoring c:register: undecodable payload ({})", e.getClass().getName());
       return Optional.empty();
     }
   }

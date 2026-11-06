@@ -56,6 +56,34 @@ class BridgeCodecTest {
     assertTrue(encoded.contains("\"originPlatform\":\"BEDROCK\""));
   }
 
+  /**
+   * The decoder requires the world key (possibly null); Gson used to drop the explicit null, so a
+   * world-less queue_join or world_preload was refused even by the codec that wrote it.
+   * BTC-CORE's copy carries the same fix and the same check.
+   */
+  @Test
+  void anAbsentWorldIsWrittenAsAnExplicitNullAndSurvivesTheRoundTrip() {
+    final long now = System.currentTimeMillis();
+    final BridgeMessage.QueueJoin join = new BridgeMessage.QueueJoin(
+        envelope("queue_join", now), UUID.randomUUID(), "tester", "btc", null, null);
+    final BridgeMessage.WorldPreload preload = new BridgeMessage.WorldPreload(
+        envelope("world_preload", now), "btc", null);
+
+    final String encoded = new String(BridgeCodec.encode(join), StandardCharsets.UTF_8);
+    final BridgeCodec.DecodeResult joinResult = BridgeCodec.decodeResult(
+        BridgeCodec.encode(join), now, BridgeCodec.Limits.defaults());
+    final BridgeCodec.DecodeResult preloadResult = BridgeCodec.decodeResult(
+        BridgeCodec.encode(preload), now, BridgeCodec.Limits.defaults());
+
+    assertTrue(encoded.contains("\"targetWorld\":null"));
+    // An absent platform stays absent: an explicit null there is refused by the decoder.
+    assertTrue(!encoded.contains("originPlatform"));
+    assertTrue(joinResult.accepted());
+    assertTrue(preloadResult.accepted());
+    assertNull(assertInstanceOf(BridgeMessage.WorldPreload.class, preloadResult.message())
+        .worldName());
+  }
+
   @Test
   void aStatedPlatformSurvivesTheRoundTrip() {
     final long now = System.currentTimeMillis();

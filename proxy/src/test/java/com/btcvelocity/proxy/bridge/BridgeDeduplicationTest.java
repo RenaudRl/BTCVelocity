@@ -74,6 +74,21 @@ class BridgeDeduplicationTest {
   }
 
   @Test
+  void theDefaultWindowOutlivesEveryFrameTheCodecStillAccepts() {
+    // A frame issued one skew ahead, valid for the whole lifetime, is accepted until one skew past
+    // its expiry. Replayed at that last instant, it must still be a duplicate.
+    final BridgeDeduplication registry = BridgeDeduplication.defaults();
+    final UUID id = UUID.randomUUID();
+    final long limits = BridgeDeduplication.replayHorizon(
+        com.btcvelocity.api.bridge.BridgeCodec.Limits.defaults());
+
+    assertFalse(registry.alreadySeen(id, 0L));
+    assertTrue(registry.alreadySeen(id, 61_000L), "replay past the old 60 s window");
+    assertTrue(registry.alreadySeen(id, limits), "replay at the last accepted instant");
+    assertEquals(360_000L, limits);
+  }
+
+  @Test
   void boundsMustBePositive() {
     assertThrows(IllegalArgumentException.class, () -> new BridgeDeduplication(0L, 16));
     assertThrows(IllegalArgumentException.class, () -> new BridgeDeduplication(1_000L, 0));
