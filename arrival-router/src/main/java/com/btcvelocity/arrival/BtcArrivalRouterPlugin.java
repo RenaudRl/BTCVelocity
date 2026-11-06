@@ -278,9 +278,10 @@ public final class BtcArrivalRouterPlugin {
   @Subscribe
   public void onServerPostConnect(ServerPostConnectEvent event) {
     var player = event.getPlayer();
-    boolean inLimbo = player.getCurrentServer()
-        .map(current -> this.isLimbo(current.getServerInfo().getName()))
-        .orElse(false);
+    var current = player.getCurrentServer().map(connection -> connection.getServerInfo().getName());
+    // Connected means not refused: only a send that never completes keeps its mark (loop guard).
+    current.ifPresent(name -> this.attempts.forget(player.getUniqueId(), name));
+    boolean inLimbo = current.map(this::isLimbo).orElse(false);
     if (inLimbo) {
       // A plugin that holds the player on purpose gives its own reason instead of "no lobby".
       this.proxy.getEventManager().fire(new LimboHoldEvent(player)).thenAccept(hold ->

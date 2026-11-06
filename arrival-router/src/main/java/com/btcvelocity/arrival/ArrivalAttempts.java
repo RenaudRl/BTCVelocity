@@ -32,7 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * cycle. The cost is that a player kicked once is not sent back to that backend during the same
  * session — which is the behaviour we want anyway.
  *
- * <p>Entries are dropped when the player leaves the proxy; nothing else clears them.
+ * <p>A recorded server is one that did not take them: a recorded send is cleared as soon as the
+ * player is connected to it. Entries are dropped when the player leaves the proxy, and a server
+ * is dropped for everyone when it is registered again.
  *
  * <p>Thread-safe: Velocity fires these events on connection event loops.
  */
@@ -67,6 +69,21 @@ public final class ArrivalAttempts {
    */
   public void forget(UUID player) {
     this.attempted.remove(player);
+  }
+
+  /**
+   * Forgets one server for one player. Called once they are actually connected to it: an attempt
+   * that succeeded is not a refusal, and must not bar the way back after a later return to the
+   * limbo.
+   *
+   * @param player the player's unique id
+   * @param serverName the server they reached
+   */
+  public void forget(UUID player, String serverName) {
+    this.attempted.computeIfPresent(player, (ignored, servers) -> {
+      servers.remove(serverName);
+      return servers;
+    });
   }
 
   /**

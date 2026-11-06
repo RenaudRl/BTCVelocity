@@ -3095,6 +3095,34 @@ public final class VelocityConfiguration implements ProxyConfig {
     }
 
     /**
+     * Whether a server is excluded from the queue system: listed by name, or an instance
+     * {@code <listed>-<digits>} of a listed name (CloudNet names its instances that way).
+     *
+     * @param serverName the registered server name
+     * @return {@code true} if the server never uses the queue
+     */
+    public boolean isNoQueueServer(final String serverName) {
+      return matchesNoQueueServer(getNoQueueServers(), serverName);
+    }
+
+    static boolean matchesNoQueueServer(final List<String> configured, final String serverName) {
+      for (final String listed : configured) {
+        if (listed.equals(serverName)) {
+          return true;
+        }
+        final int length = listed.length();
+        // The instance form is case-insensitive on the prefix: tasks are written "lobby", services "Lobby-1".
+        if (serverName.length() > length + 1
+            && serverName.charAt(length) == '-'
+            && serverName.regionMatches(true, 0, listed, 0, length)
+            && serverName.substring(length + 1).chars().allMatch(c -> c >= '0' && c <= '9')) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    /**
      * Returns whether this proxy should override BungeeCord plugin messaging behavior.
      *
      * @return {@code true} if override is enabled, {@code false} otherwise

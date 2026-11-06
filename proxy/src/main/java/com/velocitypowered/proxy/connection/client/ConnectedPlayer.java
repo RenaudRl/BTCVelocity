@@ -1010,7 +1010,7 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
                   if (this.server.getConfiguration().getQueue().isQueueOnShutdown()) {
                     String targetServerName = originalEvent.getServer().getServerInfo().getName();
 
-                    if (!this.server.getConfiguration().getQueue().getNoQueueServers().contains(targetServerName)) {
+                    if (!this.server.getConfiguration().getQueue().isNoQueueServer(targetServerName)) {
                       Component kickMsg = originalEvent.getServerKickReason().orElse(Component.empty());
                       final VelocityQueue queue = this.server.getQueueManager().getQueue(targetServerName);
 

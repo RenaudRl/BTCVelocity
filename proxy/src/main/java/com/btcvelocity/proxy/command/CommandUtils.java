@@ -80,7 +80,7 @@ public class CommandUtils {
 
       List<String> possibilities = server.getAllServers().stream()
           .map(s -> s.getServerInfo().getName())
-          .filter(s -> allowNonQueueable || !queueConfig.isEnabled() || !queueConfig.getNoQueueServers().contains(s))
+          .filter(s -> allowNonQueueable || !queueConfig.isEnabled() || !queueConfig.isNoQueueServer(s))
           .collect(Collectors.toList());
 
       possibilities.addAll(Arrays.asList(magicServers));
@@ -254,7 +254,7 @@ public class CommandUtils {
       throw new IllegalArgumentException("Player is already on target server.");
     }
 
-    if (proxyServer.getConfiguration().getQueue().getNoQueueServers().contains(target.getServerInfo().getName())
+    if (proxyServer.getConfiguration().getQueue().isNoQueueServer(target.getServerInfo().getName())
         || !proxyServer.isQueueEnabled()
         || player.hasPermission("velocity.queue.bypass")) {
       player.createConnectionRequest(target).connectWithIndication();
