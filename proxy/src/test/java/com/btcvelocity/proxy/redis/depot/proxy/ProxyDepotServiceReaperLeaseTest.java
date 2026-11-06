@@ -35,8 +35,9 @@ import static org.mockito.Mockito.when;
 
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.depot.Depot;
-import com.btcvelocity.proxy.redis.depot.player.PlayerDepotService;
+import com.btcvelocity.proxy.redis.depot.player.PlayerEntry;
 import com.btcvelocity.proxy.redis.provider.LettuceProvider;
+import com.btcvelocity.proxy.redis.provider.RedisProvider;
 import com.velocitypowered.api.scheduler.Scheduler;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.scheduler.VelocityScheduler;
@@ -77,10 +78,13 @@ class ProxyDepotServiceReaperLeaseTest {
   private final AtomicLong clock = new AtomicLong(1_000_000_000L);
   private final AtomicBoolean shutdown = new AtomicBoolean();
   private final LettuceProvider provider = mock(LettuceProvider.class);
-  private final PlayerDepotService players = mock(PlayerDepotService.class);
+  /** The proxies whose entries the in-memory reap script deleted. */
+  private final List<String> reaped = new CopyOnWriteArrayList<>();
   private final List<Runnable> tasks = new ArrayList<>();
   private ProxyDepotService service;
   private Runnable reap;
+  /** Runs inside the reap script, before it checks anything: what happens while a pass is frozen. */
+  private Runnable beforeReapScript = () -> { };
 
   @BeforeEach
   @SuppressWarnings({"unchecked", "rawtypes"})
@@ -89,8 +93,23 @@ class ProxyDepotServiceReaperLeaseTest {
     when(provider.existsKey(anyString())).thenAnswer(inv -> beating.contains(inv.<String>getArgument(0)));
     when(provider.acquireLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class)))
         .thenAnswer(inv -> lease.compareAndSet(null, inv.<String>getArgument(1)));
-    when(provider.renewLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class)))
-        .thenAnswer(inv -> inv.<String>getArgument(1).equals(lease.get()));
+    // The Lua scripts, in memory: the lease holder check, the heartbeat check, then the deletion.
+    when(provider.renewLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class),
+        anyString())).thenAnswer(inv -> inv.<String>getArgument(1).equals(lease.get())
+        && beating.contains(inv.<String>getArgument(3)));
+    when(provider.reapProxy(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), anyString(),
+        anyString(), eq(PlayerEntry.class), eq(ProxyEntry.class))).thenAnswer(inv -> {
+          beforeReapScript.run();
+          if (!inv.<String>getArgument(1).equals(lease.get())) {
+            return RedisProvider.ReapOutcome.NOT_HOLDER;
+          }
+          if (beating.contains(inv.<String>getArgument(2))) {
+            return RedisProvider.ReapOutcome.ALIVE;
+          }
+          entries.remove(inv.<String>getArgument(3));
+          reaped.add(inv.<String>getArgument(3));
+          return RedisProvider.ReapOutcome.REAPED;
+        });
     when(provider.releaseLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString()))
         .thenAnswer(inv -> lease.compareAndSet(inv.<String>getArgument(1), null));
 
@@ -106,7 +125,6 @@ class ProxyDepotServiceReaperLeaseTest {
     when(redis.getProvider()).thenReturn(provider);
     when(redis.getServer()).thenReturn(server);
     when(redis.getProxyId()).thenReturn(SELF);
-    when(redis.getPlayerService()).thenReturn(players);
     when(redis.isShutdown()).thenAnswer(inv -> shutdown.get());
 
     service = new ProxyDepotService(redis, clock::get);
@@ -120,12 +138,12 @@ class ProxyDepotServiceReaperLeaseTest {
     reap.run(); // takes the lease: the others had no time to publish yet
     assertEquals(SELF, lease.get());
     assertTrue(entries.containsKey(DEAD));
-    verify(players, never()).removeEntriesOf(anyString());
+    assertTrue(reaped.isEmpty());
 
     nextHeartbeatInterval();
     reap.run(); // renewed, and the others had an interval to publish: now it may reap
     assertNull(entries.get(DEAD));
-    verify(players).removeEntriesOf(DEAD);
+    assertEquals(List.of(DEAD), reaped);
     assertEquals(1, service.getReapedProxyCount());
     assertEquals(SELF, lease.get());
   }
@@ -141,7 +159,7 @@ class ProxyDepotServiceReaperLeaseTest {
 
     assertEquals(SELF, lease.get());
     assertTrue(entries.containsKey(DEAD), "reaped within a heartbeat interval of taking the lease");
-    verify(players, never()).removeEntriesOf(anyString());
+    assertTrue(reaped.isEmpty());
     assertEquals(0, service.getReapedProxyCount());
 
     nextHeartbeatInterval();
@@ -154,8 +172,8 @@ class ProxyDepotServiceReaperLeaseTest {
   void aPassThatOverlapsAnotherOneGivesUpInsteadOfWaiting() throws Exception {
     final CountDownLatch inside = new CountDownLatch(1);
     final CountDownLatch release = new CountDownLatch(1);
-    when(provider.renewLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class)))
-        .thenAnswer(inv -> {
+    when(provider.renewLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class),
+        anyString())).thenAnswer(inv -> {
           inside.countDown();
           release.await(5, TimeUnit.SECONDS);
           return true;
@@ -173,7 +191,8 @@ class ProxyDepotServiceReaperLeaseTest {
     first.join(5_000);
 
     assertTrue(gaveUp, "the overlapping pass waited for the running one");
-    verify(provider, times(1)).renewLease(anyString(), anyString(), any(Duration.class));
+    verify(provider, times(1)).renewLease(anyString(), anyString(), any(Duration.class),
+        anyString());
   }
 
   @Test
@@ -185,7 +204,8 @@ class ProxyDepotServiceReaperLeaseTest {
     }
 
     assertTrue(entries.containsKey(DEAD));
-    verify(players, never()).removeEntriesOf(anyString());
+    verify(provider, never()).reapProxy(anyString(), anyString(), anyString(), anyString(), any(),
+        any());
     assertEquals("proxy-c", lease.get());
   }
 
@@ -204,7 +224,8 @@ class ProxyDepotServiceReaperLeaseTest {
     assertTrue(entries.containsKey(DEAD), "reaped on the wake-up pass");
     assertEquals(SELF, lease.get());
 
-    beating.add("heartbeat:" + DEAD); // the others publish again within one interval
+    beating.add("heartbeat:" + SELF); // the others, and this proxy, publish again
+    beating.add("heartbeat:" + DEAD);
     reap.run();
     assertTrue(entries.containsKey(DEAD), "reaped a proxy that is alive again");
     assertEquals(0, service.getReapedProxyCount());
@@ -217,6 +238,7 @@ class ProxyDepotServiceReaperLeaseTest {
     reap.run();
     lease.set("proxy-c"); // expired while frozen, then taken by another proxy
     beating.remove("heartbeat:" + DEAD);
+    nextHeartbeatInterval();
 
     reap.run();
     reap.run();
@@ -227,18 +249,57 @@ class ProxyDepotServiceReaperLeaseTest {
   }
 
   @Test
-  void aPassFrozenAfterItsRenewalDoesNotReapWhatItReadBefore() {
+  void aPassFrozenAfterItsRenewalReapsNothingOnceTheLeaseMovedOn() {
     reap.run();
     nextHeartbeatInterval();
-    when(provider.existsKey(anyString())).thenAnswer(inv -> {
-      clock.addAndGet(ProxyDepotService.REAPER_LEASE_TTL.toNanos()); // frozen right after the read
-      return false;
-    });
+    // Frozen right after the renewal: the lease expires and another proxy takes it before the
+    // script runs. The script, not the pass, has the last word.
+    beforeReapScript = () -> lease.set("proxy-c");
 
     reap.run();
 
     assertTrue(entries.containsKey(DEAD));
-    verify(players, never()).removeEntriesOf(anyString());
+    assertTrue(reaped.isEmpty());
+    assertEquals(0, service.getReapedProxyCount());
+  }
+
+  @Test
+  void aProxyThatBeatsAgainBeforeTheScriptRunsIsSpared() {
+    reap.run();
+    nextHeartbeatInterval();
+    beforeReapScript = () -> beating.add("heartbeat:" + DEAD); // its catch-up heartbeat lands
+
+    reap.run();
+
+    assertTrue(entries.containsKey(DEAD));
+    assertEquals(0, service.getReapedProxyCount());
+  }
+
+  @Test
+  void aPassThatLostTheLeaseStopsInsteadOfTryingTheOtherProxies() {
+    entries.put("proxy-c", entry("proxy-c"));
+    reap.run();
+    nextHeartbeatInterval();
+    beforeReapScript = () -> lease.set("proxy-d");
+
+    reap.run();
+
+    verify(provider, times(1)).reapProxy(anyString(), anyString(), anyString(), anyString(), any(),
+        any());
+  }
+
+  @Test
+  void aHolderThatDoesNotBeatAnymoreDoesNotKeepTheLease() {
+    reap.run();
+    beating.remove("heartbeat:" + SELF); // reaped by a peer while it was frozen
+    nextHeartbeatInterval();
+
+    reap.run();
+    reap.run();
+
+    assertTrue(entries.containsKey(DEAD));
+    verify(provider, never()).reapProxy(anyString(), anyString(), anyString(), anyString(), any(),
+        any());
   }
 
   @Test
@@ -246,13 +307,14 @@ class ProxyDepotServiceReaperLeaseTest {
     beating.add("heartbeat:" + DEAD);
     reap.run();
     reap.run();
-    when(provider.renewLease(anyString(), anyString(), any(Duration.class)))
+    when(provider.renewLease(anyString(), anyString(), any(Duration.class), anyString()))
         .thenThrow(new IllegalStateException("redis down"));
 
     reap.run(); // the failure is logged, not thrown at the scheduler
 
     beating.remove("heartbeat:" + DEAD);
-    when(provider.renewLease(anyString(), anyString(), any(Duration.class))).thenReturn(false);
+    when(provider.renewLease(anyString(), anyString(), any(Duration.class), anyString()))
+        .thenReturn(false);
     lease.set(null);
     reap.run(); // Redis is back: the lease is taken again, not assumed
     assertTrue(entries.containsKey(DEAD));
@@ -275,7 +337,7 @@ class ProxyDepotServiceReaperLeaseTest {
         (org.apache.logging.log4j.core.Logger) LogManager.getLogger(ProxyDepotService.class);
     logger.addAppender(appender);
     try {
-      when(provider.renewLease(anyString(), anyString(), any(Duration.class)))
+      when(provider.renewLease(anyString(), anyString(), any(Duration.class), anyString()))
           .thenThrow(new IllegalStateException("redis down"));
       doThrow(new IllegalStateException("redis down")).when(provider)
           .setWithExpiry(anyString(), anyString(), anyLong());
@@ -311,7 +373,7 @@ class ProxyDepotServiceReaperLeaseTest {
     assertNull(lease.get(), "released: another proxy takes over at once");
     clearInvocations(provider);
     reap.run();
-    verify(provider, never()).renewLease(anyString(), anyString(), any(Duration.class));
+    verify(provider, never()).renewLease(anyString(), anyString(), any(Duration.class), anyString());
 
     lease.set("proxy-c");
     service.teardown();

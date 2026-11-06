@@ -20,6 +20,8 @@ package com.btcvelocity.proxy.redis.depot.proxy;
 import com.btcvelocity.proxy.redis.LogThrottle;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.depot.AbstractDepotService;
+import com.btcvelocity.proxy.redis.depot.player.PlayerEntry;
+import com.btcvelocity.proxy.redis.provider.RedisProvider.ReapOutcome;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.time.Duration;
@@ -116,16 +118,10 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   private final AtomicLong reaped = new AtomicLong();
 
   /**
-   * {@link #nanoClock} reading until which the lease is certainly held, from the start of its last
-   * renewal. Guarded by {@link #reaperLock}; 0 or past means the lease may be gone.
-   */
-  private long leaseValidUntil;
-
-  /**
-   * {@link #nanoClock} reading when this proxy last took the lease (or started). A holder reaps
-   * only once a heartbeat interval has elapsed since, in time rather than in passes: after a
-   * freeze the late passes run back to back, and the other proxies have not published again yet.
-   * Guarded by {@link #reaperLock}.
+   * {@link #nanoClock} reading when this proxy last took the lease, or last had it in doubt (a
+   * failed renewal), or started. A holder reaps only once a heartbeat interval has elapsed since,
+   * in time rather than in passes: after a freeze the late passes run back to back, and the other
+   * proxies have not published again yet. Guarded by {@link #reaperLock}.
    */
   private long leaseAcquiredAt;
 
@@ -172,7 +168,6 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
     // waiting for the lease to expire. A no-op when another proxy holds it.
     this.reaperLock.lock();
     try {
-      this.leaseValidUntil = 0;
       try {
         this.redis.getProvider().releaseLease(REAPER_LEASE_KEY, this.redis.getProxyId());
       } catch (RuntimeException e) {
@@ -314,16 +309,12 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
           continue; // Never reap ourselves.
         }
 
-        if (this.redis.getProvider().existsKey(HEARTBEAT_KEY_PREFIX + proxyId)) {
-          continue; // Proxy is alive.
-        }
-
-        // Frozen during this very pass: the lease may have moved on, and what was read is stale.
-        if (this.leaseValidUntil - this.nanoClock.getAsLong() <= 0) {
+        // The lease and the heartbeat are checked again inside the script that deletes, so a pass
+        // frozen since its renewal, or a proxy that beat again meanwhile, reaps nothing.
+        final ReapOutcome outcome = reapProxy(proxyId);
+        if (outcome == ReapOutcome.NOT_HOLDER) {
           return;
         }
-
-        reapProxy(proxyId);
       }
     } catch (RuntimeException e) {
       logFailure(this.reapFailures, this.reapFailing, "The dead-proxy check", e);
@@ -339,38 +330,38 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
    *         false} if it just took the lease, or does not hold it
    */
   private boolean renewReaperLease() {
-    final long start = this.nanoClock.getAsLong();
     final String proxyId = this.redis.getProxyId();
     try {
-      if (this.redis.getProvider().renewLease(REAPER_LEASE_KEY, proxyId, REAPER_LEASE_TTL)) {
-        // Counted from before the call: the lease is held for at least this long.
-        this.leaseValidUntil = start + REAPER_LEASE_TTL.toNanos();
+      // Renewed only while this proxy beats: one that was reaped itself must not keep reaping.
+      if (this.redis.getProvider().renewLease(REAPER_LEASE_KEY, proxyId, REAPER_LEASE_TTL,
+          HEARTBEAT_KEY_PREFIX + proxyId)) {
         return true;
       }
-      this.leaseValidUntil = 0;
-      if (this.redis.getProvider().acquireLease(REAPER_LEASE_KEY, proxyId, REAPER_LEASE_TTL)) {
-        this.leaseAcquiredAt = this.nanoClock.getAsLong();
-      }
+      // Lost or never held: the others get a heartbeat interval from now, taken or not.
+      this.leaseAcquiredAt = this.nanoClock.getAsLong();
+      this.redis.getProvider().acquireLease(REAPER_LEASE_KEY, proxyId, REAPER_LEASE_TTL);
       return false;
     } catch (RuntimeException e) {
-      this.leaseValidUntil = 0; // Redis unreachable: the lease cannot be trusted
+      this.leaseAcquiredAt = this.nanoClock.getAsLong(); // Redis unreachable: the lease is in doubt
       throw e;
     }
   }
 
   /**
-   * Removes all Redis entries belonging to the given dead proxy: first its player entries,
-   * then the proxy entry itself.
+   * Removes all Redis entries belonging to the given dead proxy, its player entries and its proxy
+   * entry, in one Lua script that also checks the lease and the heartbeat. Owner-guarded: a
+   * player that already moved to a live proxy keeps that proxy's entry.
    *
    * @param proxyId the ID of the proxy to reap
    */
-  private void reapProxy(final @NotNull String proxyId) {
-    LOGGER.warn("Reaping proxy {} from redis. This proxy shut down improperly.", proxyId);
-
-    // Owner-guarded: a player that already moved to a live proxy keeps that proxy's entry.
-    this.redis.getPlayerService().removeEntriesOf(proxyId);
-
-    this.depot.remove(proxyId);
-    this.reaped.incrementAndGet();
+  private ReapOutcome reapProxy(final @NotNull String proxyId) {
+    final ReapOutcome outcome = this.redis.getProvider().reapProxy(REAPER_LEASE_KEY,
+        this.redis.getProxyId(), HEARTBEAT_KEY_PREFIX + proxyId, proxyId, PlayerEntry.class,
+        ProxyEntry.class);
+    if (outcome == ReapOutcome.REAPED) {
+      LOGGER.warn("Reaped proxy {} from redis. This proxy shut down improperly.", proxyId);
+      this.reaped.incrementAndGet();
+    }
+    return outcome;
   }
 }

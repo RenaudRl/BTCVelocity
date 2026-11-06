@@ -208,14 +208,48 @@ public sealed interface RedisProvider permits AbstractRedisProvider {
   boolean acquireLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl);
 
   /**
-   * Extends a lease, only if {@code owner} still holds it (one Lua script). Blocking Redis call.
+   * Extends a lease, only if {@code owner} still holds it and {@code requiredKey} exists (one Lua
+   * script). Blocking Redis call.
    *
    * @param key the lease key
    * @param owner who must hold it
    * @param ttl the new time to live
-   * @return {@code false} if the lease expired or another owner holds it
+   * @param requiredKey a key that must exist, such as the owner's heartbeat: a proxy that does not
+   *                    beat does not keep the lease
+   * @return {@code false} if the lease expired, another owner holds it, or the key is missing
    */
-  boolean renewLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl);
+  boolean renewLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl,
+                     @NotNull String requiredKey);
+
+  /**
+   * Removes a dead proxy's entries in one Lua script: only if {@code owner} still holds the lease
+   * and the proxy's heartbeat key is still missing, so what the caller read earlier cannot be
+   * stale. Blocking Redis call.
+   *
+   * @param leaseKey the lease key
+   * @param owner who must hold the lease
+   * @param heartbeatKey the heartbeat key of the proxy to reap
+   * @param proxyId the proxy to reap
+   * @param playerEntryClass the entry class of the player depot, whose entries it owned
+   * @param proxyEntryClass the entry class of the proxy depot, whose entry is removed
+   * @return what the script found
+   */
+  @NotNull ReapOutcome reapProxy(@NotNull String leaseKey, @NotNull String owner,
+                                 @NotNull String heartbeatKey, @NotNull String proxyId,
+                                 @NotNull Class<?> playerEntryClass,
+                                 @NotNull Class<?> proxyEntryClass);
+
+  /**
+   * What {@link #reapProxy} found in Redis.
+   */
+  enum ReapOutcome {
+    /** The caller no longer holds the lease: nothing was touched. */
+    NOT_HOLDER,
+    /** The proxy beats again: nothing was touched. */
+    ALIVE,
+    /** The proxy's player entries and proxy entry are gone. */
+    REAPED
+  }
 
   /**
    * Deletes a lease, only if {@code owner} still holds it (one Lua script). Blocking Redis call.

@@ -148,13 +148,29 @@ public final class LettuceProvider extends AbstractRedisProvider {
       + "return removed\n";
 
   /**
-   * KEYS[1] lease, ARGV: owner, ttl in ms. Extends the lease only if that owner holds it.
+   * KEYS[1] lease, KEYS[2] the owner's heartbeat, ARGV: owner, ttl in ms. Extends the lease only
+   * if that owner holds it and still beats.
    */
   private static final String RENEW_LEASE_SCRIPT =
-      "if redis.call('GET', KEYS[1]) == ARGV[1] then\n"
+      "if redis.call('GET', KEYS[1]) == ARGV[1] and redis.call('EXISTS', KEYS[2]) == 1 then\n"
       + "  return redis.call('PEXPIRE', KEYS[1], ARGV[2])\n"
       + "end\n"
       + "return 0\n";
+
+  /**
+   * KEYS: [1] lease, [2] heartbeat of the proxy to reap, [3] player hash, [4] proxy hash. ARGV:
+   * owner of the lease, proxy to reap. Answers -1 if ARGV[1] does not hold the lease, 0 if the
+   * proxy beats, 1 once it deleted the proxy's player entries and its proxy entry.
+   */
+  private static final String REAP_SCRIPT = OWNER_FUNCTION
+      + "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return -1 end\n"
+      + "if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end\n"
+      + "local all = redis.call('HGETALL', KEYS[3])\n"
+      + "for i = 1, #all, 2 do\n"
+      + "  if owner(all[i + 1]) == string.lower(ARGV[2]) then redis.call('HDEL', KEYS[3], all[i]) end\n"
+      + "end\n"
+      + "redis.call('HDEL', KEYS[4], ARGV[2])\n"
+      + "return 1\n";
 
   /**
    * KEYS[1] lease, ARGV: owner. Deletes the lease only if that owner holds it.
@@ -600,15 +616,43 @@ public final class LettuceProvider extends AbstractRedisProvider {
 
   @Override
   public boolean renewLease(final @NotNull String key, final @NotNull String owner,
-                            final @NotNull Duration ttl) {
+                            final @NotNull Duration ttl, final @NotNull String requiredKey) {
     if (this.depotConnection == null) {
       LOGGER.warn("Attempted to renew lease '{}' but the depot connection is not initialized", key);
       return false;
     }
 
     final Long renewed = this.depotConnection.sync().eval(RENEW_LEASE_SCRIPT,
-        ScriptOutputType.INTEGER, new String[] {key}, owner, String.valueOf(ttl.toMillis()));
+        ScriptOutputType.INTEGER, new String[] {key, requiredKey}, owner,
+        String.valueOf(ttl.toMillis()));
     return renewed != null && renewed > 0;
+  }
+
+  @Override
+  public @NotNull ReapOutcome reapProxy(final @NotNull String leaseKey, final @NotNull String owner,
+                                        final @NotNull String heartbeatKey,
+                                        final @NotNull String proxyId,
+                                        final @NotNull Class<?> playerEntryClass,
+                                        final @NotNull Class<?> proxyEntryClass) {
+    if (this.depotConnection == null) {
+      LOGGER.warn("Attempted to reap '{}' but the depot connection is not initialized", proxyId);
+      return ReapOutcome.NOT_HOLDER;
+    }
+
+    final Long answer = this.depotConnection.sync().eval(REAP_SCRIPT, ScriptOutputType.INTEGER,
+        new String[] {leaseKey, heartbeatKey, depotName(playerEntryClass), depotName(proxyEntryClass)},
+        owner, proxyId);
+    if (answer == null || answer < 0) {
+      return ReapOutcome.NOT_HOLDER;
+    }
+    return answer == 0 ? ReapOutcome.ALIVE : ReapOutcome.REAPED;
+  }
+
+  /**
+   * The Redis hash that holds the entries of a class.
+   */
+  private static @NotNull String depotName(final @NotNull Class<?> entryClass) {
+    return entryClass.getSimpleName().toLowerCase();
   }
 
   @Override
@@ -734,7 +778,7 @@ public final class LettuceProvider extends AbstractRedisProvider {
      */
     public LettuceDepot(final @NotNull Class<V> valueClass,
                         final @NotNull StatefulRedisConnection<String, String> connection) {
-      this.name = valueClass.getSimpleName().toLowerCase();
+      this.name = depotName(valueClass);
       this.valueClass = valueClass;
       this.connection = connection.sync();
       this.async = connection.async();

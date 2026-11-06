@@ -19,6 +19,7 @@ package com.btcvelocity.proxy.redis.depot.player;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,8 +38,10 @@ import static org.mockito.Mockito.when;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.depot.Depot;
 import com.btcvelocity.proxy.redis.depot.proxy.ProxyDepotService;
+import com.btcvelocity.proxy.redis.depot.proxy.ProxyEntry;
 import com.btcvelocity.proxy.redis.packet.PacketSerializer;
 import com.btcvelocity.proxy.redis.provider.LettuceProvider;
+import com.btcvelocity.proxy.redis.provider.RedisProvider.ReapOutcome;
 import com.velocitypowered.api.proxy.player.PlayerSettings;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.scheduler.ScheduledTask;
@@ -375,6 +378,65 @@ class PlayerDepotServiceRedisIntegrationTest {
     assertEquals(0, b.proxies.getReapedProxyCount(), "live-b reaped a live proxy");
     assertEquals(a.proxyId, entryOf(alice).getProxyId());
     assertEquals(b.proxyId, entryOf(bob).getProxyId());
+  }
+
+  /** The Lua scripts themselves: lease holder and heartbeat are checked where the deletion is. */
+  @Test
+  void theReapScriptDeletesOnlyForTheLeaseHolderAndOnlyWhileTheProxyDoesNotBeat() throws Exception {
+    final LettuceProvider redis = proxyA.provider;
+    final Depot<String, ProxyEntry> proxies = redis.createDepot(ProxyEntry.class);
+    for (String id : List.of("dead", "proxy-a")) {
+      final VelocityServer idServer = mock(VelocityServer.class);
+      when(idServer.getProxyId()).thenReturn(id);
+      proxies.upsert(new ProxyEntry(idServer));
+    }
+    final ConnectedPlayer onDead = proxyA.join("zed", "lobby");
+    final ConnectedPlayer onOther = proxyA.join("yan", "lobby");
+    proxyA.raw.claim(new PlayerEntry(onDead, "dead"), "dead", true).get(5, TimeUnit.SECONDS);
+    proxyA.raw.claim(new PlayerEntry(onOther, "proxy-b"), "proxy-b", true).get(5, TimeUnit.SECONDS);
+    redis.deleteKey(LEASE_KEY);
+    redis.deleteKey("heartbeat:dead");
+    redis.deleteKey("heartbeat:proxy-a");
+    try {
+      // Without the lease: nothing is touched.
+      assertEquals(ReapOutcome.NOT_HOLDER, reap(redis, "proxy-a"));
+      assertFalse(redis.renewLease(LEASE_KEY, "proxy-a", ProxyDepotService.REAPER_LEASE_TTL,
+          "heartbeat:proxy-a"));
+      assertTrue(redis.acquireLease(LEASE_KEY, "proxy-a", ProxyDepotService.REAPER_LEASE_TTL));
+      assertNotNull(proxyA.raw.get(onDead.getUniqueId()));
+
+      // The holder that does not beat does not renew; one that beats does.
+      assertFalse(redis.renewLease(LEASE_KEY, "proxy-a", ProxyDepotService.REAPER_LEASE_TTL,
+          "heartbeat:proxy-a"), "renewed without its own heartbeat");
+      redis.setWithExpiry("heartbeat:proxy-a", "1", 5);
+      assertTrue(redis.renewLease(LEASE_KEY, "proxy-a", ProxyDepotService.REAPER_LEASE_TTL,
+          "heartbeat:proxy-a"));
+      assertFalse(redis.renewLease(LEASE_KEY, "proxy-b", ProxyDepotService.REAPER_LEASE_TTL,
+          "heartbeat:proxy-a"), "renewed for another owner");
+
+      // The proxy beats: nothing is touched.
+      redis.setWithExpiry("heartbeat:dead", "1", 5);
+      assertEquals(ReapOutcome.ALIVE, reap(redis, "proxy-a"));
+      assertNotNull(proxyA.raw.get(onDead.getUniqueId()));
+      assertTrue(proxies.contains("dead"));
+
+      // Dead, and the caller holds the lease: its players and proxy entry go, nobody else's.
+      redis.deleteKey("heartbeat:dead");
+      assertEquals(ReapOutcome.REAPED, reap(redis, "proxy-a"));
+      assertNull(proxyA.raw.get(onDead.getUniqueId()));
+      assertFalse(proxies.contains("dead"));
+      assertNotNull(proxyA.raw.get(onOther.getUniqueId()), "another proxy's player was removed");
+      assertTrue(proxies.contains("proxy-a"));
+    } finally {
+      redis.deleteKey(LEASE_KEY);
+      redis.deleteKey("heartbeat:proxy-a");
+      redis.deleteKey("heartbeat:dead");
+    }
+  }
+
+  private static ReapOutcome reap(final LettuceProvider redis, final String owner) {
+    return redis.reapProxy(LEASE_KEY, owner, "heartbeat:dead", "dead", PlayerEntry.class,
+        ProxyEntry.class);
   }
 
   @Test
