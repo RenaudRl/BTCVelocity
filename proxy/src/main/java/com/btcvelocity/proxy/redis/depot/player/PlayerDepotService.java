@@ -31,6 +31,7 @@ import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,7 +47,9 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -90,6 +93,29 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   public static final int WRITE_QUEUE_CAPACITY = 4096;
 
   /**
+   * Consecutive repairs that must find a local player held by another live proxy, over at least
+   * {@link #REFRESH_INTERVAL} since the first, before the local session is closed. The time
+   * absorbs a transfer between proxies, whose entry and connection never move at the same
+   * instant; counting passes alone would not, as late repairs can run back to back.
+   */
+  public static final int DUPLICATE_CONFIRMATIONS = 2;
+
+  /**
+   * How much earlier than {@link #REFRESH_INTERVAL} a repair may run and still count as one
+   * interval later: the scheduler jitters, and a second repair 0.999 s after the first would
+   * otherwise push the closure to the third.
+   */
+  static final Duration SCHEDULING_TOLERANCE = Duration.ofMillis(200);
+
+  private static final long MIN_GAP_NANOS =
+      REFRESH_INTERVAL.toNanos() - SCHEDULING_TOLERANCE.toNanos();
+
+  /**
+   * Translation key of the message shown to the player whose duplicate session is closed.
+   */
+  static final String DUPLICATE_SESSION_KEY = "velocity.error.duplicate-session";
+
+  /**
    * How long {@link #releaseAll()} waits for the worker before removing the entries directly.
    */
   private static final Duration RELEASE_BARRIER_TIMEOUT = Duration.ofSeconds(3);
@@ -100,6 +126,11 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   private static final Duration SHUTDOWN_GRACE = Duration.ofSeconds(3);
 
   private static final Logger LOGGER = LoggerFactory.getLogger(PlayerDepotService.class);
+
+  /**
+   * The clock of the duplicate confirmation ({@link System#nanoTime()}, replaced in tests).
+   */
+  private final LongSupplier nanoClock;
 
   /**
    * The Redis manager used to coordinate multi-proxy player synchronization.
@@ -137,6 +168,23 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   private final LogThrottle uncheckedLogins = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
 
   /**
+   * Throttles the warning for closed duplicate sessions.
+   */
+  private final LogThrottle duplicateWarnings = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+  private final LogThrottle forceCloseWarnings = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+
+  /**
+   * Local sessions closed because another proxy holds the player, since startup.
+   */
+  private final AtomicLong duplicateSessionsClosed = new AtomicLong();
+
+  /**
+   * Local players found held by another live proxy, with the number of consecutive repairs that
+   * found it. Only the repair touches it.
+   */
+  private final Map<UUID, Suspect> suspects = new ConcurrentHashMap<>();
+
+  /**
    * The last cluster view read from Redis, or {@code null} before the first successful read.
    */
   private volatile @Nullable Snapshot snapshot;
@@ -152,8 +200,13 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * @param redis the {@link VelocityRedis} instance
    */
   public PlayerDepotService(final @NotNull VelocityRedis redis) {
+    this(redis, System::nanoTime);
+  }
+
+  PlayerDepotService(final @NotNull VelocityRedis redis, final @NotNull LongSupplier nanoClock) {
     super(PlayerEntry.class, redis.getProvider());
 
+    this.nanoClock = nanoClock;
     this.redis = redis;
     this.server = redis.getServer();
     this.worker = new OrderedRedisExecutor("btc-redis-players", WRITE_QUEUE_CAPACITY);
@@ -560,6 +613,155 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     }
 
     this.snapshot = Snapshot.of(entries, proxyId, System.nanoTime());
+
+    closeDuplicateSessions(byId);
+  }
+
+  /**
+   * Gets how many local sessions were closed because another proxy held the player.
+   *
+   * @return the count since startup
+   */
+  public long getDuplicateSessionsClosed() {
+    return this.duplicateSessionsClosed.get();
+  }
+
+  /**
+   * Redis ownership decides: a local player whose entry belongs to another proxy with a fresh
+   * heartbeat is a duplicate, and its local session is closed once
+   * {@link #DUPLICATE_CONFIRMATIONS} repairs in a row found it. An entry whose owner stopped
+   * beating is left alone: it is about to be reaped, and the next repair claims the player again.
+   * Runs on the worker, so the check reads Redis freely; the disconnect itself goes through
+   * {@link ConnectedPlayer#disconnect(Component)}, which hops onto the player's event loop.
+   */
+  private void closeDuplicateSessions(final Map<UUID, PlayerEntry> byId) {
+    final long now = this.nanoClock.getAsLong();
+    final Map<String, Boolean> aliveOwners = new HashMap<>();
+    final Set<UUID> held = new HashSet<>();
+    for (ConnectedPlayer player : this.server.getAllPlayers()) {
+      final PlayerEntry entry = byId.get(player.getUniqueId());
+      // A session that did not finish logging in is not judged: its login is still deciding.
+      if (!player.isFullyConnected() || entry == null || ownedHere(entry)
+          || !aliveOwners.computeIfAbsent(entry.getProxyId(), this::isAlive)) {
+        continue;
+      }
+
+      held.add(player.getUniqueId());
+      final Suspect before = this.suspects.get(player.getUniqueId());
+      // A new session of the same player starts over: it is a different connection.
+      final boolean same = before != null && before.session() == player;
+      final int passes = same ? before.passes() + 1 : 1;
+      final long firstSeen = same ? before.firstSeenNanos() : now;
+      Phase phase = same ? before.phase() : Phase.SUSPECTED;
+      long disconnectedAt = same ? before.disconnectedNanos() : now;
+      if (phase == Phase.DISCONNECTED) {
+        // The same session is still here a repair interval after the polite disconnect: it hangs.
+        if (now - disconnectedAt >= MIN_GAP_NANOS && forceClose(player)) {
+          phase = Phase.FORCED;
+        }
+      } else if (phase == Phase.SUSPECTED && passes >= DUPLICATE_CONFIRMATIONS
+          && now - firstSeen >= MIN_GAP_NANOS && closeDuplicate(player)) {
+        phase = Phase.DISCONNECTED;
+        disconnectedAt = now;
+      }
+      this.suspects.put(player.getUniqueId(),
+          new Suspect(player, passes, firstSeen, phase, disconnectedAt));
+    }
+    this.suspects.keySet().retainAll(held);
+  }
+
+  private boolean isAlive(final String proxyId) {
+    try {
+      return this.redis.getProxyService().isAlive(proxyId);
+    } catch (RuntimeException e) {
+      return false; // unknown: do not close a session on a guess
+    }
+  }
+
+  /**
+   * Disconnects the session unless the duplicate is gone.
+   *
+   * @return {@code true} if the disconnect was sent
+   */
+  private boolean closeDuplicate(final ConnectedPlayer player) {
+    final PlayerEntry holder = currentHolder(player);
+    if (holder == null) {
+      return false;
+    }
+    this.duplicateSessionsClosed.incrementAndGet();
+    final long quiet = this.duplicateWarnings.acquire();
+    if (quiet >= 0) {
+      LOGGER.warn("Closing the session of {} on this proxy: proxy {} holds the player in Redis "
+          + "(duplicate session; {} similar closures not logged)", player.getUsername(),
+          holder.getProxyId(), quiet);
+    }
+    player.disconnect(Component.translatable(DUPLICATE_SESSION_KEY));
+    return true;
+  }
+
+  /**
+   * Closes the connection of a session whose polite disconnect did not end it. Not counted again.
+   *
+   * @return {@code true} if the connection was closed
+   */
+  private boolean forceClose(final ConnectedPlayer player) {
+    if (currentHolder(player) == null) {
+      return false;
+    }
+    final long quiet = this.forceCloseWarnings.acquire();
+    if (quiet >= 0) {
+      LOGGER.warn("The duplicate session of {} did not close after its disconnect; closing the "
+          + "connection ({} similar closures not logged)", player.getUsername(), quiet);
+    }
+    player.getConnection().close();
+    return true;
+  }
+
+  /**
+   * Reads the player's entry again, right before a closure, so a decision taken on the snapshot
+   * of the repair is not applied to what Redis says now.
+   *
+   * @return the entry of another live proxy that still holds the player, or {@code null} if this
+   *         session must be left alone
+   */
+  private @Nullable PlayerEntry currentHolder(final ConnectedPlayer player) {
+    // Checked again: a releaseAll() during the heartbeat reads hands the players over, and the
+    // Transfer that follows must not meet a disconnect.
+    if (!isWriting() || !isCurrentSession(player)) {
+      return null;
+    }
+    try {
+      final PlayerEntry current = this.depot.get(player.getUniqueId());
+      return current == null || ownedHere(current) || !isAlive(current.getProxyId())
+          || !isWriting() ? null : current;
+    } catch (RuntimeException e) {
+      return null; // unknown: do not close a session on a guess
+    }
+  }
+
+  /**
+   * A local player found held by another proxy.
+   *
+   * @param session the local connection
+   * @param passes consecutive repairs that found it
+   * @param firstSeenNanos {@link #nanoClock} reading of the first of them
+   * @param phase how far the closure went
+   * @param disconnectedNanos {@link #nanoClock} reading of the polite disconnect
+   */
+  private record Suspect(ConnectedPlayer session, int passes, long firstSeenNanos, Phase phase,
+                         long disconnectedNanos) {
+  }
+
+  /**
+   * How far the closure of a duplicate session went.
+   */
+  private enum Phase {
+    /** Found held by another proxy; not closed. */
+    SUSPECTED,
+    /** The polite disconnect was sent. */
+    DISCONNECTED,
+    /** The connection was closed by force. */
+    FORCED
   }
 
   private static @Nullable String currentServerName(final ConnectedPlayer player) {

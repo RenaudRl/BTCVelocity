@@ -24,6 +24,7 @@ import com.btcvelocity.proxy.redis.transaction.Transaction;
 import com.btcvelocity.proxy.redis.transaction.TransactionData;
 import com.btcvelocity.proxy.redis.transaction.TransactionHandler;
 import com.google.common.collect.ImmutableList;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.jetbrains.annotations.NotNull;
@@ -195,6 +196,73 @@ public sealed interface RedisProvider permits AbstractRedisProvider {
    * @return a future that completes when the operation is done
    */
   CompletableFuture<Void> deleteKeyAsync(@NotNull String key);
+
+  /**
+   * Takes a lease, only if {@code requiredKey} exists and the lease is free (one Lua script:
+   * {@code EXISTS requiredKey}, then {@code SET key owner NX PX ttl}). Blocking Redis call.
+   *
+   * @param key the lease key
+   * @param owner who takes it
+   * @param ttl how long it lasts unless renewed
+   * @param requiredKey a key that must exist, such as the owner's heartbeat: a proxy that does not
+   *                    beat does not take the lease
+   * @return {@code true} if the key was free, the required key exists and this owner now holds it
+   */
+  boolean acquireLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl,
+                       @NotNull String requiredKey);
+
+  /**
+   * Extends a lease, only if {@code owner} still holds it and {@code requiredKey} exists (one Lua
+   * script). Blocking Redis call.
+   *
+   * @param key the lease key
+   * @param owner who must hold it
+   * @param ttl the new time to live
+   * @param requiredKey a key that must exist, such as the owner's heartbeat: a proxy that does not
+   *                    beat does not keep the lease
+   * @return {@code false} if the lease expired, another owner holds it, or the key is missing
+   */
+  boolean renewLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl,
+                     @NotNull String requiredKey);
+
+  /**
+   * Removes a dead proxy's entries in one Lua script: only if {@code owner} still holds the lease
+   * and the proxy's heartbeat key is still missing, so what the caller read earlier cannot be
+   * stale. Blocking Redis call.
+   *
+   * @param leaseKey the lease key
+   * @param owner who must hold the lease
+   * @param heartbeatKey the heartbeat key of the proxy to reap
+   * @param proxyId the proxy to reap
+   * @param playerEntryClass the entry class of the player depot, whose entries it owned
+   * @param proxyEntryClass the entry class of the proxy depot, whose entry is removed
+   * @return what the script found
+   */
+  @NotNull ReapOutcome reapProxy(@NotNull String leaseKey, @NotNull String owner,
+                                 @NotNull String heartbeatKey, @NotNull String proxyId,
+                                 @NotNull Class<?> playerEntryClass,
+                                 @NotNull Class<?> proxyEntryClass);
+
+  /**
+   * What {@link #reapProxy} found in Redis.
+   */
+  enum ReapOutcome {
+    /** The caller no longer holds the lease: nothing was touched. */
+    NOT_HOLDER,
+    /** The proxy beats again: nothing was touched. */
+    ALIVE,
+    /** The proxy's player entries and proxy entry are gone. */
+    REAPED
+  }
+
+  /**
+   * Deletes a lease, only if {@code owner} still holds it (one Lua script). Blocking Redis call.
+   *
+   * @param key the lease key
+   * @param owner who must hold it
+   * @return {@code true} if the lease was held by this owner and is gone
+   */
+  boolean releaseLease(@NotNull String key, @NotNull String owner);
 
   /**
    * Check if the Redis provider is connected.
