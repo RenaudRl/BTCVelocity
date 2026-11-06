@@ -28,6 +28,7 @@ import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -45,6 +46,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -112,11 +115,58 @@ class ProxyDepotServiceReaperLeaseTest {
     assertTrue(entries.containsKey(DEAD));
     verify(players, never()).removeEntriesOf(anyString());
 
-    reap.run(); // renewed: now it may reap
+    nextHeartbeatInterval();
+    reap.run(); // renewed, and the others had an interval to publish: now it may reap
     assertNull(entries.get(DEAD));
     verify(players).removeEntriesOf(DEAD);
     assertEquals(1, service.getReapedProxyCount());
     assertEquals(SELF, lease.get());
+  }
+
+  @Test
+  void passesRunningBackToBackAfterTheLeaseWasTakenReapNothing() {
+    // The scheduler hands each run to a cached pool: after a freeze the late runs come in a burst,
+    // with no heartbeat interval between them, while the others have not published again yet.
+    for (int i = 0; i < 10; i++) {
+      reap.run();
+      clock.addAndGet(1_000L); // a few microseconds apart, far below one heartbeat interval
+    }
+
+    assertEquals(SELF, lease.get());
+    assertTrue(entries.containsKey(DEAD), "reaped within a heartbeat interval of taking the lease");
+    verify(players, never()).removeEntriesOf(anyString());
+    assertEquals(0, service.getReapedProxyCount());
+
+    nextHeartbeatInterval();
+    reap.run(); // the interval elapsed and DEAD still did not publish: it is dead
+    assertNull(entries.get(DEAD));
+    assertEquals(1, service.getReapedProxyCount());
+  }
+
+  @Test
+  void aPassThatOverlapsAnotherOneGivesUpInsteadOfWaiting() throws Exception {
+    final CountDownLatch inside = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+    when(provider.renewLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class)))
+        .thenAnswer(inv -> {
+          inside.countDown();
+          release.await(5, TimeUnit.SECONDS);
+          return true;
+        });
+
+    final Thread first = new Thread(reap);
+    first.start();
+    assertTrue(inside.await(5, TimeUnit.SECONDS));
+
+    final Thread second = new Thread(reap);
+    second.start();
+    second.join(2_000); // would hang until `first` returns if it queued on the lock
+    final boolean gaveUp = !second.isAlive();
+    release.countDown();
+    first.join(5_000);
+
+    assertTrue(gaveUp, "the overlapping pass waited for the running one");
+    verify(provider, times(1)).renewLease(anyString(), anyString(), any(Duration.class));
   }
 
   @Test
@@ -172,6 +222,7 @@ class ProxyDepotServiceReaperLeaseTest {
   @Test
   void aPassFrozenAfterItsRenewalDoesNotReapWhatItReadBefore() {
     reap.run();
+    nextHeartbeatInterval();
     when(provider.existsKey(anyString())).thenAnswer(inv -> {
       clock.addAndGet(ProxyDepotService.REAPER_LEASE_TTL.toNanos()); // frozen right after the read
       return false;
@@ -225,6 +276,10 @@ class ProxyDepotServiceReaperLeaseTest {
         "a dead holder's lease must be free before its own heartbeat expires");
     assertTrue(ProxyDepotService.HEARTBEAT_INTERVAL.compareTo(ProxyDepotService.REAPER_LEASE_TTL) < 0,
         "renewed at least once per lease");
+  }
+
+  private void nextHeartbeatInterval() {
+    clock.addAndGet(ProxyDepotService.HEARTBEAT_INTERVAL.toNanos());
   }
 
   private static ProxyEntry entry(final String proxyId) {

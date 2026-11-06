@@ -24,6 +24,7 @@ import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -84,9 +85,11 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
 
   /**
    * Serializes the reap passes with the lease release of {@link #teardown()}, so a pass cannot
-   * renew the lease after it was released.
+   * renew the lease after it was released. A pass takes it with {@code tryLock()} and gives up
+   * when it is busy: the scheduler hands every run to a cached pool, so after a freeze the late
+   * runs arrive in a burst, and queuing them would replay the missed passes one after the other.
    */
-  private final Object reaperLock = new Object();
+  private final ReentrantLock reaperLock = new ReentrantLock();
 
   /**
    * The clock of the lease validity ({@link System#nanoTime()}, replaced in tests).
@@ -105,6 +108,14 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   private long leaseValidUntil;
 
   /**
+   * {@link #nanoClock} reading when this proxy last took the lease (or started). A holder reaps
+   * only once a heartbeat interval has elapsed since, in time rather than in passes: after a
+   * freeze the late passes run back to back, and the other proxies have not published again yet.
+   * Guarded by {@link #reaperLock}.
+   */
+  private long leaseAcquiredAt;
+
+  /**
    * Constructs a new {@link ProxyDepotService}.
    *
    * @param redis the {@link VelocityRedis} instance
@@ -118,6 +129,7 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
 
     this.redis = redis;
     this.nanoClock = nanoClock;
+    this.leaseAcquiredAt = nanoClock.getAsLong();
 
     this.depot.upsert(new ProxyEntry(redis.getServer()));
 
@@ -144,7 +156,8 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
 
     // The lease goes first, so another proxy takes the reaping over at its next pass instead of
     // waiting for the lease to expire. A no-op when another proxy holds it.
-    synchronized (this.reaperLock) {
+    this.reaperLock.lock();
+    try {
       this.leaseValidUntil = 0;
       try {
         this.redis.getProvider().releaseLease(REAPER_LEASE_KEY, this.redis.getProxyId());
@@ -152,6 +165,8 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
         LOGGER.warn("Could not release the reaper lease ({}); it expires on its own within {} s",
             e.toString(), REAPER_LEASE_TTL.toSeconds());
       }
+    } finally {
+      this.reaperLock.unlock();
     }
 
     // Locked against a heartbeat already in flight, which would register this proxy again.
@@ -233,13 +248,21 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
    *
    * <p>Only the proxy holding the reaper lease reaps, so a pause that expires every heartbeat at
    * once does not make the proxies reap one another. The lease is renewed first; a holder whose
-   * renewal fails (it was frozen, the lease expired) takes the lease again and reaps only from
-   * its next pass, once the other proxies have had a heartbeat interval to publish again.</p>
+   * renewal fails (it was frozen, the lease expired) takes the lease again and reaps only once a
+   * full {@link #HEARTBEAT_INTERVAL} has elapsed since, so the other proxies have had the time to
+   * publish again. A pass that finds another one running gives up instead of waiting for it.</p>
    */
   private void reapDeadProxies() {
-    synchronized (this.reaperLock) {
+    if (!this.reaperLock.tryLock()) {
+      return;
+    }
+    try {
       if (this.redis.isShutdown() || !renewReaperLease()) {
         return;
+      }
+
+      if (this.nanoClock.getAsLong() - this.leaseAcquiredAt < HEARTBEAT_INTERVAL.toNanos()) {
+        return; // Just taken over: wait for the others' next heartbeat.
       }
 
       for (final String proxyId : this.getAllProxyIds()) {
@@ -258,6 +281,8 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
 
         reapProxy(proxyId);
       }
+    } finally {
+      this.reaperLock.unlock();
     }
   }
 
@@ -277,7 +302,9 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
         return true;
       }
       this.leaseValidUntil = 0;
-      this.redis.getProvider().acquireLease(REAPER_LEASE_KEY, proxyId, REAPER_LEASE_TTL);
+      if (this.redis.getProvider().acquireLease(REAPER_LEASE_KEY, proxyId, REAPER_LEASE_TTL)) {
+        this.leaseAcquiredAt = this.nanoClock.getAsLong();
+      }
       return false;
     } catch (RuntimeException e) {
       this.leaseValidUntil = 0; // Redis unreachable: the lease cannot be trusted
