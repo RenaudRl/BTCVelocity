@@ -364,6 +364,20 @@ class ProxyDepotServiceReaperLeaseTest {
   }
 
   @Test
+  void stoppingTheHeartbeatStopsOnlyTheHeartbeat() {
+    final Runnable heartbeat = tasks.get(0);
+    heartbeat.run();
+    verify(provider, times(1)).setWithExpiry(eq("heartbeat:" + SELF), anyString(), anyLong());
+
+    service.stopHeartbeat();
+    heartbeat.run(); // a run already handed to the pool
+    verify(provider, times(1)).setWithExpiry(anyString(), anyString(), anyLong());
+
+    reap.run(); // the reaper goes on until the teardown
+    assertEquals(SELF, lease.get());
+  }
+
+  @Test
   void theShutdownReleasesTheLeaseOfTheHolderOnly() {
     reap.run();
     assertEquals(SELF, lease.get());

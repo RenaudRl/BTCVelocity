@@ -1327,13 +1327,19 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
   /**
    * Drops this proxy's player entries in one round trip before the players are transferred, so
-   * the receiving proxy does not refuse them as already connected here.
+   * the receiving proxy does not refuse them as already connected here. Then stops this proxy's
+   * heartbeat, so anything it still leaves in Redis can be reaped by the others.
    */
   private void releaseRedisPlayers() {
     try {
       this.redis.getPlayerService().releaseAll();
     } catch (RuntimeException e) {
       LOGGER.error("Could not release this proxy's players in Redis before the transfer", e);
+    }
+    try {
+      this.redis.getProxyService().stopHeartbeat();
+    } catch (RuntimeException e) {
+      LOGGER.error("Could not stop this proxy's heartbeat after releasing its players", e);
     }
   }
 

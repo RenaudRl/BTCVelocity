@@ -96,6 +96,11 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   private final ReentrantLock reaperLock = new ReentrantLock();
 
   /**
+   * Set by {@link #stopHeartbeat()}. Guarded by {@code this}, like the heartbeat itself.
+   */
+  private boolean heartbeatStopped;
+
+  /**
    * Throttle and outage flag of the failures of {@link #publishHeartbeat()}.
    */
   private final LogThrottle heartbeatFailures = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
@@ -191,6 +196,23 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   }
 
   /**
+   * Stops publishing this proxy's heartbeat, leaving the rest of the shutdown alone. Called once
+   * the players were released: the key then expires within {@link #HEARTBEAT_TTL}, so whatever
+   * this proxy still has in Redis can be reaped instead of being kept alive until the scheduler
+   * stops.
+   */
+  public void stopHeartbeat() {
+    if (this.heartbeatTask != null) {
+      this.heartbeatTask.cancel();
+    }
+
+    // Locked against a heartbeat in flight, and read by the runs already handed to the pool.
+    synchronized (this) {
+      this.heartbeatStopped = true;
+    }
+  }
+
+  /**
    * Get a list of all the {@link ProxyEntry proxy} IDs currently present in the depot.
    *
    * @return the list of all proxy IDs, sorted alphabetically
@@ -224,7 +246,7 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
    * {@link #teardown()}, which takes the same lock, so no beat can follow the teardown.
    */
   private synchronized void publishHeartbeat() {
-    if (this.redis.isShutdown()) {
+    if (this.redis.isShutdown() || this.heartbeatStopped) {
       return;
     }
 
