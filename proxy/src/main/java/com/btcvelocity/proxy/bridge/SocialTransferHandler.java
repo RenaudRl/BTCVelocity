@@ -135,6 +135,8 @@ public final class SocialTransferHandler implements BridgeMessageListener {
     }
     clusterPlayerService.getPlayer(uuid).ifPresentOrElse(
         (VelocityClusterPlayer player) -> player.move(targetServer),
-        () -> LOGGER.debug("Social transfer: player {} not found in cluster", uuid));
+        // 8 characters: enough to correlate, not a full identity in the log (design.md, redaction).
+        () -> LOGGER.debug("Social transfer: player {}… not found in cluster",
+            uuid.toString().substring(0, 8)));
   }
 }
