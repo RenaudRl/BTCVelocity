@@ -18,13 +18,17 @@
 package com.btcvelocity.arrival;
 
 import com.google.inject.Inject;
+import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.server.ServerRegisteredEvent;
 import com.velocitypowered.api.plugin.Plugin;
+import com.velocitypowered.api.plugin.annotation.DataDirectory;
+import java.nio.file.Path;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
@@ -78,23 +82,39 @@ public final class BtcArrivalRouterPlugin {
   // One sweep for every way a destination comes back (registration, restart, failed attempt).
   private static final long LIMBO_SWEEP_SECONDS = 5;
 
+  /**
+   * Maintenance state at startup ({@code true} to start in maintenance). Changed at runtime with
+   * {@code /btcmaintenance}; a restart goes back to this value.
+   */
+  public static final String MAINTENANCE_VARIABLE = "BTC_ARRIVAL_MAINTENANCE";
+
+  static final String MAINTENANCE_PERMISSION = "btc.arrival.maintenance";
+  static final String MAINTENANCE_BYPASS_PERMISSION = "btc.arrival.maintenance.bypass";
+
   private final Logger logger;
   private final ProxyServer proxy;
   private final ArrivalPolicy policy;
   private final String limbo;
+  private final Path dataDirectory;
   private final ArrivalAttempts attempts = new ArrivalAttempts();
+  private ArrivalMessages messages = ArrivalMessages.defaults();
+  private volatile boolean maintenance;
 
   @Inject
-  public BtcArrivalRouterPlugin(ProxyServer proxy, Logger logger) {
+  public BtcArrivalRouterPlugin(ProxyServer proxy, Logger logger,
+                                @DataDirectory Path dataDirectory) {
     this(proxy, logger, ArrivalPolicy.parse(System.getenv(POLICY_VARIABLE)),
-        System.getenv(LIMBO_VARIABLE));
+        System.getenv(LIMBO_VARIABLE), dataDirectory);
+    this.maintenance = Boolean.parseBoolean(System.getenv(MAINTENANCE_VARIABLE));
   }
 
-  BtcArrivalRouterPlugin(ProxyServer proxy, Logger logger, ArrivalPolicy policy, String limbo) {
+  BtcArrivalRouterPlugin(ProxyServer proxy, Logger logger, ArrivalPolicy policy, String limbo,
+                         Path dataDirectory) {
     this.proxy = proxy;
     this.logger = logger;
     this.policy = policy;
     this.limbo = limbo == null || limbo.isBlank() ? null : limbo.trim();
+    this.dataDirectory = dataDirectory;
   }
 
   @Subscribe
@@ -106,7 +126,17 @@ public final class BtcArrivalRouterPlugin {
           POLICY_VARIABLE);
       return;
     }
+    if (this.dataDirectory != null) {
+      this.messages = ArrivalMessages.load(this.dataDirectory);
+    }
+    var commands = this.proxy.getCommandManager();
+    commands.register(commands.metaBuilder("btcmaintenance").plugin(this).build(),
+        new MaintenanceCommand());
     this.logger.info("Arrival destinations: {}", String.join(", ", this.policy.patterns()));
+    if (this.maintenance) {
+      this.logger.warn("Starting in maintenance ({}): players without {} are held in the limbo.",
+          MAINTENANCE_VARIABLE, MAINTENANCE_BYPASS_PERMISSION);
+    }
     if (this.limbo != null) {
       this.logger.info("Limbo: {} (players there are released every {} s)",
           this.limbo, LIMBO_SWEEP_SECONDS);
@@ -141,7 +171,7 @@ public final class BtcArrivalRouterPlugin {
     }
 
     var player = event.getPlayer();
-    Optional<RegisteredServer> chosen = this.choose(Set.of());
+    Optional<RegisteredServer> chosen = this.destinationFor(player, Set.of());
     if (chosen.isEmpty()) {
       chosen = this.limboServer();
     }
@@ -178,7 +208,8 @@ public final class BtcArrivalRouterPlugin {
     var from = event.getServer().getServerInfo().getName();
     this.attempts.record(player.getUniqueId(), from);
 
-    Optional<RegisteredServer> chosen = this.choose(this.attempts.of(player.getUniqueId()));
+    Optional<RegisteredServer> chosen =
+        this.destinationFor(player, this.attempts.of(player.getUniqueId()));
     // To the limbo, unless the limbo is what dropped them or where they still are (failed switch).
     boolean stillInLimbo = player.getCurrentServer()
         .map(current -> this.isLimbo(current.getServerInfo().getName()))
@@ -217,7 +248,8 @@ public final class BtcArrivalRouterPlugin {
       return;
     }
     for (Player player : limboServer.get().getPlayersConnected()) {
-      Optional<RegisteredServer> chosen = this.choose(this.attempts.of(player.getUniqueId()));
+      Optional<RegisteredServer> chosen =
+          this.destinationFor(player, this.attempts.of(player.getUniqueId()));
       if (chosen.isPresent()) {
         var target = chosen.get();
         this.attempts.record(player.getUniqueId(), target.getServerInfo().getName());
@@ -225,6 +257,73 @@ public final class BtcArrivalRouterPlugin {
         this.logger.info("{} leaves the limbo for {}",
             player.getUsername(), target.getServerInfo().getName());
       }
+    }
+  }
+
+  /**
+   * Tells a player who just reached the limbo why they are there.
+   *
+   * @param event the completed server connection
+   */
+  @Subscribe
+  public void onServerPostConnect(ServerPostConnectEvent event) {
+    var player = event.getPlayer();
+    boolean inLimbo = player.getCurrentServer()
+        .map(current -> this.isLimbo(current.getServerInfo().getName()))
+        .orElse(false);
+    if (inLimbo) {
+      player.sendMessage(this.messages.get(
+          this.heldByMaintenance(player) ? "limbo.maintenance" : "limbo.waiting"));
+    }
+  }
+
+  void setMaintenance(boolean maintenance) {
+    this.maintenance = maintenance;
+  }
+
+  // Maintenance is "no destination" for whoever cannot bypass it: the limbo fallback does the rest.
+  private Optional<RegisteredServer> destinationFor(Player player, Set<String> excluded) {
+    return this.heldByMaintenance(player) ? Optional.empty() : this.choose(excluded);
+  }
+
+  private boolean heldByMaintenance(Player player) {
+    return this.maintenance && !player.hasPermission(MAINTENANCE_BYPASS_PERMISSION);
+  }
+
+  /** {@code /btcmaintenance [on|off]}: shows or switches the maintenance state. */
+  private final class MaintenanceCommand implements SimpleCommand {
+
+    @Override
+    public void execute(Invocation invocation) {
+      var args = invocation.arguments();
+      var source = invocation.source();
+      var self = BtcArrivalRouterPlugin.this;
+      if (args.length == 1 && args[0].equalsIgnoreCase("on")) {
+        if (self.limbo == null) {
+          source.sendMessage(self.messages.get("command.maintenance.no-limbo"));
+          return;
+        }
+        self.setMaintenance(true);
+        self.logger.warn("Maintenance enabled");
+        source.sendMessage(self.messages.get("command.maintenance.enabled"));
+      } else if (args.length == 1 && args[0].equalsIgnoreCase("off")) {
+        self.setMaintenance(false);
+        self.logger.info("Maintenance disabled");
+        source.sendMessage(self.messages.get("command.maintenance.disabled"));
+      } else {
+        source.sendMessage(self.messages.get(self.maintenance
+            ? "command.maintenance.status-on" : "command.maintenance.status-off"));
+      }
+    }
+
+    @Override
+    public List<String> suggest(Invocation invocation) {
+      return invocation.arguments().length <= 1 ? List.of("on", "off") : List.of();
+    }
+
+    @Override
+    public boolean hasPermission(Invocation invocation) {
+      return invocation.source().hasPermission(MAINTENANCE_PERMISSION);
     }
   }
 

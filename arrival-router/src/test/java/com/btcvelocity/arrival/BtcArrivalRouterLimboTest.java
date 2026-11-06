@@ -48,7 +48,7 @@ class BtcArrivalRouterLimboTest {
   private final List<RegisteredServer> registered = new ArrayList<>();
   private final RegisteredServer limbo = this.server("limbo");
   private final BtcArrivalRouterPlugin router = new BtcArrivalRouterPlugin(
-      this.proxy, NOPLogger.NOP_LOGGER, ArrivalPolicy.parse("Lobby-*,*"), "limbo");
+      this.proxy, NOPLogger.NOP_LOGGER, ArrivalPolicy.parse("Lobby-*,*"), "limbo", null);
 
   BtcArrivalRouterLimboTest() {
     doReturn(this.registered).when(this.proxy).getAllServers();
@@ -108,6 +108,52 @@ class BtcArrivalRouterLimboTest {
     this.router.onKickedFromServer(event);
 
     assertInstanceOf(KickedFromServerEvent.DisconnectPlayer.class, event.getResult());
+  }
+
+  @Test
+  void maintenanceHoldsArrivalsInTheLimboEvenWithALobbyUp() {
+    // Arrange
+    this.server("Lobby-1");
+    this.router.setMaintenance(true);
+    var event = new PlayerChooseInitialServerEvent(player(), null);
+
+    // Act
+    this.router.onChooseInitialServer(event);
+
+    // Assert
+    assertSame(this.limbo, event.getInitialServer().orElseThrow());
+  }
+
+  @Test
+  void staffWithTheBypassPermissionPassMaintenance() {
+    // Witness: maintenance that also locks staff out would make it impossible to work.
+    var lobby = this.server("Lobby-1");
+    this.router.setMaintenance(true);
+    var staff = player();
+    when(staff.hasPermission(BtcArrivalRouterPlugin.MAINTENANCE_BYPASS_PERMISSION)).thenReturn(true);
+    var event = new PlayerChooseInitialServerEvent(staff, null);
+
+    this.router.onChooseInitialServer(event);
+
+    assertSame(lobby, event.getInitialServer().orElseThrow());
+  }
+
+  @Test
+  void theSweepKeepsMaintenancePlayersUntilItEnds() {
+    // Arrange
+    var waiting = player();
+    var request = mock(ConnectionRequestBuilder.class);
+    when(waiting.createConnectionRequest(org.mockito.ArgumentMatchers.any())).thenReturn(request);
+    doReturn(List.of(waiting)).when(this.limbo).getPlayersConnected();
+    this.server("Lobby-1");
+    this.router.setMaintenance(true);
+
+    // Act + Assert — held while maintenance is on, released once it is off
+    this.router.releaseFromLimbo();
+    verify(request, never()).fireAndForget();
+    this.router.setMaintenance(false);
+    this.router.releaseFromLimbo();
+    verify(request).fireAndForget();
   }
 
   @Test
