@@ -29,6 +29,7 @@ import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.Component;
 
 /**
@@ -53,14 +54,26 @@ public final class RedisClusterPlayerService implements VelocityClusterPlayerSer
     return playerService().getTotalPlayerCount();
   }
 
+  /**
+   * Served from the background snapshot, never from Redis: this runs on Netty loops (server
+   * selection, BungeeCord {@code PlayerCount}) and in {@code arrival-router}. When the snapshot is
+   * too old, Redis is presumed down and the count falls back to this proxy's own players.
+   */
   @Override
   public int getPlayersOnServerCount(final String serverName) {
-    return playerService().getPlayerEntriesInServer(serverName).size();
+    return playerService().getCachedPlayersOnServer(serverName)
+        .orElseGet(() -> this.server.getServer(serverName)
+            .map(rs -> rs.getPlayersConnected().size())
+            .orElse(0));
   }
 
+  /**
+   * Served from the background snapshot (at most {@link PlayerDepotService#REFRESH_INTERVAL} old
+   * while Redis answers): the server list ping samples it on a Netty loop.
+   */
   @Override
   public Collection<VelocityClusterPlayer> getAllPlayers() {
-    return playerService().getAll().stream()
+    return playerService().getCachedEntries().stream()
         .<VelocityClusterPlayer>map(this::toRedisPlayer)
         .toList();
   }
@@ -97,7 +110,7 @@ public final class RedisClusterPlayerService implements VelocityClusterPlayerSer
   }
 
   @Override
-  public boolean onPlayerConnect(final ConnectedPlayer player) {
+  public CompletableFuture<Boolean> onPlayerConnect(final ConnectedPlayer player) {
     return playerService().onPlayerConnect(player);
   }
 

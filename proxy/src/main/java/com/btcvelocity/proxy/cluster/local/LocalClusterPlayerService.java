@@ -26,6 +26,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.Component;
 
 /**
@@ -96,8 +97,8 @@ public final class LocalClusterPlayerService implements VelocityClusterPlayerSer
   }
 
   @Override
-  public boolean onPlayerConnect(final ConnectedPlayer player) {
-    return true;
+  public CompletableFuture<Boolean> onPlayerConnect(final ConnectedPlayer player) {
+    return CompletableFuture.completedFuture(true);
   }
 
   @Override

@@ -296,36 +296,44 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
           return;
         }
 
-        if (!this.server.getClusterPlayerService().onPlayerConnect(player)) {
-          return;
-        }
-
-        player.fullyConnected();
-
-        ServerLoginSuccessPacket success = new ServerLoginSuccessPacket();
-        success.setUsername(player.getUsername());
-        success.setProperties(player.getGameProfileProperties());
-        success.setUuid(player.getUniqueId());
-        if (inbound.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_26_2)) {
-          success.setSessionId(server.getSessionId());
-        }
-        mcConnection.write(success);
-
-        loginState = State.SUCCESS_SENT;
-        if (inbound.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_20_2)) {
-          loginState = State.ACKNOWLEDGED;
-          mcConnection.setActiveSessionHandler(StateRegistry.PLAY, new InitialConnectSessionHandler(player, server));
-          server.getEventManager().fire(new PostLoginEvent(player)).thenCompose((ignored) ->
-              connectToInitialServer(player)).exceptionally((ex) -> {
-                LOGGER.error("Exception while connecting {} to initial server", player, ex);
-                return null;
-              });
-        }
+        // The cluster check may wait on Redis: finish the login when it answers, on this loop.
+        this.server.getClusterPlayerService().onPlayerConnect(player).thenAcceptAsync(allowed -> {
+          if (allowed && !mcConnection.isClosed()) {
+            sendLoginSuccess(player);
+          }
+        }, mcConnection.eventLoop()).exceptionally((ex) -> {
+          LOGGER.error("Exception while completing login for {}", player, ex);
+          return null;
+        });
       }
     }, mcConnection.eventLoop()).exceptionally((ex) -> {
       LOGGER.error("Exception while completing login initialisation phase for {}", player, ex);
       return null;
     });
+  }
+
+  private void sendLoginSuccess(final ConnectedPlayer player) {
+    player.fullyConnected();
+
+    ServerLoginSuccessPacket success = new ServerLoginSuccessPacket();
+    success.setUsername(player.getUsername());
+    success.setProperties(player.getGameProfileProperties());
+    success.setUuid(player.getUniqueId());
+    if (inbound.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_26_2)) {
+      success.setSessionId(server.getSessionId());
+    }
+    mcConnection.write(success);
+
+    loginState = State.SUCCESS_SENT;
+    if (inbound.getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_20_2)) {
+      loginState = State.ACKNOWLEDGED;
+      mcConnection.setActiveSessionHandler(StateRegistry.PLAY, new InitialConnectSessionHandler(player, server));
+      server.getEventManager().fire(new PostLoginEvent(player)).thenCompose((ignored) ->
+          connectToInitialServer(player)).exceptionally((ex) -> {
+            LOGGER.error("Exception while connecting {} to initial server", player, ex);
+            return null;
+          });
+    }
   }
 
   private CompletableFuture<Void> connectToInitialServer(final ConnectedPlayer player) {
