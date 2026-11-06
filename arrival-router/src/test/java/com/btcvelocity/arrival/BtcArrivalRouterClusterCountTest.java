@@ -50,6 +50,8 @@ class BtcArrivalRouterClusterCountTest {
   BtcArrivalRouterClusterCountTest() {
     doReturn(this.registered).when(this.proxy).getAllServers();
     when(this.proxy.getClusterPlayerService()).thenReturn(this.cluster);
+    // A mocked interface answers false to a default method: say this one sees other proxies.
+    when(this.cluster.isClustered()).thenReturn(true);
   }
 
   /** A server with {@code local} players on this proxy. */
@@ -121,6 +123,18 @@ class BtcArrivalRouterClusterCountTest {
 
     // Assert
     assertSame(recovering, this.arrivalOf());
+  }
+
+  @Test
+  void aLocalOnlyServiceIsNotAskedAtAll() {
+    // Arrange — a single proxy: the local count is the whole truth
+    var quiet = this.server("Lobby-1", 1);
+    this.server("Lobby-2", 5);
+    when(this.cluster.isClustered()).thenReturn(false);
+
+    // Act + Assert
+    assertSame(quiet, this.arrivalOf());
+    verify(this.cluster, never()).getPlayersOnServerCount("Lobby-1");
   }
 
   @Test

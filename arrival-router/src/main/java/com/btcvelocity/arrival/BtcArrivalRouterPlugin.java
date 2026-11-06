@@ -117,14 +117,19 @@ public final class BtcArrivalRouterPlugin {
     this.policy = policy;
     this.limbo = limbo == null || limbo.isBlank() ? null : limbo.trim();
     this.dataDirectory = dataDirectory;
-    this.counts = new PlayerCounts(this::clusterCount, this::localCount,
+    this.counts = new PlayerCounts(this::clusterCount, this::localCount, this::isClustered,
         System::currentTimeMillis, logger);
   }
 
-  // The cluster-wide count (every proxy, through Redis); without a cluster service, ours alone.
-  private int clusterCount(String serverName) {
+  // Only a service that sees other proxies is worth a cached, fallback-guarded call.
+  private boolean isClustered() {
     var cluster = this.proxy.getClusterPlayerService();
-    return cluster == null ? this.localCount(serverName) : cluster.getPlayersOnServerCount(serverName);
+    return cluster != null && cluster.isClustered();
+  }
+
+  // The cluster-wide count (every proxy, through Redis).
+  private int clusterCount(String serverName) {
+    return this.proxy.getClusterPlayerService().getPlayersOnServerCount(serverName);
   }
 
   private int localCount(String serverName) {

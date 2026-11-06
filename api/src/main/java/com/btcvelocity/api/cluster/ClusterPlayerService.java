@@ -22,6 +22,16 @@ import net.kyori.adventure.text.Component;
 public interface ClusterPlayerService {
 
   /**
+   * Whether this service sees other proxies. A local-only service answers from this proxy's own
+   * players, so its counts are as cheap and as fresh as they get and need no caching.
+   *
+   * @return {@code false} when the counts cover this proxy alone
+   */
+  default boolean isClustered() {
+    return true;
+  }
+
+  /**
    * Gets the total number of players connected across all proxies.
    *
    * @return the cluster-wide player count

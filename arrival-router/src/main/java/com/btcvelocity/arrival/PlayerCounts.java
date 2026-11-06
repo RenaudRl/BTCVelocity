@@ -19,6 +19,7 @@ package com.btcvelocity.arrival;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.ToIntFunction;
 import org.slf4j.Logger;
@@ -51,6 +52,7 @@ final class PlayerCounts {
 
   private final ToIntFunction<String> cluster;
   private final ToIntFunction<String> local;
+  private final BooleanSupplier clustered;
   private final LongSupplier clock;
   private final Logger logger;
   private final Map<String, Cached> cache = new ConcurrentHashMap<>();
@@ -61,13 +63,16 @@ final class PlayerCounts {
    *
    * @param cluster the cluster-wide count of a server, by name; may throw when the cluster is down
    * @param local the count of this proxy alone, by name; never throws
+   * @param clustered whether the cluster sees other proxies; when it does not, the local count is
+   *                  used as is: it is exact, and cached it would only be staler
    * @param clock the current time in milliseconds
    * @param logger where a fall back to the local count, and the return, are said
    */
-  PlayerCounts(ToIntFunction<String> cluster, ToIntFunction<String> local, LongSupplier clock,
-               Logger logger) {
+  PlayerCounts(ToIntFunction<String> cluster, ToIntFunction<String> local,
+               BooleanSupplier clustered, LongSupplier clock, Logger logger) {
     this.cluster = cluster;
     this.local = local;
+    this.clustered = clustered;
     this.clock = clock;
     this.logger = logger;
   }
@@ -79,6 +84,9 @@ final class PlayerCounts {
    * @return the cluster count, or this proxy's count while the cluster cannot answer
    */
   int of(String serverName) {
+    if (!this.clustered.getAsBoolean()) {
+      return this.local.applyAsInt(serverName);
+    }
     long now = this.clock.getAsLong();
     if (now < this.clusterDownUntil) {
       return this.local.applyAsInt(serverName);

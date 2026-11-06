@@ -33,13 +33,27 @@ class PlayerCountsTest {
   private final AtomicLong now = new AtomicLong(1_000_000L);
   private final AtomicInteger clusterCalls = new AtomicInteger();
   private final AtomicBoolean clusterDown = new AtomicBoolean();
+  private final AtomicBoolean clustered = new AtomicBoolean(true);
+  private final AtomicInteger local = new AtomicInteger(LOCAL);
   private final PlayerCounts counts = new PlayerCounts(name -> {
     this.clusterCalls.incrementAndGet();
     if (this.clusterDown.get()) {
       throw new IllegalStateException("redis is down");
     }
     return CLUSTER;
-  }, name -> LOCAL, this.now::get, NOPLogger.NOP_LOGGER);
+  }, name -> this.local.get(), this.clustered::get, this.now::get, NOPLogger.NOP_LOGGER);
+
+  @Test
+  void aServiceThatSeesNoOtherProxyIsReadAsIsWithoutCache() {
+    // Witness: the local count is exact and free; a 1 s cache on it would only make it staler.
+    this.clustered.set(false);
+
+    assertEquals(LOCAL, this.counts.of("Lobby-1"));
+    this.local.set(LOCAL + 1);
+
+    assertEquals(LOCAL + 1, this.counts.of("Lobby-1"));
+    assertEquals(0, this.clusterCalls.get(), "the cluster function is never called");
+  }
 
   @Test
   void theClusterCountIsUsedNotTheLocalOne() {
