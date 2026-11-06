@@ -208,11 +208,11 @@ public class DecompressionBombHandler extends ChannelInboundHandlerAdapter {
 
     final int count = violations.incrementAndGet();
     LOGGER.warn("[DecompressionBomb] {} — violation {}/{} from {}",
-        String.format(format, args), count, maxViolations, remoteAddress);
+        String.format(format, args), count, maxViolations, LogAddress.of(remoteAddress));
 
     if (count >= maxViolations) {
       LOGGER.warn("[DecompressionBomb] Closing connection from {} after {} decompression-bomb violations",
-          remoteAddress, count);
+          LogAddress.of(remoteAddress), count);
       ctx.close();
     }
   }

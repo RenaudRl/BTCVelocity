@@ -62,6 +62,9 @@ public final class AdmissionJournal {
   /** The most networks followed at once; beyond it, lines are written in full. */
   private static final int MAX_BURSTS = 10_000;
 
+  /** How much of a UUID the journal writes: its first 8 characters, enough to tell lines apart. */
+  private static final int UUID_LOGGED_LENGTH = 8;
+
   private static final long MEMORY_SIZE = 4096;
   private static final int LINE_SEPARATOR = 0x2028;
   private static final int PARAGRAPH_SEPARATOR = 0x2029;
@@ -98,10 +101,10 @@ public final class AdmissionJournal {
       append(line, "ts", this.at.toString());
       append(line, "user", this.username);
       append(line, "identity", identityOf(this.phase));
-      append(line, "uuid", this.uuid == null ? "unknown" : this.uuid.toString());
+      append(line, "uuid", this.uuid == null ? "unknown"
+          : this.uuid.toString().substring(0, UUID_LOGGED_LENGTH));
       final Verdict judgement = this.verdict;
-      append(line, "ip",
-          judgement.judged() == null ? "unknown" : judgement.judged().getHostAddress());
+      append(line, "ip", Networks.forJournal(judgement.judged()));
       append(line, "origin", judgement.origin().label());
       append(line, "class", judgement.ipClass() == null ? "none" : judgement.ipClass().key());
       append(line, "source", judgement.sourceId() == null ? "none" : judgement.sourceId());

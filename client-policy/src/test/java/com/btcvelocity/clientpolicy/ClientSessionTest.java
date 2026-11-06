@@ -184,8 +184,11 @@ class ClientSessionTest {
         List.of("fabric:register"));
 
     // Assert
-    assertEquals("client-policy player=Steve uuid=00000000-0000-0000-0000-000000000001"
+    assertEquals("client-policy player=Steve uuid=00000000"
         + " origin=JAVA event=brand-declared brand=\"vanilla\" channels=0", brandLine);
+    assertFalse(brandLine.contains("0000-0000-0000-000000000001"), brandLine);
+    assertTrue(ObservationLog.bedrock(who).contains("uuid=00000000 "), ObservationLog.bedrock(who));
+    assertFalse(ObservationLog.bedrock(who).contains("0000-0000-0000-000000000001"));
     assertTrue(channelLine.contains("event=channels-added added=[\"fabric:register\"]"));
     assertTrue(clue.contains("event=inconsistency") && clue.endsWith("action=none"));
     assertTrue(ObservationLog.bedrock(who).endsWith("origin BEDROCK, client policy n/a"));

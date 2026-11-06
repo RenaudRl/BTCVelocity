@@ -203,9 +203,12 @@ class AdmissionConfigAndJournalTest {
     assertTrue(entry.isPresent());
     assertEquals(1, log.lines().size());
     assertEquals("INFO ts=2026-09-29T20:15:30Z user=Steve identity=authenticated"
-        + " uuid=33333333-3333-3333-3333-333333333333 ip=203.0.113.50 origin=direct"
+        + " uuid=33333333 ip=203.0.113.0/24 origin=direct"
         + " class=datacenter source=dc-list decision=refused code=ADM-VPN-DC basis=listed"
         + " phase=login mode=enforce", log.lines().getFirst());
+    // The witness: the whole UUID and the whole address must never come back into the journal.
+    assertFalse(log.lines().getFirst().contains("3333-3333"), log.lines().getFirst());
+    assertFalse(log.lines().getFirst().contains("203.0.113.50"), log.lines().getFirst());
   }
 
   @Test

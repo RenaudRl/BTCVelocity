@@ -38,6 +38,7 @@ final class ObservationLog {
   private static final String PREFIX = "client-policy";
   private static final int MAX_VALUE_LENGTH = 96;
   private static final int MAX_LISTED = 24;
+  private static final int UUID_LOGGED_LENGTH = 8;
   private static final char SECTION = (char) 0xA7;
 
   private ObservationLog() {
@@ -105,7 +106,7 @@ final class ObservationLog {
    * @return the journal line
    */
   static String bedrock(Who who) {
-    return PREFIX + " player=" + safe(who.name()) + " uuid=" + who.uuid()
+    return PREFIX + " player=" + safe(who.name()) + " uuid=" + shortId(who.uuid())
         + " origin BEDROCK, client policy n/a";
   }
 
@@ -130,7 +131,7 @@ final class ObservationLog {
     };
     DenyRule rule = verdict.rule().orElseThrow();
     if (verdict.action() == RefusalPolicy.Action.EXEMPT_UNKNOWN) {
-      return PREFIX + " player=" + safe(who.name()) + " uuid=" + who.uuid()
+      return PREFIX + " player=" + safe(who.name()) + " uuid=" + shortId(who.uuid())
           + " origin UNKNOWN, refusal skipped rule=" + quote(rule.label()) + " target="
           + rule.target() + " value=" + quote(verdict.value().orElse("")) + " mode="
           + (mode == ClientPolicyConfig.Mode.ENFORCE ? "enforce" : "dry-run");
@@ -169,8 +170,13 @@ final class ObservationLog {
 
   private static StringBuilder head(Who who, ClientOrigin origin, String event) {
     return new StringBuilder(PREFIX).append(" player=").append(safe(who.name()))
-        .append(" uuid=").append(who.uuid()).append(" origin=").append(origin)
+        .append(" uuid=").append(shortId(who.uuid())).append(" origin=").append(origin)
         .append(" event=").append(event);
+  }
+
+  /** The first 8 characters of an account id: enough to tell lines apart, not the whole id. */
+  static String shortId(UUID uuid) {
+    return uuid.toString().substring(0, UUID_LOGGED_LENGTH);
   }
 
   private static String list(List<String> values) {

@@ -93,7 +93,7 @@ class JournalAggregationTest {
 
     assertEquals(3, this.log.lines().size());
     assertTrue(this.log.lines().get(1).contains("suppressed=1"), this.log.lines().get(1));
-    assertTrue(this.log.lines().get(2).contains("ip=203.0.113.3"));
+    assertTrue(this.log.lines().get(2).contains("ip=203.0.113.0/24"));
   }
 
   @Test
@@ -117,5 +117,13 @@ class JournalAggregationTest {
     assertEquals("2001:db8:1:2:0:0:0:0/64", Networks.of(ip("2001:db8:1:2:3::5"), 24, 64));
     assertEquals("2001:db8:1:0:0:0:0:0/48", Networks.of(ip("2001:db8:1:2:3::5"), 24, 48));
     assertEquals("203.0.113.0/24", Networks.of(ip("::ffff:203.0.113.77"), 24, 48));
+  }
+
+  @Test
+  void theJournalWritesAnAddressAtTheStaffGrainAndAnUnknownOneAsUnknown() {
+    assertEquals("203.0.113.0/24", Networks.forJournal(ip("203.0.113.77")));
+    assertEquals("2001:db8:1:0:0:0:0:0/48", Networks.forJournal(ip("2001:db8:1:2:3::5")));
+    assertEquals("203.0.113.0/24", Networks.forJournal(ip("::ffff:203.0.113.77")));
+    assertEquals("unknown", Networks.forJournal(null));
   }
 }
