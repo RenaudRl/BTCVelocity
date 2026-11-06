@@ -110,6 +110,22 @@ class NetworkRateAdmissionTest {
   }
 
   @Test
+  void theGeyserListenerIsNeverCountedAndTheMainListenerStillIs() {
+    final AdmissionEngine engine = engine(ENFORCING);
+
+    for (int i = 0; i < 5; i++) {
+      final Verdict verdict = engine.decidePreLogin(
+          Attempt.claimed("Bedrock" + i, ip("203.0.113.10"), true));
+      assertEquals(Basis.GEYSER_ORIGIN, verdict.basis(), "deferred to Floodgate, never rate-limited");
+    }
+
+    assertEquals(Action.ADMIT, attempt(engine, "Steve", "203.0.113.10").action());
+    assertEquals(Action.ADMIT, attempt(engine, "Alex", "203.0.113.11").action());
+    assertEquals(Action.REFUSE, attempt(engine, "Bot", "203.0.113.12").action(),
+        "the main listener keeps its bucket, untouched by the Geyser listener");
+  }
+
+  @Test
   void aNetworkBelowTheLimitIsNeverTouched() {
     final AdmissionEngine engine = engine(ENFORCING);
 

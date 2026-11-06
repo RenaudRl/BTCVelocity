@@ -31,6 +31,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>The rule, in order:
  * <ol>
+ *   <li>A connection of the proxy's {@code geyser} listener counts as coming from Geyser's address,
+ *       even with an empty {@code geyser-addresses}.</li>
  *   <li>A Floodgate player coming from Geyser's own address is never judged on that address:
  *       every Bedrock player shares it, and a datacenter address for Geyser would refuse them
  *       all. At the pre-login the decision waits for the login; there, the address Floodgate
@@ -209,11 +211,16 @@ public final class AdmissionEngine {
             info));
   }
 
+  /** The proxy's own Geyser listener counts as a Geyser address, even with an empty list. */
+  private boolean fromGeyser(final Attempt attempt) {
+    return attempt.viaGeyserListener() || this.config.geyserAddresses().contains(attempt.remote());
+  }
+
   private Verdict decideOn(final Attempt attempt, final Phase phase,
       final IpClassifier lists) {
     InetAddress judged = attempt.remote();
     Origin origin = Origin.DIRECT;
-    if (this.config.geyserAddresses().contains(attempt.remote())) {
+    if (fromGeyser(attempt)) {
       if (phase == Phase.PRE_LOGIN) {
         return new Verdict(Action.DEFER, Basis.GEYSER_ORIGIN, Origin.GEYSER_UNCONFIRMED, null,
             null, null);
@@ -291,7 +298,8 @@ public final class AdmissionEngine {
 
   private Optional<Verdict> decideListsAtLogin(final Attempt authenticated) {
     final Verdict preLogin = decide(
-        Attempt.claimed(authenticated.username(), authenticated.remote()), Phase.PRE_LOGIN);
+        Attempt.claimed(authenticated.username(), authenticated.remote(),
+            authenticated.viaGeyserListener()), Phase.PRE_LOGIN);
     return switch (preLogin.action()) {
       case DEFER -> Optional.of(decide(authenticated, Phase.LOGIN));
       case REFUSE -> Optional.of(preLogin);
@@ -319,7 +327,8 @@ public final class AdmissionEngine {
    * Spends one attempt of the connection's network and says whether it is over the limit.
    *
    * <p>Never applied to: an address that is not public (the proxy's own neighbours, carrier-grade
-   * NAT range), an address of {@code geyser-addresses} (every Bedrock player arrives from it), an
+   * NAT range), an address of {@code geyser-addresses} or a connection of the proxy's Geyser listener
+   * (every Bedrock player arrives from it), an
    * exempted network. A player exemption needs the authenticated name <em>and</em> UUID, and the
    * pre-login only has a name anyone can type; a name some exemption carries therefore does not
    * excuse the attempt, it defers the decision to the login ({@link #decideRateAtLogin}), exactly
@@ -330,7 +339,7 @@ public final class AdmissionEngine {
    *     {@code AWAITING_IDENTITY} when over the limit, a clean {@code ADMIT} otherwise
    */
   public Verdict decideRate(final Attempt attempt) {
-    final Optional<InetAddress> network = rateSubject(attempt.remote());
+    final Optional<InetAddress> network = rateSubject(attempt);
     if (network.isEmpty() || this.rate.tryAcquire(network.get())) {
       return NOT_CONCERNED;
     }
@@ -364,14 +373,15 @@ public final class AdmissionEngine {
         || this.config.exemptions().coversPlayer(authenticated.username(), authenticated.uuid())) {
       return Optional.empty();
     }
-    return rateSubject(authenticated.remote())
+    return rateSubject(authenticated)
         .filter(this.rate::isLimited)
         .map(network -> rateVerdict(Action.REFUSE, Basis.RATE_NETWORK, authenticated));
   }
 
   /** The address the bound counts, or empty when this connection is never counted. */
-  private Optional<InetAddress> rateSubject(final InetAddress remote) {
-    if (!this.config.networkRate().enabled()) {
+  private Optional<InetAddress> rateSubject(final Attempt attempt) {
+    final InetAddress remote = attempt.remote();
+    if (!this.config.networkRate().enabled() || attempt.viaGeyserListener()) {
       return Optional.empty();
     }
     final Optional<InetAddress> network = AddressPolicy.classifiable(remote);
