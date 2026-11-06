@@ -136,14 +136,17 @@ public final class ConnectionManager {
       bootstrap.option(ChannelOption.TCP_FASTOPEN, 3);
     }
 
-    if (server.getConfiguration().isEnableReusePort()) {
+    // A named listener is bound once, without SO_REUSEPORT: another process could otherwise bind
+    // the same port and receive part of the connections.
+    final boolean reusePort = listener == null && server.getConfiguration().isEnableReusePort();
+    if (reusePort) {
       // We don't need a boss group, since each worker will bind to the socket
       bootstrap.option(UnixChannelOption.SO_REUSEPORT, true).group(this.workerGroup);
     } else {
       bootstrap.group(this.bossGroup, this.workerGroup);
     }
 
-    final int binds = server.getConfiguration().isEnableReusePort()
+    final int binds = reusePort
         ? ((MultithreadEventExecutorGroup) this.workerGroup).executorCount() : 1;
 
     for (int bind = 0; bind < binds; bind++) {
