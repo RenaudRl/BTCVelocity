@@ -3217,8 +3217,8 @@ public final class VelocityConfiguration implements ProxyConfig {
    * Security configuration for anti-decompression-bomb protection and other network-layer
    * safeguards.
    *
-   * <p>This configuration block controls the {@code DecompressionBombHandler} and
-   * {@code CompressionRatioMonitor} Netty handlers that protect the proxy from malicious
+   * <p>This configuration block sets the limits of the {@code DecompressionGuard} that the
+   * compression decoder applies before inflating, to protect the proxy from malicious
    * clients or backend servers sending small compressed payloads that expand into enormous
    * uncompressed buffers (decompression bombs).</p>
    */
@@ -3226,8 +3226,7 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     /**
      * Whether anti-decompression-bomb protection is enabled. When {@code true}, the
-     * {@code CompressionRatioMonitor} and {@code DecompressionBombHandler} are inserted into
-     * the Netty pipeline whenever compression is enabled on a connection.
+     * compression decoder of every connection gets a {@code DecompressionGuard}.
      */
     @Expose
     private boolean enabled;
@@ -3307,7 +3306,7 @@ public final class VelocityConfiguration implements ProxyConfig {
     /**
      * Gets whether anti-decompression-bomb protection is enabled.
      *
-     * @return {@code true} if the protection handlers should be wired into the pipeline
+     * @return {@code true} if the decompression guard should be given to the compression decoder
      */
     public boolean isEnabled() {
       return enabled;

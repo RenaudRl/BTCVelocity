@@ -21,6 +21,7 @@ import static com.velocitypowered.natives.util.MoreByteBufUtils.ensureCompatible
 import static com.velocitypowered.natives.util.MoreByteBufUtils.preferredBuffer;
 import static com.velocitypowered.proxy.protocol.util.NettyPreconditions.checkFrame;
 
+import com.btcvelocity.proxy.security.DecompressionGuard;
 import com.velocitypowered.natives.compression.VelocityCompressor;
 import com.velocitypowered.proxy.network.limiter.PacketLimiter;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
@@ -55,6 +56,8 @@ public class MinecraftCompressDecoder extends MessageToMessageDecoder<ByteBuf> {
   private final VelocityCompressor compressor;
   @Nullable
   private PacketLimiter packetLimiter;
+  @Nullable
+  private DecompressionGuard decompressionGuard;
 
   /**
    * Creates a new {@code MinecraftCompressDecoder} with the specified compression {@code threshold}.
@@ -71,6 +74,7 @@ public class MinecraftCompressDecoder extends MessageToMessageDecoder<ByteBuf> {
 
   @Override
   protected void decode(final ChannelHandlerContext ctx, final ByteBuf in, final List<Object> out) throws Exception {
+    final int frameSize = in.readableBytes();
     int claimedUncompressedSize = ProtocolUtils.readVarInt(in);
     if (claimedUncompressedSize == 0) {
       if (!SKIP_COMPRESSION_VALIDATION) {
@@ -80,6 +84,9 @@ public class MinecraftCompressDecoder extends MessageToMessageDecoder<ByteBuf> {
       }
 
       // This message is not compressed.
+      if (!withinBombLimits(ctx, frameSize, in.readableBytes())) {
+        return;
+      }
       if (packetLimiter != null && !packetLimiter.account(in.readableBytes())) {
         throw new QuietDecoderException("Rate limit exceeded while processing packets for %s"
             .formatted(ctx.channel().remoteAddress()));
@@ -98,6 +105,10 @@ public class MinecraftCompressDecoder extends MessageToMessageDecoder<ByteBuf> {
       checkFrame(claimedUncompressedSize <= SERVERBOUND_UNCOMPRESSED_CAP,
               "Uncompressed size %s exceeds hard threshold of %s", claimedUncompressedSize,
               SERVERBOUND_UNCOMPRESSED_CAP);
+    }
+    // Before allocating and inflating: a packet that breaks the BTC limits must cost nothing.
+    if (!withinBombLimits(ctx, frameSize, claimedUncompressedSize)) {
+      return;
     }
     ByteBuf compatibleIn = ensureCompatible(ctx.alloc(), compressor, in);
     ByteBuf uncompressed = preferredBuffer(ctx.alloc(), compressor, claimedUncompressedSize);
@@ -118,6 +129,25 @@ public class MinecraftCompressDecoder extends MessageToMessageDecoder<ByteBuf> {
     }
   }
 
+  /**
+   * Asks the BTC guard whether a packet may go on; a packet it refuses is left unread.
+   *
+   * @return {@code false} if the packet must be dropped
+   * @throws QuietDecoderException if the packet was the last violation the guard tolerates
+   */
+  private boolean withinBombLimits(final ChannelHandlerContext ctx, final int compressedSize,
+                                   final int decompressedSize) {
+    if (decompressionGuard == null) {
+      return true;
+    }
+    return switch (decompressionGuard.inspect(compressedSize, decompressedSize,
+        ctx.channel().remoteAddress())) {
+      case ACCEPT -> true;
+      case DROP -> false;
+      case CLOSE -> throw new QuietDecoderException("Decompression bomb limits exceeded");
+    };
+  }
+
   @Override
   public void handlerRemoved(final ChannelHandlerContext ctx) {
     compressor.close();
@@ -129,5 +159,9 @@ public class MinecraftCompressDecoder extends MessageToMessageDecoder<ByteBuf> {
 
   public void setPacketLimiter(@Nullable PacketLimiter packetLimiter) {
     this.packetLimiter = packetLimiter;
+  }
+
+  public void setDecompressionGuard(@Nullable DecompressionGuard decompressionGuard) {
+    this.decompressionGuard = decompressionGuard;
   }
 }
