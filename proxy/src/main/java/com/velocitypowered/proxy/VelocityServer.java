@@ -45,6 +45,7 @@ import com.btcvelocity.proxy.command.builtin.ProxyAliasCommand;
 import com.btcvelocity.proxy.command.builtin.QueueAdminCommand;
 import com.btcvelocity.proxy.command.builtin.SlashServerCommand;
 import com.btcvelocity.proxy.command.builtin.TransferCommand;
+import com.btcvelocity.proxy.observability.ObservabilityService;
 import com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory;
 import com.btcvelocity.proxy.queue.RedisVelocityQueueManager;
 import com.btcvelocity.proxy.queue.VelocityQueueManager;
@@ -306,6 +307,11 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    * and its backend servers.
    */
   private @MonotonicNonNull VelocityBridgeChannel bridgeChannel;
+
+  /**
+   * The event loop watchdog and the local metrics listener, stopped at shutdown.
+   */
+  private volatile @Nullable ObservabilityService observability;
 
   /**
    * Registry of the latest {@link com.btcvelocity.api.bridge.BridgeMessage.Health} reports
@@ -662,6 +668,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     if (configuration.isQueryEnabled()) {
       this.cm.queryBind(configuration.getBind().getHostString(), configuration.getQueryPort());
     }
+
+    this.observability = ObservabilityService.start(this, cm.getBossGroup(), cm.getWorkerGroup(),
+        configuration.getObservability());
 
     final String defaultPackage = new String(new byte[] {'o', 'r', 'g', '.', 'b', 's', 't', 'a', 't', 's' });
     if (!MetricsBase.class.getPackage().getName().startsWith(defaultPackage)) {
@@ -1099,6 +1108,11 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     Runnable shutdownProcess = () -> {
       startedShutdown = true;
       LOGGER.info("Shutting down the proxy...");
+
+      final ObservabilityService runningObservability = observability;
+      if (runningObservability != null) {
+        runningObservability.close();
+      }
 
       // Stop accepting new connections, but keep DNS available to pre-shutdown handlers.
       cm.closeEndpoints(true);
