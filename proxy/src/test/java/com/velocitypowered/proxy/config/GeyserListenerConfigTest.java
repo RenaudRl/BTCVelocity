@@ -85,10 +85,12 @@ class GeyserListenerConfigTest {
   }
 
   @Test
-  void theSameAddressAsBindIsRefused(@TempDir final Path dir) throws IOException {
-    // bind is 0.0.0.0:25565 in the default file: any address on that port clashes with it
-    assertFalse(read(dir, "geyser-listener = \"0.0.0.0:25565\"").validate());
-    assertFalse(read(dir, "geyser-listener = \"127.0.0.1:25565\"").validate());
+  void theSamePortAsBindIsRefusedWhateverTheAddress(@TempDir final Path dir) throws IOException {
+    // bind is 0.0.0.0:25565 in the default file: the port alone is enough to refuse
+    for (String clash : new String[] {"0.0.0.0:25565", "127.0.0.1:25565", "[::]:25565",
+        "[::1]:25565"}) {
+      assertFalse(read(dir, "geyser-listener = \"" + clash + "\"").validate(), clash);
+    }
   }
 
   @Test

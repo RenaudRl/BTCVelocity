@@ -18,7 +18,6 @@
 package com.btcvelocity.proxy.security;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -58,22 +57,8 @@ class GeyserListenerAddressTest {
   }
 
   @Test
-  void overlapsOnTheSameAddressAndPortOrAWildcardOnThePort() {
-    final InetSocketAddress geyser = GeyserListenerAddress.parse("127.0.0.1:25565");
-
-    assertTrue(GeyserListenerAddress.overlaps(GeyserListenerAddress.parse("127.0.0.1:25565"), geyser));
-    assertTrue(GeyserListenerAddress.overlaps(GeyserListenerAddress.parse("0.0.0.0:25565"), geyser));
-    assertTrue(GeyserListenerAddress.overlaps(geyser, GeyserListenerAddress.parse("0.0.0.0:25565")));
-    assertFalse(GeyserListenerAddress.overlaps(GeyserListenerAddress.parse("0.0.0.0:25566"), geyser));
-    assertFalse(GeyserListenerAddress.overlaps(GeyserListenerAddress.parse("10.0.0.1:25565"), geyser));
-  }
-
-  @Test
-  void anUnresolvedBindOnlyClashesWithTheWildcardOrItself() {
-    final InetSocketAddress named = InetSocketAddress.createUnresolved("play.example.org", 25565);
-
-    assertTrue(GeyserListenerAddress.overlaps(named, GeyserListenerAddress.parse("0.0.0.0:25565")));
-    assertFalse(GeyserListenerAddress.overlaps(named, GeyserListenerAddress.parse("127.0.0.1:25565")));
-    assertFalse(GeyserListenerAddress.overlaps(named, GeyserListenerAddress.parse("0.0.0.0:25566")));
+  void readsTheIpv6Wildcard() {
+    assertEquals(25565, GeyserListenerAddress.parse("[::]:25565").getPort());
+    assertTrue(GeyserListenerAddress.parse("[::]:25565").getAddress().isAnyLocalAddress());
   }
 }

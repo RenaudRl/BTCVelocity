@@ -279,11 +279,12 @@ haproxy-protocol-trusted-proxies = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12"
 
 # A second listener, named "geyser", for Geyser (Bedrock) to connect to: "host:port" with a literal
 # address ("127.0.0.1:25566", "[::1]:25566"), never a host name, and a port other than bind's. Empty
-# (the default) disables it. This listener ALWAYS expects the PROXY protocol (set use-proxy-protocol
-# in Geyser's config), whatever haproxy-protocol says: only the sources of
-# geyser-listener-trusted-proxies may send the header, any other connection is closed. Plugins read
-# the listener from the pre-login (ListenerOrigin.of(connection)), and the admission shield treats
-# its connections as coming from geyser-addresses.
+# (the default) disables it. This listener ALWAYS expects the PROXY protocol, whatever haproxy-protocol
+# says. On Geyser's side that is "advanced.java.use-haproxy-protocol: true" in its config.yml (the
+# Geyser version that has the "java" section; older config files call it "remote.use-proxy-protocol").
+# Only the sources of geyser-listener-trusted-proxies may send the header, any other connection is
+# closed. Plugins read the listener from the pre-login (ListenerOrigin.of(connection)), and the
+# admission shield treats its connections as coming from Geyser, judged on the player's real address.
 geyser-listener = ""
 
 # Sources allowed to send the PROXY header to the geyser listener (address or CIDR, never a host

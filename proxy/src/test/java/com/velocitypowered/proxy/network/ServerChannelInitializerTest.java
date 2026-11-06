@@ -17,6 +17,7 @@
 
 package com.velocitypowered.proxy.network;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -30,7 +31,13 @@ import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
+import io.netty.handler.codec.haproxy.HAProxyCommand;
+import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
+import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
+import io.netty.handler.codec.haproxy.HAProxyProxiedProtocol;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -97,6 +104,22 @@ class ServerChannelInitializerTest {
     assertNull(channel.pipeline().get(HAProxyMessageDecoder.class));
     assertNotNull(channel.pipeline().get(MinecraftConnection.class));
     assertTrue(channel.isOpen());
+  }
+
+  @Test
+  void aTcpHeaderSetsTheClientAddressAndAnyOtherProtocolClosesTheConnection() {
+    final PeerChannel tcp = open("geyser", false);
+    final PeerChannel unix = open("geyser", false);
+
+    tcp.writeInbound(new HAProxyMessage(HAProxyProtocolVersion.V2, HAProxyCommand.PROXY,
+        HAProxyProxiedProtocol.TCP4, "203.0.113.7", "127.0.0.1", 4242, 25566));
+    unix.writeInbound(new HAProxyMessage(HAProxyProtocolVersion.V2, HAProxyCommand.PROXY,
+        HAProxyProxiedProtocol.UNIX_STREAM, "evil.example.com", "/run/x", 0, 0));
+
+    assertEquals(new InetSocketAddress(InetAddress.ofLiteral("203.0.113.7"), 4242),
+        tcp.pipeline().get(MinecraftConnection.class).getRemoteAddress());
+    assertTrue(tcp.isOpen());
+    assertFalse(unix.isOpen(), "a header that is not TCP over IPv4 or IPv6 must close the connection");
   }
 
   @Test

@@ -61,7 +61,7 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
 
   /**
    * Whether a channel must speak the PROXY protocol: the Geyser listener always does (Geyser sends
-   * it with {@code use-proxy-protocol}), the main one follows {@code haproxy-protocol}.
+   * it with {@code advanced.java.use-haproxy-protocol}), the main one follows {@code haproxy-protocol}.
    *
    * @param listener the name of the listener that accepted the channel, {@code null} for the main one
    * @param mainListenerFlag the {@code haproxy-protocol} setting

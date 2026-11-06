@@ -477,8 +477,11 @@ public final class VelocityConfiguration implements ProxyConfig {
     if (!advanced.geyserListener.isEmpty()) {
       try {
         final InetSocketAddress geyser = GeyserListenerAddress.parse(advanced.geyserListener);
-        if (GeyserListenerAddress.overlaps(AddressUtil.parseAddress(bind), geyser)) {
-          LOGGER.error("'geyser-listener' {} is the same address as 'bind' {}: Geyser needs its own"
+        // The same port is refused whatever the addresses: "[::]" and "0.0.0.0" are both wildcards,
+        // and a host name in bind may resolve to anything. (--port is only known to the server,
+        // which binds this listener first: a clash with it fails the startup.)
+        if (AddressUtil.parseAddress(bind).getPort() == geyser.getPort()) {
+          LOGGER.error("'geyser-listener' {} uses the same port as 'bind' {}: Geyser needs its own"
               + " port.", advanced.geyserListener, bind);
           valid = false;
         }

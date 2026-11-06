@@ -67,26 +67,4 @@ public final class GeyserListenerAddress {
     }
     return new InetSocketAddress(address, port);
   }
-
-  /**
-   * Whether two listeners would fight for the same socket: same port, and the same address or one
-   * of them the wildcard.
-   *
-   * @param main the main listener ({@code bind}), possibly an unresolved host name
-   * @param geyser the Geyser listener, a literal address
-   * @return {@code true} if both cannot be bound together
-   */
-  public static boolean overlaps(final InetSocketAddress main, final InetSocketAddress geyser) {
-    if (main.getPort() != geyser.getPort()) {
-      return false;
-    }
-    final InetAddress mainAddress = main.getAddress();
-    if (mainAddress == null) {
-      // An unresolved name in bind: it may resolve to anything, only the wildcard surely clashes.
-      return geyser.getAddress().isAnyLocalAddress()
-          || main.getHostString().equalsIgnoreCase(geyser.getHostString());
-    }
-    return mainAddress.equals(geyser.getAddress())
-        || mainAddress.isAnyLocalAddress() || geyser.getAddress().isAnyLocalAddress();
-  }
 }

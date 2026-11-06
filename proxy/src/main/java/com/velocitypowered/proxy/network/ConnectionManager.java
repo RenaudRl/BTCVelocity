@@ -153,7 +153,8 @@ public final class ConnectionManager {
           .addListener((ChannelFutureListener) future -> {
             final Channel channel = future.channel();
             if (future.isSuccess()) {
-              this.endpoints.put(address, new Endpoint(channel, ListenerType.MINECRAFT));
+              this.endpoints.put(address,
+                  new Endpoint(channel, ListenerType.MINECRAFT, listener == null));
 
               LOGGER.info("Listening on {}", channel.localAddress());
 
@@ -170,8 +171,13 @@ public final class ConnectionManager {
                           : "haproxy-protocol-trusted-proxies");
                 }
 
-                // Fire the proxy bound event after the socket is bound
-                server.getEventManager().fireAndForget(new ListenerBoundEvent(address, ListenerType.MINECRAFT));
+                // Fire the proxy bound event after the socket is bound. Not for a named listener:
+                // Geyser-Velocity starts its Bedrock side on the bound event of a MINECRAFT
+                // listener and must not take the Geyser listener (a loopback port) for the proxy's.
+                if (listener == null) {
+                  server.getEventManager().fireAndForget(
+                      new ListenerBoundEvent(address, ListenerType.MINECRAFT));
+                }
               }
             } else {
               LOGGER.error("Can't bind to {}", address, future.cause());
@@ -245,11 +251,14 @@ public final class ConnectionManager {
     Collection<Endpoint> endpoints = this.endpoints.removeAll(oldBind);
     Preconditions.checkState(!endpoints.isEmpty(), "Endpoint was not registered");
 
-    ListenerType type = endpoints.iterator().next().getType();
+    final Endpoint first = endpoints.iterator().next();
+    ListenerType type = first.getType();
 
     // Fire proxy close event to notify plugins of socket close. We block since plugins
     // should have a chance to be notified before the server stops accepting connections.
-    server.getEventManager().fire(new ListenerCloseEvent(oldBind, type)).join();
+    if (first.isAnnounced()) {
+      server.getEventManager().fire(new ListenerCloseEvent(oldBind, type)).join();
+    }
 
     for (Endpoint endpoint : endpoints) {
       Channel serverChannel = endpoint.getChannel();
@@ -267,11 +276,14 @@ public final class ConnectionManager {
     for (final Map.Entry<InetSocketAddress, Collection<Endpoint>> entry : this.endpoints.asMap().entrySet()) {
       final InetSocketAddress address = entry.getKey();
       final Collection<Endpoint> endpoints = entry.getValue();
-      ListenerType type = endpoints.iterator().next().getType();
+      final Endpoint first = endpoints.iterator().next();
+      ListenerType type = first.getType();
 
       // Fire proxy close event to notify plugins of socket close. We block since plugins
       // should have a chance to be notified before the server stops accepting connections.
-      server.getEventManager().fire(new ListenerCloseEvent(address, type)).join();
+      if (first.isAnnounced()) {
+        server.getEventManager().fire(new ListenerCloseEvent(address, type)).join();
+      }
 
       for (Endpoint endpoint : endpoints) {
         LOGGER.info("Closing endpoint {}", address);
