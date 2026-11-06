@@ -277,6 +277,15 @@ haproxy-protocol = false
 # haproxy-protocol is true. Default: loopback, private and link-local networks.
 haproxy-protocol-trusted-proxies = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10"]
 
+# A second listener, named "geyser", for Geyser (Bedrock) to connect to: "host:port" with a literal
+# address ("127.0.0.1:25566", "[::1]:25566"), never a host name, and a port other than bind's. Empty
+# (the default) disables it. This listener ALWAYS expects the PROXY protocol (set use-proxy-protocol
+# in Geyser's config), whatever haproxy-protocol says: only the sources of
+# haproxy-protocol-trusted-proxies may send the header, any other connection is closed. Plugins read
+# the listener from the pre-login (ListenerOrigin.of(connection)), and the admission shield treats
+# its connections as coming from geyser-addresses.
+geyser-listener = ""
+
 # Enables TCP fast open support on the proxy. Requires the proxy to run on Linux.
 tcp-fast-open = false
 

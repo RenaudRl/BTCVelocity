@@ -17,10 +17,15 @@
 
 package com.velocitypowered.proxy.network;
 
+import io.netty.util.AttributeKey;
+
 /**
  * Constants used for the pipeline.
  */
 public final class Connections {
+
+  /** Name of the listener that accepted a channel; absent on the main listener. */
+  public static final AttributeKey<String> LISTENER = AttributeKey.valueOf("btc-listener");
 
   public static final String CIPHER_DECODER = "cipher-decoder";
 

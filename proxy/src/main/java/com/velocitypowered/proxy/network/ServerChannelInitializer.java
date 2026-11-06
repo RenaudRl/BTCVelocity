@@ -25,6 +25,7 @@ import static com.velocitypowered.proxy.network.Connections.MINECRAFT_DECODER;
 import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 import static com.velocitypowered.proxy.network.Connections.READ_TIMEOUT;
 
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
@@ -48,6 +49,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * Server channel initializer.
@@ -63,9 +65,22 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
     this.server = server;
   }
 
+  /**
+   * Whether a channel must speak the PROXY protocol: the Geyser listener always does (Geyser sends
+   * it with {@code use-proxy-protocol}), the main one follows {@code haproxy-protocol}.
+   *
+   * @param listener the name of the listener that accepted the channel, {@code null} for the main one
+   * @param mainListenerFlag the {@code haproxy-protocol} setting
+   * @return {@code true} if a PROXY header is expected
+   */
+  static boolean expectsProxyProtocol(final @Nullable String listener, final boolean mainListenerFlag) {
+    return ListenerOrigin.GEYSER.equals(listener) || mainListenerFlag;
+  }
+
   @Override
   protected void initChannel(final Channel ch) {
-    final boolean proxyProtocol = this.server.getConfiguration().isProxyProtocol();
+    final boolean proxyProtocol = expectsProxyProtocol(ch.attr(Connections.LISTENER).get(),
+        this.server.getConfiguration().isProxyProtocol());
     // An untrusted peer could forge the client address in its PROXY header: drop it unread.
     if (proxyProtocol && !(ch.remoteAddress() instanceof InetSocketAddress peer
         && this.server.getConfiguration().getProxyProtocolTrustedProxies()

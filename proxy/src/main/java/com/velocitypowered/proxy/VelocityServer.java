@@ -22,6 +22,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
 import com.btcvelocity.proxy.bridge.VelocityBridgeChannel;
 import com.btcvelocity.proxy.bridge.WorldRegistry;
@@ -652,6 +653,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     } else {
       this.cm.bind(configuration.getBind());
     }
+    configuration.getGeyserListener().ifPresent(address -> this.cm.bind(address, ListenerOrigin.GEYSER));
 
     final Boolean haproxy = this.options.isHaproxy();
     if (haproxy != null) {
@@ -873,6 +875,15 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     if (!configuration.getBind().equals(newConfiguration.getBind())) {
       this.cm.bind(newConfiguration.getBind());
       this.cm.close(configuration.getBind());
+    }
+
+    // The Geyser listener follows the same rule, after the main one so that an address can move
+    // from one to the other.
+    final Optional<InetSocketAddress> oldGeyser = configuration.getGeyserListener();
+    final Optional<InetSocketAddress> newGeyser = newConfiguration.getGeyserListener();
+    if (!oldGeyser.equals(newGeyser)) {
+      newGeyser.ifPresent(address -> this.cm.bind(address, ListenerOrigin.GEYSER));
+      oldGeyser.ifPresent(this.cm::close);
     }
 
     boolean queryPortChanged = newConfiguration.getQueryPort() != configuration.getQueryPort();

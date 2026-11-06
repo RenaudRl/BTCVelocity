@@ -105,6 +105,20 @@ public final class ConnectionManager {
    * @param address the address to bind to
    */
   public void bind(final InetSocketAddress address) {
+    bind(address, null);
+  }
+
+  /**
+   * Binds a Minecraft listener to the specified {@code address}, under a name.
+   *
+   * <p>A named listener marks its channels ({@link Connections#LISTENER}), so that the pipeline and
+   * the plugins know which listener accepted them. It always expects the PROXY protocol, see
+   * {@link ServerChannelInitializer}.
+   *
+   * @param address the address to bind to
+   * @param listener the name of the listener, or {@code null} for the main one
+   */
+  public void bind(final InetSocketAddress address, final @Nullable String listener) {
     final ServerBootstrap bootstrap = new ServerBootstrap()
         .channelFactory(this.transportType.serverSocketChannelFactory)
         .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, SERVER_WRITE_MARK)
@@ -112,6 +126,9 @@ public final class ConnectionManager {
         .childOption(ChannelOption.TCP_NODELAY, true)
         .childOption(ChannelOption.IP_TOS, 0x18)
         .localAddress(address);
+    if (listener != null) {
+      bootstrap.childAttr(Connections.LISTENER, listener);
+    }
 
     if (server.getConfiguration().useTcpFastOpen()) {
       bootstrap.option(ChannelOption.TCP_FASTOPEN, 3);
@@ -140,7 +157,7 @@ public final class ConnectionManager {
 
               if (finalBind == 0) {
                 // Warn people with console access that HAProxy is in use, see PR: #1436
-                if (this.server.getConfiguration().isProxyProtocol()) {
+                if (listener != null || this.server.getConfiguration().isProxyProtocol()) {
                   LOGGER.warn(
                       "Using HAProxy and listening on {}: only {} may send a PROXY header, other "
                           + "connections are closed (haproxy-protocol-trusted-proxies).",

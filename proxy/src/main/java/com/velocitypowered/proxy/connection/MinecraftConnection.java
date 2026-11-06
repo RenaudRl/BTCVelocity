@@ -79,6 +79,7 @@ import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import javax.crypto.SecretKey;
@@ -388,6 +389,15 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
 
   public @Nullable UUID getSessionId() {
     return sessionId;
+  }
+
+  /**
+   * The name of the listener that accepted this connection.
+   *
+   * @return the name, or empty for the main listener
+   */
+  public Optional<String> getListenerName() {
+    return Optional.ofNullable(channel.attr(Connections.LISTENER).get());
   }
 
   public boolean isClosed() {
