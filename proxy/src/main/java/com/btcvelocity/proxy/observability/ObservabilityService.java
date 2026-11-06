@@ -112,6 +112,8 @@ public final class ObservabilityService implements AutoCloseable {
     }
     return ProxyMetrics.render(server.getLocalPlayerCount(), byBackend, queues,
         server.getBridgeChannel().metrics().snapshot(),
+        server.getServerListPingHandler().getStatusCache().hits(),
+        server.getServerListPingHandler().getStatusCache().misses(),
         watchdog == null ? List.of() : watchdog.readings());
   }
 

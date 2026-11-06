@@ -103,15 +103,11 @@ public class StatusSessionHandler implements MinecraftSessionHandler {
 
     this.pingReceived = true;
 
-    this.server.getServerListPingHandler().getInitialPing(inbound)
-        .thenCompose(ping -> server.getEventManager().fire(new ProxyPingEvent(inbound, ping)))
+    this.server.getServerListPingHandler().getStatusResponse(inbound)
         .thenAcceptAsync(
-            (event) -> {
-              if (event.getResult().isAllowed()) {
-                final StringBuilder json = new StringBuilder();
-                VelocityServer.getPingGsonInstance(connection.getProtocolVersion())
-                        .toJson(event.getPing(), json);
-                connection.write(new StatusResponsePacket(json));
+            (json) -> {
+              if (json.isPresent()) {
+                connection.write(new StatusResponsePacket(json.get()));
               } else {
                 connection.close();
               }

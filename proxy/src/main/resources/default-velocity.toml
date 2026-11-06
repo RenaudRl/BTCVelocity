@@ -401,6 +401,13 @@ custom-brand-proxy = "Velocity"
 # Replaces what is returned as the server brand for the user's client.
 custom-brand-backend = "Paper"
 
+# Seconds the server list ping response is kept, per client protocol version and virtual host.
+# The time is counted from the build and never extended. 0 or -1 turns the cache off.
+# Pings no longer reach the backends, the cluster counts or ProxyPingEvent plugins on each
+# request; a listener that answers differently per client address needs it off.
+# 3 to 10 is a good value against ping floods.
+status-cache-ttl = 0
+
 [slash-servers]
 # Defines "/<name>" aliases for servers - here "/faction" and "/factions" would both send you to the server named
 # "factions", for example.

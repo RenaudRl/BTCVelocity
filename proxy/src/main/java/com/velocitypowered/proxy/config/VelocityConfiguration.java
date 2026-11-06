@@ -479,6 +479,13 @@ public final class VelocityConfiguration implements ProxyConfig {
       valid = false;
     }
 
+    // -1 is the documented "off"; the comparison also refuses NaN.
+    if (!(advanced.statusCacheTtl >= 0) && advanced.statusCacheTtl != -1) {
+      LOGGER.error("Invalid status-cache-ttl {}: use seconds >= 0, or -1 to disable",
+          advanced.statusCacheTtl);
+      valid = false;
+    }
+
     if (advanced.commandRateLimit < 0) {
       LOGGER.error("Invalid command rate limit {}", advanced.commandRateLimit);
       valid = false;
@@ -937,6 +944,15 @@ public final class VelocityConfiguration implements ProxyConfig {
    */
   public String getBackendBrandCustom() {
     return advanced.getBackendBrandCustom();
+  }
+
+  /**
+   * Returns how long, in seconds, a status ping response is kept; zero or less means not at all.
+   *
+   * @return the status cache time to live
+   */
+  public double getStatusCacheTtl() {
+    return advanced.getStatusCacheTtl();
   }
 
   /**
@@ -2155,6 +2171,12 @@ public final class VelocityConfiguration implements ProxyConfig {
     @Expose
     private String backendBrandCustom = "Paper";
 
+    /**
+     * Seconds a status ping response is kept per protocol version and virtual host; 0 or -1 = off.
+     */
+    @Expose
+    private double statusCacheTtl = 0;
+
     private Advanced() {
     }
 
@@ -2198,6 +2220,8 @@ public final class VelocityConfiguration implements ProxyConfig {
         this.alwaysFallBackPing = config.getOrElse("always-fallback-ping", false);
         this.proxyBrandCustom = config.getOrElse("custom-brand-proxy", "BTC Proxy Core");
         this.backendBrandCustom = config.getOrElse("custom-brand-backend", "Paper");
+        // A whole number in the toml ("status-cache-ttl = 5") is read as an Integer, not a Double.
+        this.statusCacheTtl = config.<Number>getOrElse("status-cache-ttl", 0).doubleValue();
       }
 
       this.serverBrandAsString = LegacyComponentSerializer.legacySection()
@@ -2312,6 +2336,10 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     public String getBackendBrandCustom() {
       return this.backendBrandCustom;
+    }
+
+    public double getStatusCacheTtl() {
+      return this.statusCacheTtl;
     }
 
     @Override

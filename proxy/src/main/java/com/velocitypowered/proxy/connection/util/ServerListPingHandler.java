@@ -18,6 +18,7 @@
 package com.velocitypowered.proxy.connection.util;
 
 import com.spotify.futures.CompletableFutures;
+import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.api.proxy.server.PingOptions;
 import com.velocitypowered.api.proxy.server.ServerPing;
@@ -43,8 +44,19 @@ public class ServerListPingHandler {
 
   private final VelocityServer server;
 
+  private final StatusPingCache statusCache;
+
   public ServerListPingHandler(final VelocityServer server) {
+    this(server, new StatusPingCache());
+  }
+
+  ServerListPingHandler(final VelocityServer server, final StatusPingCache statusCache) {
     this.server = server;
+    this.statusCache = statusCache;
+  }
+
+  public StatusPingCache getStatusCache() {
+    return statusCache;
   }
 
   private boolean displayFallbackPing(final ProtocolVersion clientVersion) {
@@ -233,5 +245,31 @@ public class ServerListPingHandler {
 
       return attemptPingPassthrough(connection, passthroughMode, serversToTry, shownVersion, virtualHost);
     }
+  }
+
+  /**
+   * Builds the status response JSON of a modern ping: the initial ping, then {@link ProxyPingEvent},
+   * then serialization. With {@code advanced.status-cache-ttl} above zero the finished JSON is
+   * shared between clients with the same protocol version and virtual host (see
+   * {@link StatusPingCache}), so the backends, the cluster counts and the event are not asked again.
+   *
+   * @param connection the pinging connection
+   * @return a future with the JSON, or empty when a plugin refused the ping
+   */
+  public CompletableFuture<Optional<String>> getStatusResponse(final VelocityInboundConnection connection) {
+    final StatusPingCache.Key key = new StatusPingCache.Key(connection.getProtocolVersion(),
+        FallbackServerResolver.normalizeHostString(connection.getVirtualHost().orElse(null)));
+    return statusCache.get(key, server.getConfiguration().getStatusCacheTtl(), () ->
+        getInitialPing(connection)
+            .thenCompose(ping -> server.getEventManager().fire(new ProxyPingEvent(connection, ping)))
+            .thenApply(event -> {
+              if (!event.getResult().isAllowed()) {
+                return Optional.<String>empty();
+              }
+              final StringBuilder json = new StringBuilder();
+              VelocityServer.getPingGsonInstance(connection.getProtocolVersion())
+                  .toJson(event.getPing(), json);
+              return Optional.of(json.toString());
+            }));
   }
 }
