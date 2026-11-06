@@ -44,21 +44,14 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
 import io.netty.handler.timeout.ReadTimeoutHandler;
-import java.net.InetSocketAddress;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
  * Server channel initializer.
  */
 public class ServerChannelInitializer extends ChannelInitializer<Channel> {
-
-  private static final Logger LOGGER = LogManager.getLogger(ServerChannelInitializer.class);
-  private static final AtomicBoolean UNTRUSTED_WARNED = new AtomicBoolean();
 
   private final VelocityServer server;
 
@@ -95,23 +88,10 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
 
   @Override
   protected void initChannel(final Channel ch) {
-    final String listener = ch.attr(Connections.LISTENER).get();
-    final VelocityConfiguration configuration = this.server.getConfiguration();
-    final boolean proxyProtocol = expectsProxyProtocol(listener, configuration.isProxyProtocol());
-    // An untrusted peer could forge the client address in its PROXY header: drop it unread.
-    if (proxyProtocol && !(ch.remoteAddress() instanceof InetSocketAddress peer
-        && trustedSources(configuration, listener).contains(peer.getAddress()))) {
-      // First refusal at warn so a misconfigured relay is visible; later ones at debug (log flood).
-      if (UNTRUSTED_WARNED.compareAndSet(false, true)) {
-        LOGGER.warn("Refusing PROXY protocol connection from untrusted source {} (add your relay to "
-            + "{}; further refusals are logged at debug)", ch.remoteAddress(),
-            listener != null ? "geyser-listener-trusted-proxies" : "haproxy-protocol-trusted-proxies");
-      } else {
-        LOGGER.debug("Refusing PROXY protocol connection from untrusted source {}", ch.remoteAddress());
-      }
-      ch.close();
-      return;
-    }
+    // A source that may not send a PROXY header never gets here: ListenerSourceFilter closes it
+    // on the server channel, before this initializer (or any plugin wrapping it) is called.
+    final boolean proxyProtocol = expectsProxyProtocol(ch.attr(Connections.LISTENER).get(),
+        this.server.getConfiguration().isProxyProtocol());
 
     ch.pipeline()
         .addLast(LEGACY_PING_DECODER, new LegacyPingDecoder())

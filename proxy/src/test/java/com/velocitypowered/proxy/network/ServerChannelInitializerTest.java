@@ -17,10 +17,10 @@
 
 package com.velocitypowered.proxy.network;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -30,53 +30,26 @@ import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
-import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
  * Whether a channel speaks the PROXY protocol is decided per listener: the Geyser listener always
- * does, the main one follows {@code haproxy-protocol}; the trusted sources filter both.
+ * does, the main one follows {@code haproxy-protocol}. Which sources may send the header is
+ * decided earlier, on the server channel (see {@link ListenerSourceFilterTest}).
  */
 class ServerChannelInitializerTest {
 
-  /** In the main list's default (RFC 1918), not in the Geyser listener's (loopback only). */
-  private static final String TRUSTED_RELAY = "10.1.2.3";
-  private static final String LOOPBACK = "127.0.0.1";
-  private static final String STRANGER = "203.0.113.9";
+  private static final String PEER = "127.0.0.1";
 
-  /** A channel whose TCP peer is the given address, as a socket would report it. */
-  private static final class PeerChannel extends EmbeddedChannel {
-
-    private final SocketAddress peer;
-
-    PeerChannel(final String peer) {
-      super();
-      this.peer = new InetSocketAddress(InetAddress.ofLiteral(peer), 40000);
-    }
-
-    @Override
-    protected SocketAddress remoteAddress0() {
-      return this.peer;
-    }
-  }
-
-  private static PeerChannel open(final String peer, final String listener, final boolean mainFlag) {
+  private static PeerChannel open(final String listener, final boolean mainFlag) {
     final VelocityServer server = mock(VelocityServer.class);
     final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
     when(server.getConfiguration()).thenReturn(configuration);
     when(configuration.isProxyProtocol()).thenReturn(mainFlag);
-    when(configuration.getProxyProtocolTrustedProxies())
-        .thenReturn(TrustedProxies.parse(TrustedProxies.DEFAULT_ENTRIES));
-    when(configuration.getGeyserListenerTrustedProxies())
-        .thenReturn(TrustedProxies.parse(GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES));
     when(configuration.getPacketLimiterConfig())
         .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);
-    final PeerChannel channel = new PeerChannel(peer);
+    final PeerChannel channel = new PeerChannel(PEER);
     if (listener != null) {
       channel.attr(Connections.LISTENER).set(listener);
     }
@@ -97,8 +70,20 @@ class ServerChannelInitializerTest {
   }
 
   @Test
-  void aTrustedRelayOnTheGeyserListenerGetsAProxyProtocolDecoderEvenWithTheFlagOff() {
-    final PeerChannel channel = open(LOOPBACK, "geyser", false);
+  void eachListenerHasItsOwnTrustedSources() {
+    final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
+    final TrustedProxies main = TrustedProxies.parse(TrustedProxies.DEFAULT_ENTRIES);
+    final TrustedProxies geyser = TrustedProxies.parse(GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES);
+    when(configuration.getProxyProtocolTrustedProxies()).thenReturn(main);
+    when(configuration.getGeyserListenerTrustedProxies()).thenReturn(geyser);
+
+    assertSame(main, ServerChannelInitializer.trustedSources(configuration, null));
+    assertSame(geyser, ServerChannelInitializer.trustedSources(configuration, "geyser"));
+  }
+
+  @Test
+  void theGeyserListenerGetsAProxyProtocolDecoderEvenWithTheFlagOff() {
+    final PeerChannel channel = open("geyser", false);
 
     assertNotNull(channel.pipeline().get(HAProxyMessageDecoder.class));
     assertNotNull(channel.pipeline().get(MinecraftConnection.class));
@@ -106,51 +91,19 @@ class ServerChannelInitializerTest {
   }
 
   @Test
-  void aPrivateSourceIsRefusedOnGeyserButAcceptedOnTheMainListenerWithTheDefaultLists() {
-    final PeerChannel onGeyser = open(TRUSTED_RELAY, "geyser", false);
-    final PeerChannel onMain = open(TRUSTED_RELAY, null, true);
+  void theMainListenerWithTheFlagOffHasNoDecoder() {
+    final PeerChannel channel = open(null, false);
 
-    assertFalse(onGeyser.isOpen(), "a backend in 10/8 must not be able to claim the Geyser origin");
-    assertNull(onGeyser.pipeline().get(MinecraftConnection.class));
-    assertTrue(onMain.isOpen());
-    assertNotNull(onMain.pipeline().get(HAProxyMessageDecoder.class));
-  }
-
-  @Test
-  void aStrangerOnTheGeyserListenerIsClosedUnreadEvenWithTheFlagOff() {
-    final PeerChannel channel = open(STRANGER, "geyser", false);
-
-    assertFalse(channel.isOpen(), "a header from outside the trusted list must not be believed");
-    assertNull(channel.pipeline().get(MinecraftConnection.class));
     assertNull(channel.pipeline().get(HAProxyMessageDecoder.class));
+    assertNotNull(channel.pipeline().get(MinecraftConnection.class));
+    assertTrue(channel.isOpen());
   }
 
   @Test
-  void theMainListenerWithTheFlagOffIsUnchangedForAnyPeer() {
-    for (String peer : List.of(TRUSTED_RELAY, STRANGER)) {
-      final PeerChannel channel = open(peer, null, false);
+  void theMainListenerWithTheFlagOnGetsADecoder() {
+    final PeerChannel channel = open(null, true);
 
-      assertNull(channel.pipeline().get(HAProxyMessageDecoder.class));
-      assertNotNull(channel.pipeline().get(MinecraftConnection.class));
-      assertTrue(channel.isOpen());
-    }
-  }
-
-  @Test
-  void theMainListenerWithTheFlagOnIsUnchanged() {
-    final PeerChannel relay = open(TRUSTED_RELAY, null, true);
-    final PeerChannel stranger = open(STRANGER, null, true);
-
-    assertNotNull(relay.pipeline().get(HAProxyMessageDecoder.class));
-    assertFalse(stranger.isOpen());
-  }
-
-  @Test
-  void aConnectionKnowsTheListenerThatAcceptedIt() {
-    final PeerChannel geyser = open(LOOPBACK, "geyser", false);
-    final PeerChannel main = open(TRUSTED_RELAY, null, false);
-
-    assertEquals("geyser", geyser.pipeline().get(MinecraftConnection.class).getListenerName().orElseThrow());
-    assertTrue(main.pipeline().get(MinecraftConnection.class).getListenerName().isEmpty());
+    assertNotNull(channel.pipeline().get(HAProxyMessageDecoder.class));
+    assertTrue(channel.isOpen());
   }
 }

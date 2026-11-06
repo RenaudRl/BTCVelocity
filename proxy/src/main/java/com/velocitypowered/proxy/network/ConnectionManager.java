@@ -126,6 +126,8 @@ public final class ConnectionManager {
         .childOption(ChannelOption.TCP_NODELAY, true)
         .childOption(ChannelOption.IP_TOS, 0x18)
         .localAddress(address);
+    // Before Netty's acceptor: refuses a source that may not send a PROXY header, unregistered.
+    bootstrap.handler(new ListenerSourceFilter(this.server, listener));
     if (listener != null) {
       bootstrap.childAttr(Connections.LISTENER, listener);
     }
