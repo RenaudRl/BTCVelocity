@@ -310,13 +310,38 @@ class AdmissionEngineTest {
         Attempt.claimed(".BedrockPlayer", DATACENTER_HOST, true)
             .authenticated(".BedrockPlayer", OTHER_UUID, true, null), Phase.LOGIN);
 
-    // Assert - the same verdicts as for an address of geyser-addresses
+    // Assert - the pre-login waits for Floodgate like for an address of geyser-addresses; at the
+    // login the connection address is the player's real one (PROXY protocol) and is judged
     assertEquals(Action.DEFER, atPreLogin.action());
     assertEquals(Basis.GEYSER_ORIGIN, atPreLogin.basis());
     assertEquals(Origin.GEYSER_UNCONFIRMED, atPreLogin.origin());
-    assertEquals(Action.ADMIT, atLogin.action());
-    assertEquals(Basis.BEDROCK_IP_UNKNOWN, atLogin.basis());
+    assertEquals(Action.REFUSE, atLogin.action());
+    assertEquals(Basis.LISTED, atLogin.basis());
     assertEquals(Origin.GEYSER_FLOODGATE, atLogin.origin());
+    assertEquals(DATACENTER_HOST, atLogin.judged());
+  }
+
+  @Test
+  void aBedrockPlayerOfTheGeyserListenerWithNoRecordedAddressIsJudgedOnTheConnectionAddress() {
+    final Verdict admitted = engine("").decide(
+        Attempt.claimed(".Alex", HOME, true).authenticated(".Alex", OTHER_UUID, true, null),
+        Phase.LOGIN);
+
+    assertEquals(Action.ADMIT, admitted.action());
+    assertEquals(Basis.CLEAN, admitted.basis());
+    assertEquals(HOME, admitted.judged());
+    assertEquals(Origin.GEYSER_FLOODGATE, admitted.origin());
+  }
+
+  @Test
+  void aGeyserListenerConnectionFromAGeyserAddressStillKeepsTheSharedAddressRule() {
+    // geyser-addresses names the address the PROXY header gave: no real address is known
+    final Verdict verdict = engine(WITH_GEYSER).decide(
+        Attempt.claimed(".Alex", GEYSER, true).authenticated(".Alex", OTHER_UUID, true, null),
+        Phase.LOGIN);
+
+    assertEquals(Action.ADMIT, verdict.action());
+    assertEquals(Basis.BEDROCK_IP_UNKNOWN, verdict.basis());
   }
 
   @Test
@@ -362,7 +387,9 @@ class AdmissionEngineTest {
             .authenticated(".Alex", OTHER_UUID, true, null));
 
     assertTrue(atLogin.isPresent());
-    assertEquals(Basis.BEDROCK_IP_UNKNOWN, atLogin.get().basis());
+    assertEquals(Origin.GEYSER_FLOODGATE, atLogin.get().origin(),
+        "without the flag the pre-login would have refused it as a direct connection");
+    assertEquals(Basis.LISTED, atLogin.get().basis());
   }
 
   // --- exemptions (M7) ------------------------------------------------------------------------

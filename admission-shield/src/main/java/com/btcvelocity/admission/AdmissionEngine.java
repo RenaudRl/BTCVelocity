@@ -31,8 +31,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>The rule, in order:
  * <ol>
- *   <li>A connection of the proxy's {@code geyser} listener counts as coming from Geyser's address,
- *       even with an empty {@code geyser-addresses}.</li>
+ *   <li>A connection of the proxy's {@code geyser} listener counts as coming from Geyser, even with
+ *       an empty {@code geyser-addresses}. Its address is the player's real one (PROXY protocol):
+ *       a Floodgate player of that listener is judged on it when Floodgate recorded no other.</li>
  *   <li>A Floodgate player coming from Geyser's own address is never judged on that address:
  *       every Bedrock player shares it, and a datacenter address for Geyser would refuse them
  *       all. At the pre-login the decision waits for the login; there, the address Floodgate
@@ -226,7 +227,11 @@ public final class AdmissionEngine {
             null, null);
       }
       if (attempt.floodgatePlayer()) {
-        final InetAddress real = attempt.bedrockReal();
+        InetAddress real = attempt.bedrockReal();
+        if (real == null && attempt.viaGeyserListener()) {
+          // PROXY protocol: the address of this connection already is the player's real one.
+          real = attempt.remote();
+        }
         if (real == null || this.config.geyserAddresses().contains(real)) {
           return new Verdict(Action.ADMIT, Basis.BEDROCK_IP_UNKNOWN, Origin.GEYSER_FLOODGATE, null,
               null, null);
@@ -327,9 +332,9 @@ public final class AdmissionEngine {
    * Spends one attempt of the connection's network and says whether it is over the limit.
    *
    * <p>Never applied to: an address that is not public (the proxy's own neighbours, carrier-grade
-   * NAT range), an address of {@code geyser-addresses} or a connection of the proxy's Geyser listener
-   * (every Bedrock player arrives from it), an
-   * exempted network. A player exemption needs the authenticated name <em>and</em> UUID, and the
+   * NAT range), an address of {@code geyser-addresses} (every Bedrock player arrives from it), an
+   * exempted network. A connection of the proxy's Geyser listener <em>is</em> counted: with the
+   * PROXY protocol its address is the player's real one, not Geyser's. A player exemption needs the authenticated name <em>and</em> UUID, and the
    * pre-login only has a name anyone can type; a name some exemption carries therefore does not
    * excuse the attempt, it defers the decision to the login ({@link #decideRateAtLogin}), exactly
    * as the lists do. In {@code observe} mode nothing is deferred: the attempt is observed.
@@ -381,7 +386,7 @@ public final class AdmissionEngine {
   /** The address the bound counts, or empty when this connection is never counted. */
   private Optional<InetAddress> rateSubject(final Attempt attempt) {
     final InetAddress remote = attempt.remote();
-    if (!this.config.networkRate().enabled() || attempt.viaGeyserListener()) {
+    if (!this.config.networkRate().enabled()) {
       return Optional.empty();
     }
     final Optional<InetAddress> network = AddressPolicy.classifiable(remote);

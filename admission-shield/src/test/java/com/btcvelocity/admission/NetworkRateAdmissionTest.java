@@ -110,19 +110,33 @@ class NetworkRateAdmissionTest {
   }
 
   @Test
-  void theGeyserListenerIsNeverCountedAndTheMainListenerStillIs() {
+  void theGeyserListenerIsCountedOnTheRealAddressOfThePlayerLikeTheMainListener() {
+    // With the PROXY protocol the address of a Geyser listener connection is the player's own
     final AdmissionEngine engine = engine(ENFORCING);
 
-    for (int i = 0; i < 5; i++) {
-      final Verdict verdict = engine.decidePreLogin(
-          Attempt.claimed("Bedrock" + i, ip("203.0.113.10"), true));
-      assertEquals(Basis.GEYSER_ORIGIN, verdict.basis(), "deferred to Floodgate, never rate-limited");
-    }
+    final Verdict first = engine.decidePreLogin(Attempt.claimed("Bedrock0", ip("203.0.113.10"), true));
+    final Verdict second = engine.decidePreLogin(Attempt.claimed("Bedrock1", ip("203.0.113.11"), true));
+    final Verdict third = engine.decidePreLogin(Attempt.claimed("Bedrock2", ip("203.0.113.12"), true));
 
-    assertEquals(Action.ADMIT, attempt(engine, "Steve", "203.0.113.10").action());
-    assertEquals(Action.ADMIT, attempt(engine, "Alex", "203.0.113.11").action());
-    assertEquals(Action.REFUSE, attempt(engine, "Bot", "203.0.113.12").action(),
-        "the main listener keeps its bucket, untouched by the Geyser listener");
+    assertEquals(Basis.GEYSER_ORIGIN, first.basis(), "within the limit: deferred to Floodgate");
+    assertEquals(Basis.GEYSER_ORIGIN, second.basis());
+    assertEquals(Action.REFUSE, third.action());
+    assertEquals(Basis.RATE_NETWORK, third.basis());
+    assertEquals("ADM-RATE-NET", third.causeCode());
+    assertEquals(Action.REFUSE, attempt(engine, "Steve", "203.0.113.13").action(),
+        "both listeners spend the same bucket of the network");
+  }
+
+  @Test
+  void aGeyserAddressIsStillSparedWhateverTheListener() {
+    final AdmissionEngine engine = engine(ENFORCING + "geyser-addresses: ['203.0.113.10']\n");
+
+    for (int i = 0; i < 5; i++) {
+      assertEquals(Basis.GEYSER_ORIGIN,
+          engine.decidePreLogin(Attempt.claimed("Bedrock" + i, ip("203.0.113.10"), true)).basis());
+      assertEquals(Action.DEFER,
+          engine.decidePreLogin(Attempt.claimed("Other" + i, ip("203.0.113.10"))).action());
+    }
   }
 
   @Test

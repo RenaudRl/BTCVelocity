@@ -30,7 +30,8 @@ import org.jspecify.annotations.Nullable;
  * @param floodgatePlayer whether Floodgate knows this player as a Bedrock player (login only)
  * @param bedrockReal the real address of a Bedrock player as Floodgate recorded it, when known
  * @param viaGeyserListener whether the connection was accepted by the proxy's {@code geyser}
- *     listener: it is then treated as coming from {@code geyser-addresses}, whatever its address
+ *     listener: it is then treated as coming from Geyser, whatever its address. With the PROXY
+ *     protocol that address is the player's real one
  */
 public record Attempt(
     String username,
