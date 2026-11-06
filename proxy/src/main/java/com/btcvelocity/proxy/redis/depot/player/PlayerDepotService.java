@@ -31,6 +31,7 @@ import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,6 +47,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
@@ -88,6 +90,18 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * periodic repair restores the entries.
    */
   public static final int WRITE_QUEUE_CAPACITY = 4096;
+
+  /**
+   * Consecutive repairs (about {@link #REFRESH_INTERVAL} each) that must find a local player held
+   * by another live proxy before the local session is closed. The second one absorbs a transfer
+   * between proxies, whose entry and connection never move at the same instant.
+   */
+  public static final int DUPLICATE_CONFIRMATIONS = 2;
+
+  /**
+   * Translation key of the message shown to the player whose duplicate session is closed.
+   */
+  static final String DUPLICATE_SESSION_KEY = "velocity.error.duplicate-session";
 
   /**
    * How long {@link #releaseAll()} waits for the worker before removing the entries directly.
@@ -135,6 +149,22 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * Throttles the warning for logins let in without a duplicate check.
    */
   private final LogThrottle uncheckedLogins = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+
+  /**
+   * Throttles the warning for closed duplicate sessions.
+   */
+  private final LogThrottle duplicateWarnings = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+
+  /**
+   * Local sessions closed because another proxy holds the player, since startup.
+   */
+  private final AtomicLong duplicateSessionsClosed = new AtomicLong();
+
+  /**
+   * Local players found held by another live proxy, with the number of consecutive repairs that
+   * found it. Only the repair touches it.
+   */
+  private final Map<UUID, Suspect> suspects = new ConcurrentHashMap<>();
 
   /**
    * The last cluster view read from Redis, or {@code null} before the first successful read.
@@ -560,6 +590,80 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     }
 
     this.snapshot = Snapshot.of(entries, proxyId, System.nanoTime());
+
+    closeDuplicateSessions(byId);
+  }
+
+  /**
+   * Gets how many local sessions were closed because another proxy held the player.
+   *
+   * @return the count since startup
+   */
+  public long getDuplicateSessionsClosed() {
+    return this.duplicateSessionsClosed.get();
+  }
+
+  /**
+   * Redis ownership decides: a local player whose entry belongs to another proxy with a fresh
+   * heartbeat is a duplicate, and its local session is closed once
+   * {@link #DUPLICATE_CONFIRMATIONS} repairs in a row found it. An entry whose owner stopped
+   * beating is left alone: it is about to be reaped, and the next repair claims the player again.
+   * Runs on the worker, so the check reads Redis freely; the disconnect itself goes through
+   * {@link ConnectedPlayer#disconnect(Component)}, which hops onto the player's event loop.
+   */
+  private void closeDuplicateSessions(final Map<UUID, PlayerEntry> byId) {
+    final Map<String, Boolean> aliveOwners = new HashMap<>();
+    final Set<UUID> held = new HashSet<>();
+    for (ConnectedPlayer player : this.server.getAllPlayers()) {
+      final PlayerEntry entry = byId.get(player.getUniqueId());
+      if (entry == null || ownedHere(entry)
+          || !aliveOwners.computeIfAbsent(entry.getProxyId(), this::isAlive)) {
+        continue;
+      }
+
+      held.add(player.getUniqueId());
+      final Suspect before = this.suspects.get(player.getUniqueId());
+      // A new session of the same player starts over: it is a different connection.
+      final int passes = before != null && before.session() == player ? before.passes() + 1 : 1;
+      this.suspects.put(player.getUniqueId(), new Suspect(player, passes));
+      if (passes == DUPLICATE_CONFIRMATIONS) {
+        closeDuplicate(player, entry);
+      }
+    }
+    this.suspects.keySet().retainAll(held);
+  }
+
+  private boolean isAlive(final String proxyId) {
+    try {
+      return this.redis.getProxyService().isAlive(proxyId);
+    } catch (RuntimeException e) {
+      return false; // unknown: do not close a session on a guess
+    }
+  }
+
+  private void closeDuplicate(final ConnectedPlayer player, final PlayerEntry entry) {
+    // Checked again: a releaseAll() during the heartbeat reads hands the players over, and the
+    // Transfer that follows must not meet a disconnect.
+    if (!isWriting() || !isCurrentSession(player)) {
+      return;
+    }
+    this.duplicateSessionsClosed.incrementAndGet();
+    final long quiet = this.duplicateWarnings.acquire();
+    if (quiet >= 0) {
+      LOGGER.warn("Closing the session of {} on this proxy: proxy {} holds the player in Redis "
+          + "(duplicate session; {} similar closures not logged)", player.getUsername(),
+          entry.getProxyId(), quiet);
+    }
+    player.disconnect(Component.translatable(DUPLICATE_SESSION_KEY));
+  }
+
+  /**
+   * A local player found held by another proxy.
+   *
+   * @param session the local connection
+   * @param passes consecutive repairs that found it
+   */
+  private record Suspect(ConnectedPlayer session, int passes) {
   }
 
   private static @Nullable String currentServerName(final ConnectedPlayer player) {

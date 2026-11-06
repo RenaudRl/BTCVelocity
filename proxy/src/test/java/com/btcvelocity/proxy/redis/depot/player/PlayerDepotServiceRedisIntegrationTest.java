@@ -26,16 +26,22 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.depot.Depot;
+import com.btcvelocity.proxy.redis.depot.proxy.ProxyDepotService;
 import com.btcvelocity.proxy.redis.packet.PacketSerializer;
 import com.btcvelocity.proxy.redis.provider.LettuceProvider;
 import com.velocitypowered.api.proxy.player.PlayerSettings;
 import com.velocitypowered.api.proxy.server.ServerInfo;
+import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.api.scheduler.Scheduler;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
@@ -49,6 +55,7 @@ import io.netty.channel.nio.NioIoHandler;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -62,9 +69,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TranslatableComponent;
 import org.junit.jupiter.api.AfterEach;
@@ -80,14 +90,19 @@ import org.mockito.ArgumentMatcher;
  * redis:7.4-alpine}, then {@code gradlew :velocity-proxy:test -PredisIntegration --tests
  * '*RedisIntegrationTest'}. One test stops the container and starts it again the same way; for
  * Valkey, start {@code valkey/valkey:8.1.1-alpine} instead and add
- * {@code -PredisImage=valkey/valkey:8.1.1-alpine}.</p>
+ * {@code -PredisImage=valkey/valkey:8.1.1-alpine}. To use another container name or port (the
+ * defaults are taken by another run), add {@code -PredisContainer=name -PredisPort=56380}.</p>
  */
 @Tag("redis-integration")
 class PlayerDepotServiceRedisIntegrationTest {
 
-  private static final String CONTAINER = "btc-redis-56";
-  private static final int PORT = 56379;
+  /** Defaults match the docker run above; -PredisContainer and -PredisPort override them. */
+  private static final String CONTAINER = System.getProperty("btc.redis.container", "btc-redis-56");
+  private static final int PORT = Integer.getInteger("btc.redis.port", 56379);
   private static final String HASH = "playerentry";
+  private static final String PROXY_HASH = "proxyentry";
+  /** About two repairs; the test fails if the duplicate lives longer than this. */
+  private static final long CLOSE_DEADLINE_MS = 4_000;
   private static final long HOOK_BUDGET_MS = 50;
   private static final long TICK_MS = 10;
   private static final long LOOP_LAG_BUDGET_MS = 100;
@@ -101,6 +116,7 @@ class PlayerDepotServiceRedisIntegrationTest {
   private final AtomicLong slowestHookMs = new AtomicLong();
   private final AtomicLong worstLagMs = new AtomicLong();
   private final List<Node> nodes = new ArrayList<>();
+  private final ScheduledExecutorService timers = Executors.newScheduledThreadPool(4);
   private Node proxyA;
   private Node proxyB;
   private EventLoopGroup group;
@@ -130,14 +146,44 @@ class PlayerDepotServiceRedisIntegrationTest {
         // a node cut off by the stop test may not have reconnected yet; the hash is wiped below
       }
     }
+    timers.shutdownNow();
     try {
       final Node cleaner = node("cleaner");
       cleaner.provider.deleteKey(HASH);
+      cleaner.provider.deleteKey(PROXY_HASH);
       cleaner.close();
     } catch (RuntimeException ignored) {
       // the shutdown test already proved the cleanup is best effort
     }
     group.shutdownGracefully(0, 1, TimeUnit.SECONDS).syncUninterruptibly();
+  }
+
+  @Test
+  void aForcedDuplicateIsClosedOnTheProxyThatLostTheEntryInAboutTwoSeconds() throws Exception {
+    final Node a = liveNode("live-a");
+    final Node b = liveNode("live-b");
+    final ConnectedPlayer onA = a.join("alice", "lobby");
+    assertTrue(onLoop(() -> a.service.onPlayerConnect(onA)).get(5, TimeUnit.SECONDS));
+
+    // B takes the entry by force while A keeps the session: what a late kick-existing claim does.
+    final ConnectedPlayer onB = b.join("alice", "survival");
+    final PlayerEntry previous = b.raw.claim(new PlayerEntry(onB, b.proxyId), b.proxyId, true)
+        .get(5, TimeUnit.SECONDS);
+    final long start = System.nanoTime();
+    assertEquals(a.proxyId, previous.getProxyId());
+
+    verify(onA, timeout(CLOSE_DEADLINE_MS)).disconnect(argThat(key("velocity.error.duplicate-session")));
+    final long took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+    System.out.printf("redis-integration: forced duplicate closed on the old proxy after %d ms%n",
+        took);
+    assertTrue(took >= 900, "closed before the second repair: " + took + " ms");
+
+    Thread.sleep(2 * PlayerDepotService.REFRESH_INTERVAL.toMillis() + 500);
+    verify(onA, times(1)).disconnect(any(Component.class));
+    verify(onB, never()).disconnect(any(Component.class));
+    assertEquals(1, a.service.getDuplicateSessionsClosed());
+    assertEquals(0, b.service.getDuplicateSessionsClosed());
+    assertEquals(b.proxyId, a.raw.get(onA.getUniqueId()).getProxyId());
   }
 
   @Test
@@ -346,9 +392,44 @@ class PlayerDepotServiceRedisIntegrationTest {
   }
 
   private Node node(final String proxyId, final String username) {
-    final Node node = new Node(proxyId, username);
+    final Node node = new Node(proxyId, username, false);
     nodes.add(node);
     return node;
+  }
+
+  /** A proxy whose repair and heartbeat tasks really run, once a second like in production. */
+  private Node liveNode(final String proxyId) {
+    final Node node = new Node(proxyId, null, true);
+    nodes.add(node);
+    return node;
+  }
+
+  /** A scheduler that runs the repeating tasks on {@link #timers}, as Velocity's would. */
+  private VelocityScheduler liveScheduler() {
+    final VelocityScheduler scheduler = mock(VelocityScheduler.class);
+    when(scheduler.buildTask(any(), any(Runnable.class))).thenAnswer(inv -> {
+      final Runnable task = inv.getArgument(1);
+      final AtomicReference<Duration> period = new AtomicReference<>(Duration.ofSeconds(1));
+      final Scheduler.TaskBuilder builder = mock(Scheduler.TaskBuilder.class);
+      when(builder.repeat(any(Duration.class))).thenAnswer(repeat -> {
+        period.set(repeat.getArgument(0));
+        return builder;
+      });
+      when(builder.schedule()).thenAnswer(schedule -> {
+        final ScheduledFuture<?> future = timers.scheduleWithFixedDelay(() -> {
+          try {
+            task.run();
+          } catch (RuntimeException failed) {
+            // Velocity logs a failing task and keeps its schedule; so does this
+          }
+        }, 0, period.get().toMillis(), TimeUnit.MILLISECONDS);
+        final ScheduledTask handle = mock(ScheduledTask.class);
+        doAnswer(cancel -> future.cancel(false)).when(handle).cancel();
+        return handle;
+      });
+      return builder;
+    });
+    return scheduler;
   }
 
   /** One proxy: its own Lettuce connections, players and depot service. */
@@ -358,11 +439,12 @@ class PlayerDepotServiceRedisIntegrationTest {
     final List<ConnectedPlayer> online = new CopyOnWriteArrayList<>();
     final LettuceProvider provider;
     final VelocityRedis redis = mock(VelocityRedis.class);
-    final PlayerDepotService service;
+    volatile PlayerDepotService service; // read by the mock's answers, which timers call early
+    volatile ProxyDepotService proxies;
     final Depot<UUID, PlayerEntry> raw;
     volatile boolean shutdown;
 
-    Node(final String proxyId, final String username) {
+    Node(final String proxyId, final String username, final boolean live) {
       this.proxyId = proxyId;
       final VelocityConfiguration.Redis config = mock(VelocityConfiguration.Redis.class);
       when(config.getHost()).thenReturn("127.0.0.1");
@@ -375,7 +457,10 @@ class PlayerDepotServiceRedisIntegrationTest {
       provider.restart();
 
       final VelocityServer server = mock(VelocityServer.class);
-      when(server.getScheduler()).thenReturn(mock(VelocityScheduler.class, RETURNS_DEEP_STUBS));
+      final VelocityScheduler scheduler = live ? liveScheduler()
+          : mock(VelocityScheduler.class, RETURNS_DEEP_STUBS);
+      when(server.getScheduler()).thenReturn(scheduler);
+      when(server.getProxyId()).thenReturn(proxyId);
       when(server.getConfiguration()).thenReturn(mock(VelocityConfiguration.class, RETURNS_DEEP_STUBS));
       when(server.getAllPlayers()).thenAnswer(inv -> List.copyOf(online));
       when(server.getPlayer(any(UUID.class))).thenAnswer(inv -> online.stream()
@@ -384,8 +469,14 @@ class PlayerDepotServiceRedisIntegrationTest {
       when(redis.getServer()).thenReturn(server);
       when(redis.getProxyId()).thenReturn(proxyId);
       when(redis.isShutdown()).thenAnswer(inv -> shutdown);
+      // Stubbed before any task runs: re-stubbing a mock the timers call races in Mockito.
+      when(redis.getPlayerService()).thenAnswer(inv -> this.service);
+      when(redis.getProxyService()).thenAnswer(inv -> this.proxies);
       service = new PlayerDepotService(redis);
       raw = provider.createDepot(PlayerEntry.class);
+      if (live) {
+        proxies = new ProxyDepotService(redis);
+      }
     }
 
     ConnectedPlayer join(final String name, final String serverName) {
@@ -413,6 +504,9 @@ class PlayerDepotServiceRedisIntegrationTest {
       shutdown = true;
       try {
         service.teardown();
+        if (proxies != null) {
+          proxies.teardown();
+        }
       } finally {
         provider.disconnect();
       }

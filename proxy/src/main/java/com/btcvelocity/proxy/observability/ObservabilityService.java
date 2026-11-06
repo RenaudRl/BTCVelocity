@@ -19,6 +19,7 @@ package com.btcvelocity.proxy.observability;
 
 import com.btcvelocity.proxy.queue.VelocityQueue;
 import com.btcvelocity.proxy.queue.VelocityQueueManager;
+import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.server.VelocityRegisteredServer;
@@ -110,10 +111,12 @@ public final class ObservabilityService implements AutoCloseable {
         queues.put(queue.getName(), queue.size());
       }
     }
+    final VelocityRedis redis = server.getRedis();
     return ProxyMetrics.render(server.getLocalPlayerCount(), byBackend, queues,
         server.getBridgeChannel().metrics().snapshot(),
         server.getServerListPingHandler().getStatusCache().hits(),
         server.getServerListPingHandler().getStatusCache().misses(),
+        redis == null ? 0 : redis.getPlayerService().getDuplicateSessionsClosed(),
         watchdog == null ? List.of() : watchdog.readings());
   }
 

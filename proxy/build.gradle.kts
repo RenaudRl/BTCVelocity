@@ -116,6 +116,9 @@ tasks {
         }
         // -PredisImage=valkey/valkey:8.1.1-alpine: the image the stop test starts again.
         project.findProperty("redisImage")?.let { systemProperty("btc.redis.image", it) }
+        // -PredisContainer=name -PredisPort=56380: where the tests find (and restart) the server.
+        project.findProperty("redisContainer")?.let { systemProperty("btc.redis.container", it) }
+        project.findProperty("redisPort")?.let { systemProperty("btc.redis.port", it) }
     }
 
     withType<JavaCompile>().configureEach {

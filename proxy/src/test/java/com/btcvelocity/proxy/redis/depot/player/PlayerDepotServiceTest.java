@@ -27,12 +27,14 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.data.VelocityKick;
 import com.btcvelocity.proxy.redis.depot.Depot;
+import com.btcvelocity.proxy.redis.depot.proxy.ProxyDepotService;
 import com.btcvelocity.proxy.redis.provider.LettuceProvider;
 import com.google.gson.Gson;
 import com.velocitypowered.api.proxy.player.PlayerSettings;
@@ -73,9 +75,11 @@ class PlayerDepotServiceTest {
   private static final String OTHER = "proxy-b";
   private static final String UNCHECKED = "velocity.error.login-check-unavailable";
   private static final String DUPLICATE = "velocity.error.already-connected-proxy.remote";
+  private static final String DUPLICATE_SESSION = PlayerDepotService.DUPLICATE_SESSION_KEY;
 
   private final FakeDepot depot = new FakeDepot();
   private final VelocityRedis redis = mock(VelocityRedis.class);
+  private final ProxyDepotService proxies = mock(ProxyDepotService.class);
   private final VelocityServer server = mock(VelocityServer.class);
   private final VelocityConfiguration configuration =
       mock(VelocityConfiguration.class, RETURNS_DEEP_STUBS);
@@ -91,6 +95,7 @@ class PlayerDepotServiceTest {
     when(redis.getProvider()).thenReturn(provider);
     when(redis.getServer()).thenReturn(server);
     when(redis.getProxyId()).thenReturn(SELF);
+    when(redis.getProxyService()).thenReturn(proxies);
     // Stubbed once: re-stubbing while the worker calls the mock races in Mockito.
     when(redis.isShutdown()).thenAnswer(inv -> shutdown);
     when(server.getScheduler()).thenReturn(mock(VelocityScheduler.class, RETURNS_DEEP_STUBS));
@@ -263,6 +268,116 @@ class PlayerDepotServiceTest {
     assertEquals(OptionalInt.of(1), service.getCachedPlayersOnOtherProxies("Lobby"));
     assertEquals(1, service.getCachedPlayerCountOnOtherProxies());
     assertEquals(3, service.getCachedEntries().orElseThrow().size());
+  }
+
+  @Test
+  void aPlayerHeldByAnotherLiveProxyIsClosedOnTheSecondRepairOnly() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+
+    service.refreshNow();
+    verify(alice, never()).disconnect(any(Component.class));
+    assertEquals(0, service.getDuplicateSessionsClosed());
+
+    service.refreshNow();
+    verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
+    assertEquals(1, service.getDuplicateSessionsClosed());
+
+    service.refreshNow(); // the session is closing: no second closure, no second count
+    verify(alice, times(1)).disconnect(any(Component.class));
+    assertEquals(1, service.getDuplicateSessionsClosed());
+    // the loop hop is disconnect(), not disconnect0() from the worker; the owner keeps the entry
+    verify(alice, never()).disconnect0(any(Component.class), anyBoolean());
+    assertEquals(OTHER, depot.map.get(alice.getUniqueId()).getProxyId());
+  }
+
+  @Test
+  void aTransferInFlightIsNeverClosed() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    service.refreshNow(); // the new proxy has claimed, the old connection is still closing...
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby")); // ...or the entry came back
+    service.refreshNow();
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    service.refreshNow(); // a different "first" pass: the count restarted
+
+    verify(alice, never()).disconnect(any(Component.class));
+    service.refreshNow();
+    verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
+  }
+
+  @Test
+  void aNewSessionOfTheSamePlayerStartsTheCountAgain() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer first = join("alice");
+    depot.put(entry(first.getUniqueId(), "alice", OTHER, "lobby"));
+    service.refreshNow();
+
+    online.remove(first);
+    final ConnectedPlayer second = join("alice");
+    service.refreshNow();
+    verify(second, never()).disconnect(any(Component.class));
+    service.refreshNow();
+
+    verify(second).disconnect(argThat(key(DUPLICATE_SESSION)));
+    verify(first, never()).disconnect(any(Component.class));
+  }
+
+  @Test
+  void aPlayerHeldByAProxyWithoutHeartbeatOrAnUnreadableOneIsKept() {
+    final ConnectedPlayer alice = join("alice");
+    final ConnectedPlayer bob = join("bob");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    depot.put(entry(bob.getUniqueId(), "bob", "proxy-c", "lobby"));
+    when(proxies.isAlive(OTHER)).thenReturn(false); // dead: the reaper will clear its entries
+    when(proxies.isAlive("proxy-c")).thenThrow(new IllegalStateException("redis down"));
+
+    for (int i = 0; i < 4; i++) {
+      service.refreshNow();
+    }
+
+    verify(alice, never()).disconnect(any(Component.class));
+    verify(bob, never()).disconnect(any(Component.class));
+    assertEquals(0, service.getDuplicateSessionsClosed());
+  }
+
+  @Test
+  void nothingIsClosedOnceThisProxyReleasedItsPlayersForATransfer() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    final ConnectedPlayer bob = join("bob");
+    depot.put(entry(bob.getUniqueId(), "bob", OTHER, "lobby"));
+    service.refreshNow(); // bob: first pass, before the shutdown starts
+
+    service.releaseAll();
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby")); // the target proxy claims her
+    for (int i = 0; i < 4; i++) {
+      service.refreshNow(); // returns at once: this proxy writes and judges nothing more
+    }
+
+    verify(alice, never()).disconnect(any(Component.class));
+    verify(bob, never()).disconnect(any(Component.class));
+  }
+
+  @Test
+  void aReleaseDuringTheHeartbeatReadsStillSparesTheTransfer() {
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    service.refreshNow(); // first pass
+
+    when(proxies.isAlive(OTHER)).thenAnswer(inv -> {
+      service.releaseAll(); // the shutdown starts while the second repair reads the heartbeat
+      return true;
+    });
+    service.refreshNow();
+
+    verify(alice, never()).disconnect(any(Component.class));
+    assertEquals(0, service.getDuplicateSessionsClosed());
   }
 
   @Test
