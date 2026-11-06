@@ -116,8 +116,10 @@ class PlayerDepotServiceRedisIntegrationTest {
   private static final long PAUSE_MS = 6_000;
   /** A lease taken after the pause, renewed, and a reaping pass: a few intervals. */
   private static final long OBSERVE_AFTER_PAUSE_MS = 8_000;
-  /** About two repairs; the test fails if the duplicate lives longer than this. */
-  private static final long CLOSE_DEADLINE_MS = 4_000;
+  /** The confirming repairs plus one for scheduler jitter, plus a second of slack. */
+  private static final long CLOSE_DEADLINE_MS =
+      (PlayerDepotService.DUPLICATE_CONFIRMATIONS + 1) * PlayerDepotService.REFRESH_INTERVAL.toMillis()
+          + 1_000;
   private static final long HOOK_BUDGET_MS = 50;
   private static final long TICK_MS = 10;
   private static final long LOOP_LAG_BUDGET_MS = 100;
@@ -198,7 +200,9 @@ class PlayerDepotServiceRedisIntegrationTest {
     final long took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
     System.out.printf("redis-integration: forced duplicate closed on the old proxy after %d ms%n",
         took);
-    assertTrue(took >= 900, "closed before the second repair: " + took + " ms");
+    final long minimum = PlayerDepotService.REFRESH_INTERVAL
+        .minus(PlayerDepotService.SCHEDULING_TOLERANCE).toMillis();
+    assertTrue(took >= minimum, "closed before the second repair: " + took + " ms");
 
     Thread.sleep(2 * PlayerDepotService.REFRESH_INTERVAL.toMillis() + 500);
     verify(onA, times(1)).disconnect(any(Component.class));
@@ -402,7 +406,14 @@ class PlayerDepotServiceRedisIntegrationTest {
       assertEquals(ReapOutcome.NOT_HOLDER, reap(redis, "proxy-a"));
       assertFalse(redis.renewLease(LEASE_KEY, "proxy-a", ProxyDepotService.REAPER_LEASE_TTL,
           "heartbeat:proxy-a"));
-      assertTrue(redis.acquireLease(LEASE_KEY, "proxy-a", ProxyDepotService.REAPER_LEASE_TTL));
+      assertFalse(redis.acquireLease(LEASE_KEY, "proxy-a", ProxyDepotService.REAPER_LEASE_TTL,
+          "heartbeat:proxy-a"), "taken without its own heartbeat");
+      redis.setWithExpiry("heartbeat:proxy-a", "1", 5);
+      assertTrue(redis.acquireLease(LEASE_KEY, "proxy-a", ProxyDepotService.REAPER_LEASE_TTL,
+          "heartbeat:proxy-a"));
+      assertFalse(redis.acquireLease(LEASE_KEY, "proxy-b", ProxyDepotService.REAPER_LEASE_TTL,
+          "heartbeat:proxy-a"), "taken while held");
+      redis.deleteKey("heartbeat:proxy-a");
       assertNotNull(proxyA.raw.get(onDead.getUniqueId()));
 
       // The holder that does not beat does not renew; one that beats does.

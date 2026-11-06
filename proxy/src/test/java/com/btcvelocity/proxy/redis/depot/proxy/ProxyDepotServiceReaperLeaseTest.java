@@ -18,6 +18,7 @@
 package com.btcvelocity.proxy.redis.depot.proxy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -91,8 +93,10 @@ class ProxyDepotServiceReaperLeaseTest {
   void setUp() {
     when(provider.createDepot(ProxyEntry.class)).thenReturn((Depot) new MapDepot(entries));
     when(provider.existsKey(anyString())).thenAnswer(inv -> beating.contains(inv.<String>getArgument(0)));
-    when(provider.acquireLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class)))
-        .thenAnswer(inv -> lease.compareAndSet(null, inv.<String>getArgument(1)));
+    when(provider.acquireLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class),
+        anyString())).thenAnswer(inv -> beating.contains(inv.<String>getArgument(3))
+        && lease.compareAndSet(null, inv.<String>getArgument(1)));
+    doAnswer(inv -> beating.remove(inv.<String>getArgument(0))).when(provider).deleteKey(anyString());
     // The Lua scripts, in memory: the lease holder check, the heartbeat check, then the deletion.
     when(provider.renewLease(eq(ProxyDepotService.REAPER_LEASE_KEY), anyString(), any(Duration.class),
         anyString())).thenAnswer(inv -> inv.<String>getArgument(1).equals(lease.get())
@@ -220,12 +224,16 @@ class ProxyDepotServiceReaperLeaseTest {
     lease.set(null);
     beating.clear();
 
-    reap.run(); // wake-up: its renewal fails, it takes the lease again and judges nothing
+    reap.run(); // wake-up before its own heartbeat: it cannot take the lease, and judges nothing
     assertTrue(entries.containsKey(DEAD), "reaped on the wake-up pass");
+    assertNull(lease.get());
+
+    beating.add("heartbeat:" + SELF); // this proxy publishes again
+    reap.run(); // its renewal fails, it takes the lease again and judges nothing
+    assertTrue(entries.containsKey(DEAD), "reaped on the pass that took the lease");
     assertEquals(SELF, lease.get());
 
-    beating.add("heartbeat:" + SELF); // the others, and this proxy, publish again
-    beating.add("heartbeat:" + DEAD);
+    beating.add("heartbeat:" + DEAD); // the others publish again
     reap.run();
     assertTrue(entries.containsKey(DEAD), "reaped a proxy that is alive again");
     assertEquals(0, service.getReapedProxyCount());
@@ -364,7 +372,35 @@ class ProxyDepotServiceReaperLeaseTest {
   }
 
   @Test
-  void stoppingTheHeartbeatStopsOnlyTheHeartbeat() {
+  void aPassInterruptedByTheShutdownLogsNoError() throws InterruptedException {
+    final List<LogEvent> events = new CopyOnWriteArrayList<>();
+    final AbstractAppender appender = new AbstractAppender("interrupt", null, null, true,
+        Property.EMPTY_ARRAY) {
+      @Override
+      public void append(final LogEvent event) {
+        events.add(event.toImmutable());
+      }
+    };
+    appender.start();
+    final org.apache.logging.log4j.core.Logger logger =
+        (org.apache.logging.log4j.core.Logger) LogManager.getLogger(ProxyDepotService.class);
+    logger.addAppender(appender);
+    try {
+      // cancel() interrupts the pass in flight: Lettuce wraps it in a runtime exception
+      when(provider.renewLease(anyString(), anyString(), any(Duration.class), anyString()))
+          .thenThrow(new IllegalStateException("command interrupted", new InterruptedException()));
+      reap.run();
+
+      Thread.sleep(500); // the proxy logs through async loggers
+      assertTrue(events.stream().noneMatch(e -> e.getLevel() == Level.ERROR), events.toString());
+    } finally {
+      logger.removeAppender(appender);
+      appender.stop();
+    }
+  }
+
+  @Test
+  void stoppingTheHeartbeatDeletesItReleasesTheLeaseAndKeepsTheProxyFromTakingItAgain() {
     final Runnable heartbeat = tasks.get(0);
     heartbeat.run();
     verify(provider, times(1)).setWithExpiry(eq("heartbeat:" + SELF), anyString(), anyLong());
@@ -373,8 +409,10 @@ class ProxyDepotServiceReaperLeaseTest {
     heartbeat.run(); // a run already handed to the pool
     verify(provider, times(1)).setWithExpiry(anyString(), anyString(), anyLong());
 
-    reap.run(); // the reaper goes on until the teardown
-    assertEquals(SELF, lease.get());
+    assertFalse(beating.contains("heartbeat:" + SELF), "a clean departure: peers need not wait for the TTL");
+    assertNull(lease.get(), "released: another proxy takes over at once");
+    reap.run(); // the reaper goes on until the teardown, but a proxy that does not beat takes nothing
+    assertNull(lease.get());
   }
 
   @Test

@@ -171,17 +171,7 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
 
     // The lease goes first, so another proxy takes the reaping over at its next pass instead of
     // waiting for the lease to expire. A no-op when another proxy holds it.
-    this.reaperLock.lock();
-    try {
-      try {
-        this.redis.getProvider().releaseLease(REAPER_LEASE_KEY, this.redis.getProxyId());
-      } catch (RuntimeException e) {
-        LOGGER.warn("Could not release the reaper lease ({}); it expires on its own within {} s",
-            e.toString(), REAPER_LEASE_TTL.toSeconds());
-      }
-    } finally {
-      this.reaperLock.unlock();
-    }
+    releaseReaperLease();
 
     // Locked against a heartbeat already in flight, which would register this proxy again.
     synchronized (this) {
@@ -196,10 +186,26 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   }
 
   /**
-   * Stops publishing this proxy's heartbeat, leaving the rest of the shutdown alone. Called once
-   * the players were released: the key then expires within {@link #HEARTBEAT_TTL}, so whatever
-   * this proxy still has in Redis can be reaped instead of being kept alive until the scheduler
-   * stops.
+   * Releases the reaper lease if this proxy holds it. Serialized with the reap passes, so none can
+   * renew it afterwards.
+   */
+  private void releaseReaperLease() {
+    this.reaperLock.lock();
+    try {
+      this.redis.getProvider().releaseLease(REAPER_LEASE_KEY, this.redis.getProxyId());
+    } catch (RuntimeException e) {
+      LOGGER.warn("Could not release the reaper lease ({}); it expires on its own within {} s",
+          e.toString(), REAPER_LEASE_TTL.toSeconds());
+    } finally {
+      this.reaperLock.unlock();
+    }
+  }
+
+  /**
+   * Stops publishing this proxy's heartbeat, leaving the rest of the shutdown alone, and leaves
+   * the cluster cleanly: the heartbeat key is deleted and the reaper lease released, so the
+   * others reap whatever this proxy still has in Redis without waiting for the TTL, and this
+   * proxy, no longer beating, cannot take the lease again. Called once the players were released.
    */
   public void stopHeartbeat() {
     if (this.heartbeatTask != null) {
@@ -209,7 +215,14 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
     // Locked against a heartbeat in flight, and read by the runs already handed to the pool.
     synchronized (this) {
       this.heartbeatStopped = true;
+      try {
+        this.redis.getProvider().deleteKey(HEARTBEAT_KEY_PREFIX + this.redis.getProxyId());
+      } catch (RuntimeException e) {
+        LOGGER.warn("Could not delete the heartbeat ({}); it expires on its own within {} s",
+            e.toString(), HEARTBEAT_TTL.toSeconds());
+      }
     }
+    releaseReaperLease();
   }
 
   /**
@@ -273,8 +286,13 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
    * for as long as Redis is down. The first failure of an outage keeps its stack trace; the next
    * ones are one line with the number of failures left out since.
    */
-  private static void logFailure(final LogThrottle throttle, final AtomicBoolean failing,
-                                 final String task, final RuntimeException failure) {
+  private void logFailure(final LogThrottle throttle, final AtomicBoolean failing,
+                          final String task, final RuntimeException failure) {
+    // The scheduler cancels a pass in flight at shutdown: that is not an outage.
+    if (this.redis.isShutdown() || isInterruption(failure)) {
+      LOGGER.debug("{} was interrupted by the shutdown: {}", task, failure.toString());
+      return;
+    }
     final long quiet = throttle.acquire();
     if (quiet < 0) {
       return;
@@ -286,6 +304,15 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
       LOGGER.error("{} is still failing: {} ({} similar failures not logged)", task, failure,
           quiet);
     }
+  }
+
+  private static boolean isInterruption(final Throwable failure) {
+    for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+      if (cause instanceof InterruptedException) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -361,7 +388,9 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
       }
       // Lost or never held: the others get a heartbeat interval from now, taken or not.
       this.leaseAcquiredAt = this.nanoClock.getAsLong();
-      this.redis.getProvider().acquireLease(REAPER_LEASE_KEY, proxyId, REAPER_LEASE_TTL);
+      // Taken only while this proxy beats, like the renewal.
+      this.redis.getProvider().acquireLease(REAPER_LEASE_KEY, proxyId, REAPER_LEASE_TTL,
+          HEARTBEAT_KEY_PREFIX + proxyId);
       return false;
     } catch (RuntimeException e) {
       this.leaseAcquiredAt = this.nanoClock.getAsLong(); // Redis unreachable: the lease is in doubt
@@ -381,7 +410,7 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
         this.redis.getProxyId(), HEARTBEAT_KEY_PREFIX + proxyId, proxyId, PlayerEntry.class,
         ProxyEntry.class);
     if (outcome == ReapOutcome.REAPED) {
-      LOGGER.warn("Reaped proxy {} from redis. This proxy shut down improperly.", proxyId);
+      LOGGER.warn("Reaping proxy {}: its heartbeat expired.", proxyId);
       this.reaped.incrementAndGet();
     }
     return outcome;

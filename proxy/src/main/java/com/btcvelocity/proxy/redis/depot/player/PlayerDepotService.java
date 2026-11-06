@@ -101,6 +101,16 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   public static final int DUPLICATE_CONFIRMATIONS = 2;
 
   /**
+   * How much earlier than {@link #REFRESH_INTERVAL} a repair may run and still count as one
+   * interval later: the scheduler jitters, and a second repair 0.999 s after the first would
+   * otherwise push the closure to the third.
+   */
+  static final Duration SCHEDULING_TOLERANCE = Duration.ofMillis(200);
+
+  private static final long MIN_GAP_NANOS =
+      REFRESH_INTERVAL.toNanos() - SCHEDULING_TOLERANCE.toNanos();
+
+  /**
    * Translation key of the message shown to the player whose duplicate session is closed.
    */
   static final String DUPLICATE_SESSION_KEY = "velocity.error.duplicate-session";
@@ -161,6 +171,7 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * Throttles the warning for closed duplicate sessions.
    */
   private final LogThrottle duplicateWarnings = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+  private final LogThrottle forceCloseWarnings = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
 
   /**
    * Local sessions closed because another proxy holds the player, since startup.
@@ -642,15 +653,19 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
       final int passes = same ? before.passes() + 1 : 1;
       final long firstSeen = same ? before.firstSeenNanos() : now;
       Phase phase = same ? before.phase() : Phase.SUSPECTED;
+      long disconnectedAt = same ? before.disconnectedNanos() : now;
       if (phase == Phase.DISCONNECTED) {
-        // The same session is still here a pass after the polite disconnect: it hangs.
-        forceClose(player);
-        phase = Phase.FORCED;
+        // The same session is still here a repair interval after the polite disconnect: it hangs.
+        if (now - disconnectedAt >= MIN_GAP_NANOS && forceClose(player)) {
+          phase = Phase.FORCED;
+        }
       } else if (phase == Phase.SUSPECTED && passes >= DUPLICATE_CONFIRMATIONS
-          && now - firstSeen >= REFRESH_INTERVAL.toNanos() && closeDuplicate(player)) {
+          && now - firstSeen >= MIN_GAP_NANOS && closeDuplicate(player)) {
         phase = Phase.DISCONNECTED;
+        disconnectedAt = now;
       }
-      this.suspects.put(player.getUniqueId(), new Suspect(player, passes, firstSeen, phase));
+      this.suspects.put(player.getUniqueId(),
+          new Suspect(player, passes, firstSeen, phase, disconnectedAt));
     }
     this.suspects.keySet().retainAll(held);
   }
@@ -686,17 +701,20 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
 
   /**
    * Closes the connection of a session whose polite disconnect did not end it. Not counted again.
+   *
+   * @return {@code true} if the connection was closed
    */
-  private void forceClose(final ConnectedPlayer player) {
+  private boolean forceClose(final ConnectedPlayer player) {
     if (currentHolder(player) == null) {
-      return;
+      return false;
     }
-    final long quiet = this.duplicateWarnings.acquire();
+    final long quiet = this.forceCloseWarnings.acquire();
     if (quiet >= 0) {
       LOGGER.warn("The duplicate session of {} did not close after its disconnect; closing the "
           + "connection ({} similar closures not logged)", player.getUsername(), quiet);
     }
     player.getConnection().close();
+    return true;
   }
 
   /**
@@ -728,8 +746,10 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * @param passes consecutive repairs that found it
    * @param firstSeenNanos {@link #nanoClock} reading of the first of them
    * @param phase how far the closure went
+   * @param disconnectedNanos {@link #nanoClock} reading of the polite disconnect
    */
-  private record Suspect(ConnectedPlayer session, int passes, long firstSeenNanos, Phase phase) {
+  private record Suspect(ConnectedPlayer session, int passes, long firstSeenNanos, Phase phase,
+                         long disconnectedNanos) {
   }
 
   /**

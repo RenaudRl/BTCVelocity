@@ -198,14 +198,18 @@ public sealed interface RedisProvider permits AbstractRedisProvider {
   CompletableFuture<Void> deleteKeyAsync(@NotNull String key);
 
   /**
-   * Takes a lease: {@code SET key owner NX PX ttl}. Blocking Redis call.
+   * Takes a lease, only if {@code requiredKey} exists and the lease is free (one Lua script:
+   * {@code EXISTS requiredKey}, then {@code SET key owner NX PX ttl}). Blocking Redis call.
    *
    * @param key the lease key
    * @param owner who takes it
    * @param ttl how long it lasts unless renewed
-   * @return {@code true} if the key was free and this owner now holds it
+   * @param requiredKey a key that must exist, such as the owner's heartbeat: a proxy that does not
+   *                    beat does not take the lease
+   * @return {@code true} if the key was free, the required key exists and this owner now holds it
    */
-  boolean acquireLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl);
+  boolean acquireLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl,
+                       @NotNull String requiredKey);
 
   /**
    * Extends a lease, only if {@code owner} still holds it and {@code requiredKey} exists (one Lua

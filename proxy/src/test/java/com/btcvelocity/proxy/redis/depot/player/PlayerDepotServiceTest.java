@@ -47,6 +47,7 @@ import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.scheduler.VelocityScheduler;
 import io.lettuce.core.RedisCommandExecutionException;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -316,6 +317,68 @@ class PlayerDepotServiceTest {
   }
 
   @Test
+  void aSecondRepairSlightlyUnderOneIntervalAfterTheFirstStillCloses() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    repair();
+
+    advance(Duration.ofMillis(980)); // scheduler jitter: 20 ms early, within the tolerance
+    service.refreshNow();
+
+    verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
+  }
+
+  @Test
+  void aSecondRepairTenMillisecondsAfterTheFirstDoesNotClose() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    repair();
+
+    advance(Duration.ofMillis(10));
+    service.refreshNow();
+
+    verify(alice, never()).disconnect(any(Component.class));
+  }
+
+  @Test
+  void aForcedCloseWaitsAboutAnIntervalAfterTheDisconnect() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    repair();
+    repair();
+    verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
+
+    advance(Duration.ofMillis(10)); // a burst right after the disconnect: it may still be closing
+    service.refreshNow();
+    verify(alice.getConnection(), never()).close();
+
+    advance(PlayerDepotService.REFRESH_INTERVAL.minus(PlayerDepotService.SCHEDULING_TOLERANCE));
+    service.refreshNow();
+    verify(alice.getConnection()).close();
+  }
+
+  @Test
+  void aForcedCloseThatClosedNothingIsRetriedOnTheNextRepair() {
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    // isAlive calls: repair 1 (1), repair 2 (2) + closure (3), repair 3 (4) + force (5, a failed
+    // read), repair 4 (6) + force (7).
+    when(proxies.isAlive(OTHER)).thenReturn(true, true, true, true, false, true);
+    repair();
+    repair();
+    verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
+
+    repair(); // the holder is unreadable: nothing is closed, so the session is not "forced"
+    verify(alice.getConnection(), never()).close();
+
+    repair();
+    verify(alice.getConnection(), times(1)).close();
+  }
+
+  @Test
   void aSessionThatEndsAfterItsDisconnectIsNotForced() {
     when(proxies.isAlive(OTHER)).thenReturn(true);
     final ConnectedPlayer alice = join("alice");
@@ -560,6 +623,10 @@ class PlayerDepotServiceTest {
   }
 
   /** One repair, a repair interval after the previous one, as the scheduler runs them. */
+  private void advance(final Duration duration) {
+    clock.addAndGet(duration.toNanos());
+  }
+
   private void repair() {
     clock.addAndGet(PlayerDepotService.REFRESH_INTERVAL.toNanos());
     service.refreshNow();

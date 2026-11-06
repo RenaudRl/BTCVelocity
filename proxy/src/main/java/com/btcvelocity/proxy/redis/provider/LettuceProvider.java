@@ -38,7 +38,6 @@ import io.lettuce.core.RedisFuture;
 import io.lettuce.core.RedisLoadingException;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.ScriptOutputType;
-import io.lettuce.core.SetArgs;
 import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.async.RedisAsyncCommands;
@@ -146,6 +145,16 @@ public final class LettuceProvider extends AbstractRedisProvider {
       + "  end\n"
       + "end\n"
       + "return removed\n";
+
+  /**
+   * KEYS[1] lease, KEYS[2] the taker's heartbeat, ARGV: owner, ttl in ms. Takes the lease only if
+   * it is free and the taker beats.
+   */
+  private static final String ACQUIRE_LEASE_SCRIPT =
+      "if redis.call('EXISTS', KEYS[2]) == 1 and redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then\n"
+      + "  return 1\n"
+      + "end\n"
+      + "return 0\n";
 
   /**
    * KEYS[1] lease, KEYS[2] the owner's heartbeat, ARGV: owner, ttl in ms. Extends the lease only
@@ -604,14 +613,16 @@ public final class LettuceProvider extends AbstractRedisProvider {
 
   @Override
   public boolean acquireLease(final @NotNull String key, final @NotNull String owner,
-                              final @NotNull Duration ttl) {
+                              final @NotNull Duration ttl, final @NotNull String requiredKey) {
     if (this.depotConnection == null) {
       LOGGER.warn("Attempted to take lease '{}' but the depot connection is not initialized", key);
       return false;
     }
 
-    return this.depotConnection.sync()
-        .set(key, owner, SetArgs.Builder.nx().px(ttl.toMillis())) != null;
+    final Long taken = this.depotConnection.sync().eval(ACQUIRE_LEASE_SCRIPT,
+        ScriptOutputType.INTEGER, new String[] {key, requiredKey}, owner,
+        String.valueOf(ttl.toMillis()));
+    return taken != null && taken > 0;
   }
 
   @Override
