@@ -190,6 +190,9 @@ public final class BtcArrivalRouterPlugin {
       chosen = this.limboServer();
     }
     if (chosen.isEmpty()) {
+      chosen = this.lastResort(player, Set.of());
+    }
+    if (chosen.isEmpty()) {
       this.logger.warn("No arrival destination available for {}; the proxy will disconnect them.",
           player.getUsername());
       return;
@@ -230,6 +233,9 @@ public final class BtcArrivalRouterPlugin {
         .orElse(false);
     if (chosen.isEmpty() && !this.isLimbo(from) && !stillInLimbo) {
       chosen = this.limboServer();
+    }
+    if (chosen.isEmpty() && !stillInLimbo) {
+      chosen = this.lastResort(player, this.attempts.of(player.getUniqueId()));
     }
     if (chosen.isEmpty()) {
       this.logger.info(
@@ -325,7 +331,13 @@ public final class BtcArrivalRouterPlugin {
 
   // Maintenance is "no destination" for whoever cannot bypass it: the limbo fallback does the rest.
   private Optional<RegisteredServer> destinationFor(Player player, Set<String> excluded) {
-    return this.heldByMaintenance(player) ? Optional.empty() : this.choose(excluded);
+    return this.heldByMaintenance(player) ? Optional.empty() : this.choose(excluded, false);
+  }
+
+  // A backend the proxy avoids is advice, not a refusal: when nothing else is left and no limbo can
+  // hold the player, the least populated avoided one still beats a disconnect.
+  private Optional<RegisteredServer> lastResort(Player player, Set<String> excluded) {
+    return this.heldByMaintenance(player) ? Optional.empty() : this.choose(excluded, true);
   }
 
   private boolean heldByMaintenance(Player player) {
@@ -377,7 +389,8 @@ public final class BtcArrivalRouterPlugin {
     return Optional.ofNullable(this.limbo).flatMap(this.proxy::getServer);
   }
 
-  private Optional<RegisteredServer> choose(Set<String> excluded) {
+  // avoided false: the backends the proxy does not avoid; true: only the avoided ones.
+  private Optional<RegisteredServer> choose(Set<String> excluded, boolean avoided) {
     List<ArrivalCandidate> candidates = new ArrayList<>();
     for (RegisteredServer server : this.proxy.getAllServers()) {
       String name = server.getServerInfo().getName();
@@ -388,9 +401,8 @@ public final class BtcArrivalRouterPlugin {
       if (!this.policy.accepts(name) || excluded.contains(name)) {
         continue;
       }
-      // Its connections keep failing (proxy-side circuit breaker): the limbo holds the player
-      // until it is tried again, instead of sending them to a backend likely to drop them.
-      if (this.proxy.isBackendAvoided(name)) {
+      // Its connections keep failing (proxy-side circuit breaker): preferably not sent there.
+      if (this.proxy.isBackendAvoided(name) != avoided) {
         continue;
       }
       candidates.add(new ArrivalCandidate(name, this.counts.of(name)));
