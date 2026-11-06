@@ -98,6 +98,7 @@ public final class BtcArrivalRouterPlugin {
   private final String limbo;
   private final Path dataDirectory;
   private final ArrivalAttempts attempts = new ArrivalAttempts();
+  private final PlayerCounts counts;
   private ArrivalMessages messages = ArrivalMessages.defaults();
   private volatile boolean maintenance;
 
@@ -116,6 +117,18 @@ public final class BtcArrivalRouterPlugin {
     this.policy = policy;
     this.limbo = limbo == null || limbo.isBlank() ? null : limbo.trim();
     this.dataDirectory = dataDirectory;
+    this.counts = new PlayerCounts(this::clusterCount, this::localCount,
+        System::currentTimeMillis, logger);
+  }
+
+  // The cluster-wide count (every proxy, through Redis); without a cluster service, ours alone.
+  private int clusterCount(String serverName) {
+    var cluster = this.proxy.getClusterPlayerService();
+    return cluster == null ? this.localCount(serverName) : cluster.getPlayersOnServerCount(serverName);
+  }
+
+  private int localCount(String serverName) {
+    return this.proxy.getServer(serverName).map(server -> server.getPlayersConnected().size()).orElse(0);
   }
 
   @Subscribe
@@ -367,12 +380,15 @@ public final class BtcArrivalRouterPlugin {
   private Optional<RegisteredServer> choose(Set<String> excluded) {
     List<ArrivalCandidate> candidates = new ArrayList<>();
     for (RegisteredServer server : this.proxy.getAllServers()) {
-      if (this.isLimbo(server.getServerInfo().getName())) {
+      String name = server.getServerInfo().getName();
+      if (this.isLimbo(name)) {
         continue; // never a destination, even under a wildcard pattern
       }
-      candidates.add(new ArrivalCandidate(
-          server.getServerInfo().getName(),
-          server.getPlayersConnected().size()));
+      // Only what the policy could pick is counted: a cluster count can be a Redis round trip.
+      if (!this.policy.accepts(name) || excluded.contains(name)) {
+        continue;
+      }
+      candidates.add(new ArrivalCandidate(name, this.counts.of(name)));
     }
 
     return this.policy.select(candidates, excluded)
