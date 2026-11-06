@@ -285,23 +285,27 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   }
 
   /**
-   * Get the total player count across all proxies, from the last snapshot. No I/O.
+   * Gets the number of players the other proxies hold, from the last snapshot. No I/O. Callers
+   * add this proxy's live count, which the snapshot would show up to a refresh late.
    *
-   * @return the total player count
+   * @return the other proxies' count, or 0 if the snapshot is missing or older than
+   *         {@link #SNAPSHOT_MAX_AGE}
    */
-  public int getTotalPlayerCount() {
+  public int getCachedPlayerCountOnOtherProxies() {
     final Snapshot current = this.snapshot;
-    return current == null ? 0 : current.entries().size();
+    return current == null || current.isStale(System.nanoTime()) ? 0 : current.othersTotal();
   }
 
   /**
-   * Gets the number of players on a server from the last snapshot. No I/O.
+   * Gets the number of players the other proxies hold on a server, from the last snapshot. No I/O.
+   * Callers add this proxy's live count: a burst of arrivals routed here then shows at once,
+   * instead of piling onto the server a one-second-old count calls the emptiest.
    *
    * @param serverName the backend server name, case-insensitive
-   * @return the cluster-wide count, or empty if the snapshot is missing or older than
+   * @return the other proxies' count, or empty if the snapshot is missing or older than
    *         {@link #SNAPSHOT_MAX_AGE}
    */
-  public OptionalInt getCachedPlayersOnServer(final @NotNull String serverName) {
+  public OptionalInt getCachedPlayersOnOtherProxies(final @NotNull String serverName) {
     final Snapshot current = this.snapshot;
     return current == null ? OptionalInt.empty() : current.countOn(serverName, System.nanoTime());
   }
@@ -483,7 +487,7 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
       }
     }
 
-    this.snapshot = Snapshot.of(entries, System.nanoTime());
+    this.snapshot = Snapshot.of(entries, proxyId, System.nanoTime());
   }
 
   private static @Nullable String currentServerName(final ConnectedPlayer player) {
@@ -491,22 +495,30 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   }
 
   /**
-   * An immutable cluster view: every entry and the count per lower-cased server name.
+   * An immutable cluster view: every entry, and the other proxies' counts.
    *
    * @param entries every player entry read
-   * @param countsByServer player count per lower-cased server name
+   * @param countsByServer other proxies' player count per lower-cased server name
+   * @param othersTotal other proxies' player count
    * @param takenAtNanos {@link System#nanoTime()} when the entries were read
    */
-  record Snapshot(List<PlayerEntry> entries, Map<String, Integer> countsByServer, long takenAtNanos) {
+  record Snapshot(List<PlayerEntry> entries, Map<String, Integer> countsByServer, int othersTotal,
+                  long takenAtNanos) {
 
-    static Snapshot of(final Collection<PlayerEntry> entries, final long takenAtNanos) {
+    static Snapshot of(final Collection<PlayerEntry> entries, final String selfProxyId,
+                       final long takenAtNanos) {
       final Map<String, Integer> counts = new HashMap<>();
+      int others = 0;
       for (PlayerEntry entry : entries) {
+        if (entry.getProxyId().equalsIgnoreCase(selfProxyId)) {
+          continue;
+        }
+        others++;
         if (entry.getServerName() != null) {
           counts.merge(entry.getServerName().toLowerCase(Locale.ROOT), 1, Integer::sum);
         }
       }
-      return new Snapshot(List.copyOf(entries), Map.copyOf(counts), takenAtNanos);
+      return new Snapshot(List.copyOf(entries), Map.copyOf(counts), others, takenAtNanos);
     }
 
     boolean isStale(final long nowNanos) {

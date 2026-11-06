@@ -140,8 +140,8 @@ class PlayerDepotServiceRedisIntegrationTest {
     final ConnectedPlayer carol = proxyA.join("carol", "lobby");
     assertTrue(onLoop(() -> proxyA.service.onPlayerConnect(alice)).get(5, TimeUnit.SECONDS));
     assertTrue(onLoop(() -> proxyA.service.onPlayerConnect(carol)).get(5, TimeUnit.SECONDS));
-    proxyA.service.refreshNow();
-    assertEquals(OptionalInt.of(2), proxyA.service.getCachedPlayersOnServer("lobby"));
+    proxyB.service.refreshNow();
+    assertEquals(OptionalInt.of(2), proxyB.service.getCachedPlayersOnOtherProxies("lobby"));
 
     final ConnectedPlayer bob = proxyA.join("bob", "survival");
     final ScheduledFuture<?> probe = startLagProbe();
@@ -155,8 +155,9 @@ class PlayerDepotServiceRedisIntegrationTest {
         return null;
       });
       proxyA.leave(carol);
-      // (a) the count is served from the snapshot, no Redis round trip
-      assertEquals(OptionalInt.of(2), onLoop(() -> proxyA.service.getCachedPlayersOnServer("lobby")));
+      // (a) B's count of A's players is served from the snapshot, no Redis round trip
+      assertEquals(OptionalInt.of(2),
+          onLoop(() -> proxyB.service.getCachedPlayersOnOtherProxies("lobby")));
       assertFalse(bobLogin.get(PlayerDepotService.CONNECT_CHECK_TIMEOUT.toMillis() + 2_000,
           TimeUnit.MILLISECONDS), "deny: an unchecked login is refused");
       verify(bob).disconnect0(argThat(key("velocity.error.login-check-unavailable")), anyBoolean());
@@ -164,7 +165,8 @@ class PlayerDepotServiceRedisIntegrationTest {
 
       Thread.sleep(PlayerDepotService.SNAPSHOT_MAX_AGE.toMillis() + 200);
       // stale snapshot: callers fall back to the local count instead of waiting on Redis
-      assertEquals(OptionalInt.empty(), onLoop(() -> proxyA.service.getCachedPlayersOnServer("lobby")));
+      assertEquals(OptionalInt.empty(),
+          onLoop(() -> proxyB.service.getCachedPlayersOnOtherProxies("lobby")));
     } finally {
       docker("unpause");
       probe.cancel(false);

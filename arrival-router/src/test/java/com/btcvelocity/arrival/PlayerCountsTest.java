@@ -72,6 +72,16 @@ class PlayerCountsTest {
   }
 
   @Test
+  void arrivalsOnThisProxyShowThroughTheCachedCount() {
+    // Witness: without it a sweep sends every player to the server the cached count calls emptiest.
+    assertEquals(CLUSTER, this.counts.of("Lobby-1"));
+    this.local.addAndGet(2);
+
+    assertEquals(CLUSTER + 2, this.counts.of("Lobby-1"));
+    assertEquals(1, this.clusterCalls.get());
+  }
+
+  @Test
   void eachServerHasItsOwnCachedCount() {
     this.counts.of("Lobby-1");
     this.counts.of("Lobby-2");

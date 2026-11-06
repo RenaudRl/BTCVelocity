@@ -47,6 +47,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -233,16 +234,17 @@ class PlayerDepotServiceTest {
     final UUID remote = UUID.randomUUID();
     depot.put(entry(remote, "remote", OTHER, "LOBBY"));
 
-    assertEquals(OptionalInt.empty(), service.getCachedPlayersOnServer("lobby"));
+    assertEquals(OptionalInt.empty(), service.getCachedPlayersOnOtherProxies("lobby"));
     service.refreshNow();
 
     assertEquals("lobby", depot.map.get(missing.getUniqueId()).getServerName());
     assertEquals("survival", depot.map.get(drifted.getUniqueId()).getServerName());
     assertNull(depot.map.get(ghost));
     assertEquals(OTHER, depot.map.get(remote).getProxyId());
-    // The snapshot is the view read before the repair: drifted + ghost + remote on lobby.
-    assertEquals(OptionalInt.of(3), service.getCachedPlayersOnServer("Lobby"));
-    assertEquals(3, service.getTotalPlayerCount());
+    // Only the other proxies' entries count: this proxy's players are counted live by callers.
+    assertEquals(OptionalInt.of(1), service.getCachedPlayersOnOtherProxies("Lobby"));
+    assertEquals(1, service.getCachedPlayerCountOnOtherProxies());
+    assertEquals(3, service.getCachedEntries().orElseThrow().size());
   }
 
   @Test
@@ -262,8 +264,9 @@ class PlayerDepotServiceTest {
 
   @Test
   void snapshotOlderThanTheMaxAgeIsNotServed() {
-    final PlayerDepotService.Snapshot snapshot = PlayerDepotService.Snapshot.of(
-        List.of(entry(UUID.randomUUID(), "a", SELF, "lobby")), 0L);
+    final PlayerDepotService.Snapshot snapshot = PlayerDepotService.Snapshot.of(List.of(
+        entry(UUID.randomUUID(), "a", OTHER, "lobby"),
+        entry(UUID.randomUUID(), "b", SELF.toUpperCase(Locale.ROOT), "lobby")), SELF, 0L);
     final long maxAge = PlayerDepotService.SNAPSHOT_MAX_AGE.toNanos();
 
     assertEquals(OptionalInt.of(1), snapshot.countOn("LOBBY", maxAge));

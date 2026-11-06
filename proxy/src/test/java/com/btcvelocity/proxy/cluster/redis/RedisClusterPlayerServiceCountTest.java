@@ -49,16 +49,19 @@ class RedisClusterPlayerServiceCountTest {
   }
 
   @Test
-  void freshSnapshotIsServed() {
-    when(players.getCachedPlayersOnServer("lobby")).thenReturn(OptionalInt.of(17));
+  void otherProxiesFromTheSnapshotPlusThisProxyLive() {
+    when(players.getCachedPlayersOnOtherProxies("lobby")).thenReturn(OptionalInt.of(17));
+    when(players.getCachedPlayerCountOnOtherProxies()).thenReturn(30);
+    when(server.getLocalPlayerCount()).thenReturn(4);
 
-    assertEquals(17, service.getPlayersOnServerCount("lobby"));
+    assertEquals(17 + 2, service.getPlayersOnServerCount("lobby"));
+    assertEquals(30 + 4, service.getTotalPlayerCount());
   }
 
   @Test
   void staleSnapshotFallsBackToThisProxysPlayers() {
-    when(players.getCachedPlayersOnServer("lobby")).thenReturn(OptionalInt.empty());
-    when(players.getCachedPlayersOnServer("gone")).thenReturn(OptionalInt.empty());
+    when(players.getCachedPlayersOnOtherProxies("lobby")).thenReturn(OptionalInt.empty());
+    when(players.getCachedPlayersOnOtherProxies("gone")).thenReturn(OptionalInt.empty());
 
     assertEquals(2, service.getPlayersOnServerCount("lobby"));
     assertEquals(0, service.getPlayersOnServerCount("gone"));

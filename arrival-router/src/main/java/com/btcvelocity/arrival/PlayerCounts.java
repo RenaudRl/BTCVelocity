@@ -47,7 +47,7 @@ final class PlayerCounts {
   /** How long the cluster is left alone after it failed to answer. */
   static final long FALLBACK_MILLIS = 10_000L;
 
-  private record Cached(int count, long at) {
+  private record Cached(int count, int local, long at) {
   }
 
   private final ToIntFunction<String> cluster;
@@ -93,7 +93,9 @@ final class PlayerCounts {
     }
     Cached cached = this.cache.get(serverName);
     if (cached != null && now - cached.at() < CACHE_MILLIS) {
-      return cached.count();
+      // This proxy's own arrivals since the answer are live, so a sweep spreads its players
+      // instead of sending them all to the server the cached count calls the emptiest.
+      return Math.max(0, cached.count() + this.local.applyAsInt(serverName) - cached.local());
     }
     try {
       int count = this.cluster.applyAsInt(serverName);
@@ -101,7 +103,7 @@ final class PlayerCounts {
         this.clusterDownUntil = 0;
         this.logger.info("The cluster player count answers again; routing on it.");
       }
-      this.cache.put(serverName, new Cached(count, now));
+      this.cache.put(serverName, new Cached(count, this.local.applyAsInt(serverName), now));
       return count;
     } catch (RuntimeException failure) {
       this.clusterDownUntil = now + FALLBACK_MILLIS;

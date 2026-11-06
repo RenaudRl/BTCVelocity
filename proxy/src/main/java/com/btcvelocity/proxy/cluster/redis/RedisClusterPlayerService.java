@@ -57,20 +57,24 @@ public final class RedisClusterPlayerService implements VelocityClusterPlayerSer
     return this.redis.getPlayerService();
   }
 
+  /**
+   * This proxy's live count plus the other proxies' from the snapshot (none once it is too old).
+   */
   @Override
   public int getTotalPlayerCount() {
-    return playerService().getTotalPlayerCount();
+    return this.local.getTotalPlayerCount() + playerService().getCachedPlayerCountOnOtherProxies();
   }
 
   /**
-   * Served from the background snapshot, never from Redis: this runs on Netty loops (server
-   * selection, BungeeCord {@code PlayerCount}) and in {@code arrival-router}. When the snapshot is
-   * too old, Redis is presumed down and the count falls back to this proxy's own players.
+   * Never reads Redis: this runs on Netty loops (server selection, BungeeCord {@code PlayerCount})
+   * and in {@code arrival-router}. This proxy's players are counted live, so a burst of arrivals
+   * spreads at once; the other proxies' come from the snapshot. When it is too old, Redis is
+   * presumed down and only this proxy's players are counted.
    */
   @Override
   public int getPlayersOnServerCount(final String serverName) {
-    return playerService().getCachedPlayersOnServer(serverName)
-        .orElseGet(() -> this.local.getPlayersOnServerCount(serverName));
+    return this.local.getPlayersOnServerCount(serverName)
+        + playerService().getCachedPlayersOnOtherProxies(serverName).orElse(0);
   }
 
   /**
