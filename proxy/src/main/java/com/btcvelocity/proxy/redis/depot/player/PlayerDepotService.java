@@ -40,6 +40,7 @@ import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -85,6 +86,11 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * periodic repair restores the entries.
    */
   public static final int WRITE_QUEUE_CAPACITY = 4096;
+
+  /**
+   * How long {@link #releaseAll()} waits for the worker before removing the entries directly.
+   */
+  private static final Duration RELEASE_BARRIER_TIMEOUT = Duration.ofSeconds(3);
 
   /**
    * How long shutdown waits for queued player writes before dropping them.
@@ -171,6 +177,30 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    */
   public void releaseAll() {
     this.released = true;
+    // Through the worker: the write in flight there (a repair that read the hash before the flag)
+    // lands first, so it cannot claim a released player again after the removal.
+    final CompletableFuture<Void> removed = new CompletableFuture<>();
+    final boolean queued = this.worker.execute(() -> {
+      try {
+        this.depot.removeAllOwnedBy(this.redis.getProxyId());
+        removed.complete(null);
+      } catch (RuntimeException e) {
+        removed.completeExceptionally(e);
+      }
+    });
+    try {
+      if (queued) {
+        removed.get(RELEASE_BARRIER_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        return;
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (ExecutionException | TimeoutException e) {
+      LOGGER.warn("Releasing this proxy's players through the Redis worker failed ({}); "
+          + "removing them directly", e.toString());
+    }
+    // A stuck or full worker must not hold the shutdown: remove directly, the guards in the
+    // repair and the updates keep a late write from claiming the players again.
     this.depot.removeAllOwnedBy(this.redis.getProxyId());
   }
 
@@ -300,7 +330,9 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
       return;
     }
     change.accept(entry);
-    this.depot.claim(entry, this.redis.getProxyId(), false).join();
+    if (isWriting()) { // checked again: releaseAll() may have run during the read
+      this.depot.claim(entry, this.redis.getProxyId(), false).join();
+    }
   }
 
   /**
@@ -494,8 +526,9 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     // overwritten nor removed.
     for (ConnectedPlayer player : this.server.getAllPlayers()) {
       final PlayerEntry entry = byId.get(player.getUniqueId());
-      if (entry == null || (ownedHere(entry)
-          && !Objects.equals(entry.getServerName(), currentServerName(player)))) {
+      // isWriting() again before each claim: a releaseAll() during the read must win.
+      if (isWriting() && (entry == null || (ownedHere(entry)
+          && !Objects.equals(entry.getServerName(), currentServerName(player))))) {
         this.depot.claim(newEntry(player), proxyId, false).join();
       }
     }

@@ -281,6 +281,22 @@ class PlayerDepotServiceTest {
   }
 
   @Test
+  void aRepairThatReadBeforeTheReleaseNeverClaimsAReleasedPlayerAgain() throws Exception {
+    join("alice"); // online with no entry: the repair would claim her
+    depot.valuesHang = new CountDownLatch(1);
+    final Thread repair = new Thread(service::refreshNow);
+    repair.start();
+    assertTrue(depot.valuesEntered.await(5, TimeUnit.SECONDS));
+
+    // The repair has read the hash and passed its first isWriting() check; then the release runs.
+    service.releaseAll();
+    depot.valuesHang.countDown();
+    repair.join(5_000);
+
+    assertTrue(depot.map.isEmpty(), "released players were claimed again: " + depot.map);
+  }
+
+  @Test
   void snapshotOlderThanTheMaxAgeIsNotServed() {
     final PlayerDepotService.Snapshot snapshot = PlayerDepotService.Snapshot.of(List.of(
         entry(UUID.randomUUID(), "a", OTHER, "lobby"),
@@ -361,6 +377,8 @@ class PlayerDepotServiceTest {
     volatile CountDownLatch hang;
     volatile CountDownLatch claimHang;
     volatile RuntimeException claimFailure;
+    volatile CountDownLatch valuesHang;
+    final CountDownLatch valuesEntered = new CountDownLatch(1);
 
     void put(final PlayerEntry entry) {
       map.put(entry.getUniqueId(), entry);
@@ -458,7 +476,10 @@ class PlayerDepotServiceTest {
     @Override
     public Collection<PlayerEntry> values() {
       await(hang);
-      return new ArrayList<>(map.values());
+      final List<PlayerEntry> read = new ArrayList<>(map.values());
+      valuesEntered.countDown();
+      await(valuesHang); // the read is done, its answer is still on the way
+      return read;
     }
 
     @Override
