@@ -372,6 +372,65 @@ class WakeCoordinatorTest {
   }
 
   @Test
+  void aStartRefusedBeforeTheParkingTellsThePlayerWhereTheyAreAndNeverParksThem() {
+    // Arrange — the node answers at once, before the connection to the limbo is even requested
+    this.startAnswer.complete(Outcome.UNKNOWN_TASK);
+    var player = this.player();
+
+    // Act
+    var handled = this.coordinator.onServerCommand(player, COMMAND);
+
+    // Assert
+    assertTrue(handled);
+    verify(player, never()).createConnectionRequest(this.limbo);
+    verify(player, times(1)).sendMessage(any(Component.class));
+    assertEquals(this.failedText(), this.sentTo(player));
+    assertFalse(this.holds(player));
+  }
+
+  @Test
+  void aStartRefusedWhileTheParkingIsUnderWayKeepsTheTextUntilTheConnectionSettles() {
+    // Arrange — the connection to the limbo is still in flight
+    var player = this.player();
+    var inFlight = new CompletableFuture<ConnectionRequestBuilder.Result>();
+    var toLimbo = mock(ConnectionRequestBuilder.class);
+    when(toLimbo.connect()).thenReturn(inFlight);
+    when(player.createConnectionRequest(this.limbo)).thenReturn(toLimbo);
+    this.coordinator.onServerCommand(player, COMMAND);
+
+    // Act — the start fails first
+    this.startAnswer.complete(Outcome.UNKNOWN_TASK);
+
+    // Assert — nothing sent while the player is switching server, the hold is already dropped
+    verify(player, never()).sendMessage(any(Component.class));
+    assertFalse(this.holds(player));
+
+    // Act — the connection settles (any status)
+    var result = mock(ConnectionRequestBuilder.Result.class);
+    when(result.getStatus()).thenReturn(ConnectionRequestBuilder.Status.SUCCESS);
+    inFlight.complete(result);
+
+    // Assert — exactly one text, the failure
+    verify(player, times(1)).sendMessage(any(Component.class));
+    assertEquals(this.failedText(), this.sentTo(player));
+  }
+
+  @Test
+  void aTimeoutWithThePlayerAlreadyInTheLimboSendsItsTextOnceAndImmediately() {
+    // Arrange — the park settled (default player: SUCCESS at once)
+    var player = this.player();
+    this.coordinator.onServerCommand(player, COMMAND);
+
+    // Act
+    this.timers.get(0).run();
+
+    // Assert
+    verify(player, times(1)).sendMessage(any(Component.class));
+    assertEquals(this.messages.get("wake.timeout", TASK, TIMEOUT.toSeconds()), this.sentTo(player));
+    assertFalse(this.holds(player));
+  }
+
+  @Test
   void aStartedTaskKeepsTheWaitersUntilItRegisters() {
     // Arrange
     var player = this.player();
