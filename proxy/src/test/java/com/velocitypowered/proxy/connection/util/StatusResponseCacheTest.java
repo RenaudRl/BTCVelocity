@@ -235,6 +235,7 @@ class StatusResponseCacheTest {
     assertTrue(other.get().isPresent());
     assertEquals(2, events.get());
   }
+
   @Test
   void aPingRefusedByAPluginIsNotKept() throws Exception {
     ttl("5");
