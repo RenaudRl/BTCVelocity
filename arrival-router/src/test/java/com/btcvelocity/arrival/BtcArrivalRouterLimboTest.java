@@ -19,18 +19,23 @@ package com.btcvelocity.arrival;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.btcvelocity.api.queue.QueueManager;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import java.net.InetSocketAddress;
@@ -40,6 +45,7 @@ import java.util.Optional;
 import java.util.UUID;
 import net.kyori.adventure.text.Component;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.slf4j.helpers.NOPLogger;
 
 class BtcArrivalRouterLimboTest {
@@ -154,6 +160,110 @@ class BtcArrivalRouterLimboTest {
     this.router.setMaintenance(false);
     this.router.releaseFromLimbo();
     verify(request).fireAndForget();
+  }
+
+  private QueueManager enableQueue() {
+    var queues = mock(QueueManager.class);
+    when(this.proxy.isQueueEnabled()).thenReturn(true);
+    when(this.proxy.getQueueManager()).thenReturn(queues);
+    return queues;
+  }
+
+  private Player playerInTheLimbo() {
+    var player = player();
+    var connection = mock(ServerConnection.class);
+    var limboInfo = this.limbo.getServerInfo();
+    when(connection.getServerInfo()).thenReturn(limboInfo);
+    doReturn(Optional.of(connection)).when(player).getCurrentServer();
+    return player;
+  }
+
+  private Component messageSentOnArrival(Player player) {
+    this.router.onServerPostConnect(new ServerPostConnectEvent(player, null));
+    var sent = ArgumentCaptor.forClass(Component.class);
+    verify(player).sendMessage(sent.capture());
+    return sent.getValue();
+  }
+
+  @Test
+  void theSweepLeavesAQueuedPlayerToTheQueueAndReleasesThemOnceTheyLeaveIt() {
+    // Arrange — a lobby is up, and the proxy queue holds the player in the limbo
+    var queues = this.enableQueue();
+    var queued = player();
+    var request = mock(ConnectionRequestBuilder.class);
+    when(queued.createConnectionRequest(any())).thenReturn(request);
+    doReturn(List.of(queued)).when(this.limbo).getPlayersConnected();
+    this.server("Lobby-1");
+    when(queues.isQueued(queued)).thenReturn(true);
+
+    // Act + Assert — kept while queued (witness), released once dequeued (positive control)
+    this.router.releaseFromLimbo();
+    verify(request, never()).fireAndForget();
+    when(queues.isQueued(queued)).thenReturn(false);
+    this.router.releaseFromLimbo();
+    verify(request).fireAndForget();
+  }
+
+  @Test
+  void withTheQueueOffTheSweepNeverAsksTheQueueManager() {
+    // Arrange — queue disabled: getQueueManager() would throw on the real proxy
+    var waiting = player();
+    var request = mock(ConnectionRequestBuilder.class);
+    when(waiting.createConnectionRequest(any())).thenReturn(request);
+    doReturn(List.of(waiting)).when(this.limbo).getPlayersConnected();
+    this.server("Lobby-1");
+
+    // Act
+    this.router.releaseFromLimbo();
+
+    // Assert
+    verify(this.proxy, never()).getQueueManager();
+    verify(request).fireAndForget();
+  }
+
+  @Test
+  void aQueuedPlayerReachingTheLimboReadsTheQueueMessageNotTheNoLobbyOne() {
+    // Arrange
+    var queues = this.enableQueue();
+    var queued = this.playerInTheLimbo();
+    when(queues.isQueued(queued)).thenReturn(true);
+    var defaults = ArrivalMessages.defaults();
+
+    // Act
+    var sent = this.messageSentOnArrival(queued);
+
+    // Assert
+    assertNotEquals(Component.empty(), sent);
+    assertEquals(defaults.get("limbo.queue"), sent);
+    assertNotEquals(defaults.get("limbo.waiting"), sent);
+  }
+
+  @Test
+  void anUnqueuedPlayerReachingTheLimboStillReadsTheNoLobbyMessage() {
+    // Arrange — witness for the queue message: same setup, player not in any queue
+    this.enableQueue();
+    var player = this.playerInTheLimbo();
+
+    // Act
+    var sent = this.messageSentOnArrival(player);
+
+    // Assert
+    assertEquals(ArrivalMessages.defaults().get("limbo.waiting"), sent);
+  }
+
+  @Test
+  void maintenanceOutranksTheQueueMessage() {
+    // Arrange
+    var queues = this.enableQueue();
+    var player = this.playerInTheLimbo();
+    when(queues.isQueued(player)).thenReturn(true);
+    this.router.setMaintenance(true);
+
+    // Act
+    var sent = this.messageSentOnArrival(player);
+
+    // Assert
+    assertEquals(ArrivalMessages.defaults().get("limbo.maintenance"), sent);
   }
 
   @Test
