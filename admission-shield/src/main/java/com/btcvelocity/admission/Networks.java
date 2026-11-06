@@ -20,6 +20,7 @@ package com.btcvelocity.admission;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Arrays;
+import org.jspecify.annotations.Nullable;
 
 /** The network an address sits in, written at a coarser grain than the address itself. */
 final class Networks {
@@ -64,6 +65,17 @@ final class Networks {
     } catch (UnknownHostException impossible) {
       throw new IllegalStateException("an address of " + masked.length + " bytes", impossible);
     }
+  }
+
+  /**
+   * An address as the journal may write it: its network at the staff grain, so that a log kept
+   * for months does not hold a player's own address.
+   *
+   * @param address the address, {@code null} when unknown
+   * @return {@code network/prefix}, or {@code unknown}
+   */
+  static String forJournal(final @Nullable InetAddress address) {
+    return address == null ? "unknown" : of(address, STAFF_V4, STAFF_V6);
   }
 
   private static boolean isV4Mapped(final byte[] bytes) {

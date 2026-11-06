@@ -177,7 +177,7 @@ class NetworkRateReportingTest {
     assertTrue(line.contains("decision=refused"), line);
     assertTrue(line.contains("code=ADM-RATE-NET"), line);
     assertTrue(line.contains("basis=rate-network"), line);
-    assertTrue(line.contains("ip=203.0.113.9"), line);
+    assertTrue(line.contains("ip=203.0.113.0/24"), line);
     assertTrue(line.contains("mode=observe"), "the bound's own mode, not the module's: " + line);
     assertTrue(journal.lastForAddress(ip("203.0.113.9")).isPresent(),
         "/admission why <ip> finds it");
