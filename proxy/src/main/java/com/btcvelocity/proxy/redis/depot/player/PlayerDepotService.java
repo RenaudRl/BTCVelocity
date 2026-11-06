@@ -17,6 +17,7 @@
 
 package com.btcvelocity.proxy.redis.depot.player;
 
+import com.btcvelocity.proxy.redis.LogThrottle;
 import com.btcvelocity.proxy.redis.OrderedRedisExecutor;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.data.VelocityKick;
@@ -33,6 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -112,6 +114,11 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   private final AtomicBoolean refreshPending = new AtomicBoolean();
 
   /**
+   * Throttles the warning for logins let in without a duplicate check.
+   */
+  private final LogThrottle uncheckedLogins = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+
+  /**
    * The last cluster view read from Redis, or {@code null} before the first successful read.
    */
   private volatile @Nullable Snapshot snapshot;
@@ -165,10 +172,17 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     }
 
     return this.worker.supply(() -> connectNow(player))
-        .completeOnTimeout(Boolean.TRUE, CONNECT_CHECK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
-        .exceptionally(throwable -> {
-          LOGGER.warn("Redis did not answer the duplicate-login check for {}; letting them in",
-              player.getUsername());
+        .completeOnTimeout(null, CONNECT_CHECK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+        .exceptionally(throwable -> null)
+        .thenApply(allowed -> {
+          if (allowed != null) {
+            return allowed;
+          }
+          final long quiet = this.uncheckedLogins.acquire();
+          if (quiet >= 0) {
+            LOGGER.warn("Redis did not answer the duplicate-login check for {}; letting them in "
+                + "unchecked ({} other unchecked logins not logged)", player.getUsername(), quiet);
+          }
           return Boolean.TRUE;
         });
   }
@@ -243,13 +257,15 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   }
 
   /**
-   * Gets every player entry from the last snapshot, however old. No I/O.
+   * Gets every player entry from the last snapshot. No I/O.
    *
-   * @return the entries read by the last refresh, or an empty list before the first one
+   * @return the entries read by the last refresh, or empty if the snapshot is missing or older
+   *         than {@link #SNAPSHOT_MAX_AGE}
    */
-  public @NotNull @Unmodifiable List<PlayerEntry> getCachedEntries() {
+  public Optional<@Unmodifiable List<PlayerEntry>> getCachedEntries() {
     final Snapshot current = this.snapshot;
-    return current == null ? List.of() : current.entries();
+    return current == null || current.isStale(System.nanoTime())
+        ? Optional.empty() : Optional.of(current.entries());
   }
 
   /**
@@ -345,7 +361,8 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * Runs on the worker: refuses a duplicate held by another proxy, then registers the player.
    */
   private boolean connectNow(final ConnectedPlayer player) {
-    if (this.redis.isShutdown()) {
+    if (this.redis.isShutdown() || !isCurrentSession(player)) {
+      // A stale task must neither kick the live session nor write a ghost entry.
       return false;
     }
 
@@ -390,6 +407,10 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     }
 
     this.depot.remove(player.getUniqueId());
+  }
+
+  private boolean isCurrentSession(final ConnectedPlayer player) {
+    return this.server.getPlayer(player.getUniqueId()).orElse(null) == player;
   }
 
   /**
@@ -470,8 +491,12 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
       return new Snapshot(List.copyOf(entries), Map.copyOf(counts), takenAtNanos);
     }
 
+    boolean isStale(final long nowNanos) {
+      return nowNanos - this.takenAtNanos > SNAPSHOT_MAX_AGE.toNanos();
+    }
+
     OptionalInt countOn(final String serverName, final long nowNanos) {
-      if (nowNanos - this.takenAtNanos > SNAPSHOT_MAX_AGE.toNanos()) {
+      if (isStale(nowNanos)) {
         return OptionalInt.empty();
       }
       return OptionalInt.of(this.countsByServer.getOrDefault(serverName.toLowerCase(Locale.ROOT), 0));

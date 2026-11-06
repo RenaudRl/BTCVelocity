@@ -95,6 +95,7 @@ class PlayerDepotServiceTest {
   @Test
   void lifecycleHooksReturnAtOnceWhileRedisHangsAndLoginFailsOpen() throws Exception {
     final ConnectedPlayer alice = player("alice", null);
+    online.add(alice);
     final PlayerSettings settings = mock(PlayerSettings.class);
     depot.hang = new CountDownLatch(1);
 
@@ -138,6 +139,7 @@ class PlayerDepotServiceTest {
   @Test
   void duplicateOnAnotherProxyIsRefusedWhenNotKickingExisting() throws Exception {
     final ConnectedPlayer alice = player("alice", null);
+    online.add(alice);
     depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
 
     assertFalse(service.onPlayerConnect(alice).get(5, TimeUnit.SECONDS));
@@ -148,10 +150,23 @@ class PlayerDepotServiceTest {
   @Test
   void leftoverEntryOfThisProxyDoesNotRefuseAReconnect() throws Exception {
     final ConnectedPlayer alice = player("alice", null);
+    online.add(alice);
     depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
 
     assertTrue(service.onPlayerConnect(alice).get(5, TimeUnit.SECONDS));
     verify(alice, never()).disconnect0(any(Component.class), anyBoolean());
+  }
+
+  @Test
+  void aStaleLoginTaskNeitherKicksNorWrites() throws Exception {
+    final ConnectedPlayer gone = player("alice", null);
+    final ConnectedPlayer live = player("alice", null);
+    online.add(live);
+    depot.put(entry(gone.getUniqueId(), "alice", OTHER, "lobby"));
+
+    assertFalse(service.onPlayerConnect(gone).get(5, TimeUnit.SECONDS));
+    verify(gone, never()).disconnect0(any(Component.class), anyBoolean());
+    assertEquals(OTHER, depot.map.get(gone.getUniqueId()).getProxyId());
   }
 
   @Test
@@ -187,11 +202,14 @@ class PlayerDepotServiceTest {
     assertEquals(OptionalInt.of(1), snapshot.countOn("LOBBY", maxAge));
     assertEquals(OptionalInt.of(0), snapshot.countOn("survival", maxAge));
     assertEquals(OptionalInt.empty(), snapshot.countOn("lobby", maxAge + 1));
+    assertTrue(snapshot.isStale(maxAge + 1));
+    assertTrue(service.getCachedEntries().isEmpty(), "no snapshot yet");
   }
 
   private void awaitWorker() throws Exception {
     // The worker is FIFO: once a later write has landed, every earlier one has too.
     final ConnectedPlayer probe = player("probe", null);
+    online.add(probe);
     service.onPlayerConnect(probe);
     final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
     while (!depot.map.containsKey(probe.getUniqueId())) {

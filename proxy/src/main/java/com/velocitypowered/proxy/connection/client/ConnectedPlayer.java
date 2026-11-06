@@ -329,9 +329,11 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
       tryQueueOnJoinTask = null;
     }
 
-    if (this.fullyConnected) {
-      this.server.getClusterPlayerService().onPlayerDisconnect(this);
+    // Always: the login check may have written this player's entry before the session got fully
+    // connected (left while waiting). The removal is owner- and session-guarded.
+    this.server.getClusterPlayerService().onPlayerDisconnect(this);
 
+    if (this.fullyConnected) {
       if (this.server.isQueueEnabled()) {
         this.server.getQueueManager().onPlayerDisconnect(this);
       }
@@ -455,10 +457,14 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
   public void setClientSettings(final ClientSettingsPacket clientSettingsPacket) {
     this.clientSettingsPacket = clientSettingsPacket;
     final ClientSettingsWrapper cs = new ClientSettingsWrapper(clientSettingsPacket);
+    final PlayerSettings previous = this.settings;
     this.settings = cs;
     server.getEventManager().fireAndForget(new PlayerSettingsChangedEvent(this, cs));
 
-    this.server.getClusterPlayerService().onPlayerSettingsChange(this, cs);
+    // The cluster only stores the listing flag; a client may resend its settings in a tight loop.
+    if (previous == null || previous.isClientListingAllowed() != cs.isClientListingAllowed()) {
+      this.server.getClusterPlayerService().onPlayerSettingsChange(this, cs);
+    }
   }
 
   @Override

@@ -101,12 +101,15 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
       this.reapDeadProxiesTask.cancel();
     }
 
-    // Delete own heartbeat key so surviving proxies don't try to reap us while we're cleaning up.
-    this.redis.getProvider().deleteKey(HEARTBEAT_KEY_PREFIX + this.redis.getProxyId());
+    // Locked against a heartbeat already in flight, which would register this proxy again.
+    synchronized (this) {
+      // Delete own heartbeat key so surviving proxies don't try to reap us while we're cleaning up.
+      this.redis.getProvider().deleteKey(HEARTBEAT_KEY_PREFIX + this.redis.getProxyId());
 
-    final ProxyEntry proxyEntry = this.get(this.redis.getServer().getProxyId());
-    if (proxyEntry != null) {
-      proxyEntry.remove();
+      final ProxyEntry proxyEntry = this.get(this.redis.getServer().getProxyId());
+      if (proxyEntry != null) {
+        proxyEntry.remove();
+      }
     }
   }
 
@@ -140,9 +143,10 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
 
   /**
    * Publishes this proxy's heartbeat key to Redis with a TTL of {@link #HEARTBEAT_TTL}.
-   * Called every {@link #HEARTBEAT_INTERVAL} by the scheduler.
+   * Called every {@link #HEARTBEAT_INTERVAL} by the scheduler. The shutdown flag is set before
+   * {@link #teardown()}, which takes the same lock, so no beat can follow the teardown.
    */
-  private void publishHeartbeat() {
+  private synchronized void publishHeartbeat() {
     if (this.redis.isShutdown()) {
       return;
     }

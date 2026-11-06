@@ -67,7 +67,7 @@ class ProxyDepotServiceReRegisterTest {
     when(redis.getServer()).thenReturn(server);
     when(redis.getProxyId()).thenReturn(SELF);
 
-    new ProxyDepotService(redis);
+    final ProxyDepotService service = new ProxyDepotService(redis);
     assertTrue(entries.containsKey(SELF));
     final Runnable heartbeat = tasks.getFirst();
 
@@ -75,6 +75,12 @@ class ProxyDepotServiceReRegisterTest {
     heartbeat.run();
 
     assertEquals(List.of(SELF), List.copyOf(entries.keySet()));
+
+    // Shutting down: the flag is set first, then the teardown; a late beat must not undo it.
+    when(redis.isShutdown()).thenReturn(true);
+    service.teardown();
+    heartbeat.run();
+    assertTrue(entries.isEmpty());
   }
 
   private record MapDepot(Map<String, ProxyEntry> map) implements Depot<String, ProxyEntry> {

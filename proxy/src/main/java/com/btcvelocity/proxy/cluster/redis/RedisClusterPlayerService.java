@@ -19,6 +19,7 @@ package com.btcvelocity.proxy.cluster.redis;
 
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayer;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayerService;
+import com.btcvelocity.proxy.cluster.local.LocalClusterPlayerService;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.data.VelocityAlert;
 import com.btcvelocity.proxy.redis.depot.player.PlayerDepotService;
@@ -27,6 +28,7 @@ import com.velocitypowered.api.proxy.player.PlayerSettings;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -40,9 +42,15 @@ public final class RedisClusterPlayerService implements VelocityClusterPlayerSer
   private final VelocityServer server;
   private final VelocityRedis redis;
 
+  /**
+   * This proxy's own view, served when the cluster snapshot is dead.
+   */
+  private final LocalClusterPlayerService local;
+
   public RedisClusterPlayerService(final VelocityServer server, final VelocityRedis redis) {
     this.server = server;
     this.redis = redis;
+    this.local = new LocalClusterPlayerService(server);
   }
 
   private PlayerDepotService playerService() {
@@ -62,20 +70,19 @@ public final class RedisClusterPlayerService implements VelocityClusterPlayerSer
   @Override
   public int getPlayersOnServerCount(final String serverName) {
     return playerService().getCachedPlayersOnServer(serverName)
-        .orElseGet(() -> this.server.getServer(serverName)
-            .map(rs -> rs.getPlayersConnected().size())
-            .orElse(0));
+        .orElseGet(() -> this.local.getPlayersOnServerCount(serverName));
   }
 
   /**
    * Served from the background snapshot (at most {@link PlayerDepotService#REFRESH_INTERVAL} old
-   * while Redis answers): the server list ping samples it on a Netty loop.
+   * while Redis answers): the server list ping samples it on a Netty loop. A dead snapshot falls
+   * back to this proxy's own players.
    */
   @Override
   public Collection<VelocityClusterPlayer> getAllPlayers() {
-    return playerService().getCachedEntries().stream()
-        .<VelocityClusterPlayer>map(this::toRedisPlayer)
-        .toList();
+    return playerService().getCachedEntries()
+        .map(entries -> entries.stream().<VelocityClusterPlayer>map(this::toRedisPlayer).toList())
+        .orElseGet(() -> List.copyOf(this.local.getAllPlayers()));
   }
 
   @Override

@@ -63,4 +63,12 @@ class RedisClusterPlayerServiceCountTest {
     assertEquals(2, service.getPlayersOnServerCount("lobby"));
     assertEquals(0, service.getPlayersOnServerCount("gone"));
   }
+
+  @Test
+  void deadSnapshotListsThisProxysPlayers() {
+    when(players.getCachedEntries()).thenReturn(Optional.empty());
+    when(server.getAllPlayers()).thenReturn(List.of(mock(ConnectedPlayer.class)));
+
+    assertEquals(1, service.getAllPlayers().size());
+  }
 }

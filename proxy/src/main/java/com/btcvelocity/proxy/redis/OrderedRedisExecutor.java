@@ -23,7 +23,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
@@ -45,10 +44,10 @@ public final class OrderedRedisExecutor {
   private final ThreadPoolExecutor executor;
 
   /**
-   * Set once a rejection or a failure has been logged, so an outage logs one warning
-   * instead of one per task. Cleared by the next task that succeeds.
+   * One warning per interval for rejections and failures, so an outage (or a mix of failing and
+   * succeeding tasks) does not log one line per task.
    */
-  private final AtomicBoolean degraded = new AtomicBoolean();
+  private final LogThrottle warnings = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
 
   /**
    * Creates an executor with one daemon worker thread.
@@ -74,9 +73,10 @@ public final class OrderedRedisExecutor {
       this.executor.execute(() -> runLogged(task));
       return true;
     } catch (RejectedExecutionException e) {
-      if (!this.degraded.getAndSet(true)) {
-        LOGGER.warn("Redis worker '{}' rejected a task (queue full or shut down); "
-            + "the periodic repair will catch up", this.name);
+      final long quiet = this.warnings.acquire();
+      if (quiet >= 0) {
+        LOGGER.warn("Redis worker '{}' rejected a task (queue full or shut down); the periodic "
+            + "repair will catch up ({} similar events not logged)", this.name, quiet);
       }
       return false;
     }
@@ -126,11 +126,10 @@ public final class OrderedRedisExecutor {
   private void runLogged(final Runnable task) {
     try {
       task.run();
-      this.degraded.set(false);
     } catch (RuntimeException e) {
-      if (!this.degraded.getAndSet(true)) {
-        LOGGER.warn("Redis task failed on '{}' (further failures are logged at debug until one "
-            + "succeeds)", this.name, e);
+      final long quiet = this.warnings.acquire();
+      if (quiet >= 0) {
+        LOGGER.warn("Redis task failed on '{}' ({} similar events not logged)", this.name, quiet, e);
       } else {
         LOGGER.debug("Redis task failed on '{}'", this.name, e);
       }
