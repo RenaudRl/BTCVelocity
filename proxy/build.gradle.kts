@@ -107,6 +107,15 @@ tasks {
         standardInput = System.`in` // Doesn't work?
     }
 
+    // Tests against a real Redis (Docker) run only with -PredisIntegration.
+    test {
+        useJUnitPlatform {
+            if (!project.hasProperty("redisIntegration")) {
+                excludeTags("redis-integration")
+            }
+        }
+    }
+
     withType<JavaCompile>().configureEach {
         options.compilerArgs.addAll(
             listOf(
