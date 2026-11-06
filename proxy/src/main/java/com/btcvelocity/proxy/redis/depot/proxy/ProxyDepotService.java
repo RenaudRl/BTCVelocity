@@ -17,12 +17,14 @@
 
 package com.btcvelocity.proxy.redis.depot.proxy;
 
+import com.btcvelocity.proxy.redis.LogThrottle;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.depot.AbstractDepotService;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
@@ -90,6 +92,18 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
    * runs arrive in a burst, and queuing them would replay the missed passes one after the other.
    */
   private final ReentrantLock reaperLock = new ReentrantLock();
+
+  /**
+   * Throttle and outage flag of the failures of {@link #publishHeartbeat()}.
+   */
+  private final LogThrottle heartbeatFailures = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+  private final AtomicBoolean heartbeatFailing = new AtomicBoolean();
+
+  /**
+   * Throttle and outage flag of the failures of {@link #reapDeadProxies()}.
+   */
+  private final LogThrottle reapFailures = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+  private final AtomicBoolean reapFailing = new AtomicBoolean();
 
   /**
    * The clock of the lease validity ({@link System#nanoTime()}, replaced in tests).
@@ -219,16 +233,41 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
       return;
     }
 
-    this.redis.getProvider().setWithExpiry(
-            HEARTBEAT_KEY_PREFIX + this.redis.getProxyId(),
-            "1",
-            HEARTBEAT_TTL.toSeconds()
-    );
+    try {
+      this.redis.getProvider().setWithExpiry(
+              HEARTBEAT_KEY_PREFIX + this.redis.getProxyId(),
+              "1",
+              HEARTBEAT_TTL.toSeconds()
+      );
 
-    // A lapse longer than the TTL (pause, Redis hiccup) lets a peer reap this live proxy.
-    if (!this.depot.contains(this.redis.getProxyId())) {
-      LOGGER.warn("This proxy was reaped from redis while still running; registering it again.");
-      this.depot.upsert(new ProxyEntry(this.redis.getServer()));
+      // A lapse longer than the TTL (pause, Redis hiccup) lets a peer reap this live proxy.
+      if (!this.depot.contains(this.redis.getProxyId())) {
+        LOGGER.warn("This proxy was reaped from redis while still running; registering it again.");
+        this.depot.upsert(new ProxyEntry(this.redis.getServer()));
+      }
+      this.heartbeatFailing.set(false);
+    } catch (RuntimeException e) {
+      logFailure(this.heartbeatFailures, this.heartbeatFailing, "The heartbeat", e);
+    }
+  }
+
+  /**
+   * Logs a failed periodic task once per throttle interval, instead of one stack trace per second
+   * for as long as Redis is down. The first failure of an outage keeps its stack trace; the next
+   * ones are one line with the number of failures left out since.
+   */
+  private static void logFailure(final LogThrottle throttle, final AtomicBoolean failing,
+                                 final String task, final RuntimeException failure) {
+    final long quiet = throttle.acquire();
+    if (quiet < 0) {
+      return;
+    }
+    if (failing.compareAndSet(false, true)) {
+      LOGGER.error("{} failed (Redis unreachable?); further failures are logged once per {} s",
+          task, LogThrottle.DEFAULT_INTERVAL.toSeconds(), failure);
+    } else {
+      LOGGER.error("{} is still failing: {} ({} similar failures not logged)", task, failure,
+          quiet);
     }
   }
 
@@ -257,7 +296,12 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
       return;
     }
     try {
-      if (this.redis.isShutdown() || !renewReaperLease()) {
+      if (this.redis.isShutdown()) {
+        return;
+      }
+      final boolean held = renewReaperLease();
+      this.reapFailing.set(false); // Redis answered: the next outage logs its stack trace again
+      if (!held) {
         return;
       }
 
@@ -281,6 +325,8 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
 
         reapProxy(proxyId);
       }
+    } catch (RuntimeException e) {
+      logFailure(this.reapFailures, this.reapFailing, "The dead-proxy check", e);
     } finally {
       this.reaperLock.unlock();
     }

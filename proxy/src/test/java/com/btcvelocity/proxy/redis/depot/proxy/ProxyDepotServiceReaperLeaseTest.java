@@ -19,13 +19,14 @@ package com.btcvelocity.proxy.redis.depot.proxy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -46,11 +47,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -242,7 +249,7 @@ class ProxyDepotServiceReaperLeaseTest {
     when(provider.renewLease(anyString(), anyString(), any(Duration.class)))
         .thenThrow(new IllegalStateException("redis down"));
 
-    assertThrows(IllegalStateException.class, reap::run);
+    reap.run(); // the failure is logged, not thrown at the scheduler
 
     beating.remove("heartbeat:" + DEAD);
     when(provider.renewLease(anyString(), anyString(), any(Duration.class))).thenReturn(false);
@@ -251,6 +258,47 @@ class ProxyDepotServiceReaperLeaseTest {
     assertTrue(entries.containsKey(DEAD));
     assertEquals(SELF, lease.get());
     assertEquals(0, service.getReapedProxyCount());
+  }
+
+  @Test
+  void aRedisOutageLogsOneStackTracePerTaskInsteadOfOnePerSecond() throws InterruptedException {
+    final List<LogEvent> events = new CopyOnWriteArrayList<>();
+    final AbstractAppender appender = new AbstractAppender("outage", null, null, true,
+        Property.EMPTY_ARRAY) {
+      @Override
+      public void append(final LogEvent event) {
+        events.add(event.toImmutable());
+      }
+    };
+    appender.start();
+    final org.apache.logging.log4j.core.Logger logger =
+        (org.apache.logging.log4j.core.Logger) LogManager.getLogger(ProxyDepotService.class);
+    logger.addAppender(appender);
+    try {
+      when(provider.renewLease(anyString(), anyString(), any(Duration.class)))
+          .thenThrow(new IllegalStateException("redis down"));
+      doThrow(new IllegalStateException("redis down")).when(provider)
+          .setWithExpiry(anyString(), anyString(), anyLong());
+
+      for (int i = 0; i < 20; i++) {
+        tasks.get(0).run(); // heartbeat
+        reap.run();
+      }
+
+      // the proxy logs through async loggers: wait for the events to be delivered
+      final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      while (events.size() < 2 && System.nanoTime() < deadline) {
+        Thread.sleep(20);
+      }
+      Thread.sleep(300); // and for the ones that must not come
+      final List<LogEvent> errors = events.stream().filter(e -> e.getLevel() == Level.ERROR).toList();
+
+      assertEquals(2, errors.size(), "one per task, not one per pass: " + errors);
+      assertTrue(errors.stream().allMatch(e -> e.getThrown() != null), "the first keeps its stack");
+    } finally {
+      logger.removeAppender(appender);
+      appender.stop();
+    }
   }
 
   @Test
