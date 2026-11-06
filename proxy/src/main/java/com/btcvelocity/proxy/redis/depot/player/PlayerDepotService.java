@@ -49,6 +49,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -92,9 +93,10 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   public static final int WRITE_QUEUE_CAPACITY = 4096;
 
   /**
-   * Consecutive repairs (about {@link #REFRESH_INTERVAL} each) that must find a local player held
-   * by another live proxy before the local session is closed. The second one absorbs a transfer
-   * between proxies, whose entry and connection never move at the same instant.
+   * Consecutive repairs that must find a local player held by another live proxy, over at least
+   * {@link #REFRESH_INTERVAL} since the first, before the local session is closed. The time
+   * absorbs a transfer between proxies, whose entry and connection never move at the same
+   * instant; counting passes alone would not, as late repairs can run back to back.
    */
   public static final int DUPLICATE_CONFIRMATIONS = 2;
 
@@ -114,6 +116,11 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   private static final Duration SHUTDOWN_GRACE = Duration.ofSeconds(3);
 
   private static final Logger LOGGER = LoggerFactory.getLogger(PlayerDepotService.class);
+
+  /**
+   * The clock of the duplicate confirmation ({@link System#nanoTime()}, replaced in tests).
+   */
+  private final LongSupplier nanoClock;
 
   /**
    * The Redis manager used to coordinate multi-proxy player synchronization.
@@ -182,8 +189,13 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * @param redis the {@link VelocityRedis} instance
    */
   public PlayerDepotService(final @NotNull VelocityRedis redis) {
+    this(redis, System::nanoTime);
+  }
+
+  PlayerDepotService(final @NotNull VelocityRedis redis, final @NotNull LongSupplier nanoClock) {
     super(PlayerEntry.class, redis.getProvider());
 
+    this.nanoClock = nanoClock;
     this.redis = redis;
     this.server = redis.getServer();
     this.worker = new OrderedRedisExecutor("btc-redis-players", WRITE_QUEUE_CAPACITY);
@@ -612,11 +624,13 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * {@link ConnectedPlayer#disconnect(Component)}, which hops onto the player's event loop.
    */
   private void closeDuplicateSessions(final Map<UUID, PlayerEntry> byId) {
+    final long now = this.nanoClock.getAsLong();
     final Map<String, Boolean> aliveOwners = new HashMap<>();
     final Set<UUID> held = new HashSet<>();
     for (ConnectedPlayer player : this.server.getAllPlayers()) {
       final PlayerEntry entry = byId.get(player.getUniqueId());
-      if (entry == null || ownedHere(entry)
+      // A session that did not finish logging in is not judged: its login is still deciding.
+      if (!player.isFullyConnected() || entry == null || ownedHere(entry)
           || !aliveOwners.computeIfAbsent(entry.getProxyId(), this::isAlive)) {
         continue;
       }
@@ -624,11 +638,19 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
       held.add(player.getUniqueId());
       final Suspect before = this.suspects.get(player.getUniqueId());
       // A new session of the same player starts over: it is a different connection.
-      final int passes = before != null && before.session() == player ? before.passes() + 1 : 1;
-      this.suspects.put(player.getUniqueId(), new Suspect(player, passes));
-      if (passes == DUPLICATE_CONFIRMATIONS) {
-        closeDuplicate(player, entry);
+      final boolean same = before != null && before.session() == player;
+      final int passes = same ? before.passes() + 1 : 1;
+      final long firstSeen = same ? before.firstSeenNanos() : now;
+      Phase phase = same ? before.phase() : Phase.SUSPECTED;
+      if (phase == Phase.DISCONNECTED) {
+        // The same session is still here a pass after the polite disconnect: it hangs.
+        forceClose(player);
+        phase = Phase.FORCED;
+      } else if (phase == Phase.SUSPECTED && passes >= DUPLICATE_CONFIRMATIONS
+          && now - firstSeen >= REFRESH_INTERVAL.toNanos() && closeDuplicate(player)) {
+        phase = Phase.DISCONNECTED;
       }
+      this.suspects.put(player.getUniqueId(), new Suspect(player, passes, firstSeen, phase));
     }
     this.suspects.keySet().retainAll(held);
   }
@@ -641,20 +663,62 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     }
   }
 
-  private void closeDuplicate(final ConnectedPlayer player, final PlayerEntry entry) {
-    // Checked again: a releaseAll() during the heartbeat reads hands the players over, and the
-    // Transfer that follows must not meet a disconnect.
-    if (!isWriting() || !isCurrentSession(player)) {
-      return;
+  /**
+   * Disconnects the session unless the duplicate is gone.
+   *
+   * @return {@code true} if the disconnect was sent
+   */
+  private boolean closeDuplicate(final ConnectedPlayer player) {
+    final PlayerEntry holder = currentHolder(player);
+    if (holder == null) {
+      return false;
     }
     this.duplicateSessionsClosed.incrementAndGet();
     final long quiet = this.duplicateWarnings.acquire();
     if (quiet >= 0) {
       LOGGER.warn("Closing the session of {} on this proxy: proxy {} holds the player in Redis "
           + "(duplicate session; {} similar closures not logged)", player.getUsername(),
-          entry.getProxyId(), quiet);
+          holder.getProxyId(), quiet);
     }
     player.disconnect(Component.translatable(DUPLICATE_SESSION_KEY));
+    return true;
+  }
+
+  /**
+   * Closes the connection of a session whose polite disconnect did not end it. Not counted again.
+   */
+  private void forceClose(final ConnectedPlayer player) {
+    if (currentHolder(player) == null) {
+      return;
+    }
+    final long quiet = this.duplicateWarnings.acquire();
+    if (quiet >= 0) {
+      LOGGER.warn("The duplicate session of {} did not close after its disconnect; closing the "
+          + "connection ({} similar closures not logged)", player.getUsername(), quiet);
+    }
+    player.getConnection().close();
+  }
+
+  /**
+   * Reads the player's entry again, right before a closure, so a decision taken on the snapshot
+   * of the repair is not applied to what Redis says now.
+   *
+   * @return the entry of another live proxy that still holds the player, or {@code null} if this
+   *         session must be left alone
+   */
+  private @Nullable PlayerEntry currentHolder(final ConnectedPlayer player) {
+    // Checked again: a releaseAll() during the heartbeat reads hands the players over, and the
+    // Transfer that follows must not meet a disconnect.
+    if (!isWriting() || !isCurrentSession(player)) {
+      return null;
+    }
+    try {
+      final PlayerEntry current = this.depot.get(player.getUniqueId());
+      return current == null || ownedHere(current) || !isAlive(current.getProxyId())
+          || !isWriting() ? null : current;
+    } catch (RuntimeException e) {
+      return null; // unknown: do not close a session on a guess
+    }
   }
 
   /**
@@ -662,8 +726,22 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    *
    * @param session the local connection
    * @param passes consecutive repairs that found it
+   * @param firstSeenNanos {@link #nanoClock} reading of the first of them
+   * @param phase how far the closure went
    */
-  private record Suspect(ConnectedPlayer session, int passes) {
+  private record Suspect(ConnectedPlayer session, int passes, long firstSeenNanos, Phase phase) {
+  }
+
+  /**
+   * How far the closure of a duplicate session went.
+   */
+  private enum Phase {
+    /** Found held by another proxy; not closed. */
+    SUSPECTED,
+    /** The polite disconnect was sent. */
+    DISCONNECTED,
+    /** The connection was closed by force. */
+    FORCED
   }
 
   private static @Nullable String currentServerName(final ConnectedPlayer player) {

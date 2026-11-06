@@ -41,6 +41,7 @@ import com.velocitypowered.api.proxy.player.PlayerSettings;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
+import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.connection.backend.VelocityServerConnection;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.scheduler.VelocityScheduler;
@@ -62,6 +63,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.TranslatableComponent;
 import org.junit.jupiter.api.AfterEach;
@@ -84,6 +86,7 @@ class PlayerDepotServiceTest {
   private final VelocityConfiguration configuration =
       mock(VelocityConfiguration.class, RETURNS_DEEP_STUBS);
   private final List<ConnectedPlayer> online = new CopyOnWriteArrayList<>();
+  private final AtomicLong clock = new AtomicLong(1_000_000_000L);
   private volatile boolean shutdown;
   private PlayerDepotService service;
 
@@ -103,7 +106,7 @@ class PlayerDepotServiceTest {
     when(server.getAllPlayers()).thenAnswer(inv -> List.copyOf(online));
     when(server.getPlayer(any(UUID.class))).thenAnswer(inv -> online.stream()
         .filter(p -> p.getUniqueId().equals(inv.getArgument(0))).findFirst());
-    service = new PlayerDepotService(redis);
+    service = new PlayerDepotService(redis, clock::get);
   }
 
   @AfterEach
@@ -276,15 +279,15 @@ class PlayerDepotServiceTest {
     final ConnectedPlayer alice = join("alice");
     depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
 
-    service.refreshNow();
+    repair();
     verify(alice, never()).disconnect(any(Component.class));
     assertEquals(0, service.getDuplicateSessionsClosed());
 
-    service.refreshNow();
+    repair();
     verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
     assertEquals(1, service.getDuplicateSessionsClosed());
 
-    service.refreshNow(); // the session is closing: no second closure, no second count
+    repair(); // the session is closing: no second closure, no second count
     verify(alice, times(1)).disconnect(any(Component.class));
     assertEquals(1, service.getDuplicateSessionsClosed());
     // the loop hop is disconnect(), not disconnect0() from the worker; the owner keeps the entry
@@ -293,19 +296,106 @@ class PlayerDepotServiceTest {
   }
 
   @Test
+  void aSessionStillThereAPassAfterItsDisconnectIsClosedByForceOnceAndNotCountedAgain() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    repair();
+    repair();
+    verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
+    verify(alice.getConnection(), never()).close();
+
+    repair(); // the disconnect did not end the session
+    verify(alice.getConnection()).close();
+    repair();
+    repair();
+
+    verify(alice.getConnection(), times(1)).close();
+    verify(alice, times(1)).disconnect(any(Component.class));
+    assertEquals(1, service.getDuplicateSessionsClosed());
+  }
+
+  @Test
+  void aSessionThatEndsAfterItsDisconnectIsNotForced() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    repair();
+    repair();
+
+    online.remove(alice); // the disconnect worked
+    repair();
+    repair();
+
+    verify(alice.getConnection(), never()).close();
+  }
+
+  @Test
+  void repairsRunningBackToBackNeverCloseASessionWhateverTheirNumber() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+
+    for (int i = 0; i < 10; i++) {
+      service.refreshNow(); // a burst after a freeze: no time between the repairs
+    }
+    verify(alice, never()).disconnect(any(Component.class));
+
+    repair(); // a repair interval later, it is still held
+    verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
+  }
+
+  @Test
+  void aSessionThatDidNotFinishLoggingInIsNotJudged() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    when(alice.isFullyConnected()).thenReturn(false);
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+
+    for (int i = 0; i < 4; i++) {
+      repair();
+    }
+    verify(alice, never()).disconnect(any(Component.class));
+
+    when(alice.isFullyConnected()).thenReturn(true); // judged from now on, counting from zero
+    repair();
+    verify(alice, never()).disconnect(any(Component.class));
+    repair();
+    verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
+  }
+
+  @Test
+  void anEntryThatMovedBackBeforeTheClosureSparesTheSession() {
+    when(proxies.isAlive(OTHER)).thenReturn(true);
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    repair();
+
+    // The repair read the entry as held by OTHER; before it closes, Redis says it is ours again.
+    when(proxies.isAlive(OTHER)).thenAnswer(inv -> {
+      depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+      return true;
+    });
+    repair();
+
+    verify(alice, never()).disconnect(any(Component.class));
+    assertEquals(0, service.getDuplicateSessionsClosed());
+  }
+
+  @Test
   void aTransferInFlightIsNeverClosed() {
     when(proxies.isAlive(OTHER)).thenReturn(true);
     final ConnectedPlayer alice = join("alice");
 
     depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
-    service.refreshNow(); // the new proxy has claimed, the old connection is still closing...
+    repair(); // the new proxy has claimed, the old connection is still closing...
     depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby")); // ...or the entry came back
-    service.refreshNow();
+    repair();
     depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
-    service.refreshNow(); // a different "first" pass: the count restarted
+    repair(); // a different "first" pass: the count restarted
 
     verify(alice, never()).disconnect(any(Component.class));
-    service.refreshNow();
+    repair();
     verify(alice).disconnect(argThat(key(DUPLICATE_SESSION)));
   }
 
@@ -314,13 +404,13 @@ class PlayerDepotServiceTest {
     when(proxies.isAlive(OTHER)).thenReturn(true);
     final ConnectedPlayer first = join("alice");
     depot.put(entry(first.getUniqueId(), "alice", OTHER, "lobby"));
-    service.refreshNow();
+    repair();
 
     online.remove(first);
     final ConnectedPlayer second = join("alice");
-    service.refreshNow();
+    repair();
     verify(second, never()).disconnect(any(Component.class));
-    service.refreshNow();
+    repair();
 
     verify(second).disconnect(argThat(key(DUPLICATE_SESSION)));
     verify(first, never()).disconnect(any(Component.class));
@@ -336,7 +426,7 @@ class PlayerDepotServiceTest {
     when(proxies.isAlive("proxy-c")).thenThrow(new IllegalStateException("redis down"));
 
     for (int i = 0; i < 4; i++) {
-      service.refreshNow();
+      repair();
     }
 
     verify(alice, never()).disconnect(any(Component.class));
@@ -351,12 +441,12 @@ class PlayerDepotServiceTest {
     depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
     final ConnectedPlayer bob = join("bob");
     depot.put(entry(bob.getUniqueId(), "bob", OTHER, "lobby"));
-    service.refreshNow(); // bob: first pass, before the shutdown starts
+    repair(); // bob: first pass, before the shutdown starts
 
     service.releaseAll();
     depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby")); // the target proxy claims her
     for (int i = 0; i < 4; i++) {
-      service.refreshNow(); // returns at once: this proxy writes and judges nothing more
+      repair(); // returns at once: this proxy writes and judges nothing more
     }
 
     verify(alice, never()).disconnect(any(Component.class));
@@ -368,13 +458,13 @@ class PlayerDepotServiceTest {
     final ConnectedPlayer alice = join("alice");
     depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
     when(proxies.isAlive(OTHER)).thenReturn(true);
-    service.refreshNow(); // first pass
+    repair(); // first pass
 
     when(proxies.isAlive(OTHER)).thenAnswer(inv -> {
       service.releaseAll(); // the shutdown starts while the second repair reads the heartbeat
       return true;
     });
-    service.refreshNow();
+    repair();
 
     verify(alice, never()).disconnect(any(Component.class));
     assertEquals(0, service.getDuplicateSessionsClosed());
@@ -469,6 +559,12 @@ class PlayerDepotServiceTest {
     return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
   }
 
+  /** One repair, a repair interval after the previous one, as the scheduler runs them. */
+  private void repair() {
+    clock.addAndGet(PlayerDepotService.REFRESH_INTERVAL.toNanos());
+    service.refreshNow();
+  }
+
   private ConnectedPlayer join(final String name) {
     final ConnectedPlayer player = player(name, null);
     online.add(player);
@@ -477,6 +573,8 @@ class PlayerDepotServiceTest {
 
   private static ConnectedPlayer player(final String name, final String serverName) {
     final ConnectedPlayer player = mock(ConnectedPlayer.class);
+    when(player.isFullyConnected()).thenReturn(true);
+    when(player.getConnection()).thenReturn(mock(MinecraftConnection.class));
     when(player.getUniqueId()).thenReturn(UUID.nameUUIDFromBytes(name.getBytes()));
     when(player.getUsername()).thenReturn(name);
     when(player.getQueuePriorities()).thenReturn(Map.of());

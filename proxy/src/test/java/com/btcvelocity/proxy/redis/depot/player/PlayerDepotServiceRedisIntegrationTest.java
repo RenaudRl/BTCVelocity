@@ -653,6 +653,7 @@ class PlayerDepotServiceRedisIntegrationTest {
     ConnectedPlayer join(final String name, final String serverName) {
       final UUID id = UUID.nameUUIDFromBytes(name.getBytes(StandardCharsets.UTF_8));
       final ConnectedPlayer player = mock(ConnectedPlayer.class);
+      when(player.isFullyConnected()).thenReturn(true);
       when(player.getUniqueId()).thenReturn(id);
       when(player.getUsername()).thenReturn(name);
       when(player.getQueuePriorities()).thenReturn(Map.of());
