@@ -18,6 +18,7 @@
 package com.btcvelocity.proxy.observability;
 
 import com.btcvelocity.proxy.queue.VelocityQueue;
+import com.btcvelocity.proxy.queue.VelocityQueueManager;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.server.VelocityRegisteredServer;
@@ -58,20 +59,22 @@ public final class ObservabilityService implements AutoCloseable {
    * leaves the proxy running: observability must never keep players out.
    *
    * @param server the proxy
-   * @param bossGroup the Netty acceptor loops
    * @param workerGroup the Netty worker loops
    * @param config the {@code [observability]} settings
    * @return the running service, to close at shutdown
    */
   public static ObservabilityService start(final VelocityServer server,
-                                           final EventLoopGroup bossGroup,
                                            final EventLoopGroup workerGroup,
                                            final VelocityConfiguration.Observability config) {
     LoopWatchdog watchdog = null;
     if (config.isWatchdogEnabled()) {
       final Map<String, EventExecutor> loops = new TreeMap<>();
-      name(loops, "boss", bossGroup);
-      name(loops, "worker", workerGroup);
+      // Boss loops are left alone: accepting is trivial, and the marker would start every one of
+      // them (2 x cores) although one serves. Connection work runs on the workers.
+      int index = 0;
+      for (final EventExecutor loop : workerGroup) {
+        loops.put("worker-" + index++, loop);
+      }
       final long threshold = config.getWatchdogThresholdMs();
       watchdog = new LoopWatchdog(loops, threshold,
           Math.max(MIN_INTERVAL_MILLIS, threshold / 2), REPORT_WINDOW_MILLIS,
@@ -94,22 +97,16 @@ public final class ObservabilityService implements AutoCloseable {
     return new ObservabilityService(watchdog, endpoint);
   }
 
-  private static void name(final Map<String, EventExecutor> loops, final String prefix,
-                           final EventLoopGroup group) {
-    int index = 0;
-    for (final EventExecutor loop : group) {
-      loops.put(prefix + "-" + index++, loop);
-    }
-  }
-
   private static String scrape(final VelocityServer server, final LoopWatchdog watchdog) {
     final Map<String, Long> byBackend = new TreeMap<>();
     for (final VelocityRegisteredServer backend : server.getAllServers()) {
       byBackend.put(backend.getServerInfo().getName(), backend.getPlayerCount());
     }
     final Map<String, Integer> queues = new TreeMap<>();
-    if (server.getConfiguration().getQueue().isEnabled()) {
-      for (final VelocityQueue queue : server.getQueueManager().getQueues()) {
+    // The manager only exists if the queue was enabled at startup: a reload cannot create it.
+    final VelocityQueueManager queueManager = server.getQueueManagerOrNull();
+    if (queueManager != null) {
+      for (final VelocityQueue queue : queueManager.getQueues()) {
         queues.put(queue.getName(), queue.size());
       }
     }

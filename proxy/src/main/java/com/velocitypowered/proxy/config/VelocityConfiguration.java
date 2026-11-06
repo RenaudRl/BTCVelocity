@@ -2481,6 +2481,21 @@ public final class VelocityConfiguration implements ProxyConfig {
     public String getPrometheusBind() {
       return prometheusBind;
     }
+
+    @Override
+    public boolean equals(final Object other) {
+      return other instanceof Observability o
+          && watchdogEnabled == o.watchdogEnabled
+          && watchdogThresholdMs == o.watchdogThresholdMs
+          && prometheusEnabled == o.prometheusEnabled
+          && prometheusBind.equals(o.prometheusBind);
+    }
+
+    @Override
+    public int hashCode() {
+      return java.util.Objects.hash(watchdogEnabled, watchdogThresholdMs, prometheusEnabled,
+          prometheusBind);
+    }
   }
 
   /**

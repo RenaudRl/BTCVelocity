@@ -26,6 +26,10 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
@@ -46,6 +50,7 @@ public final class MetricsEndpoint implements AutoCloseable {
   private static final String METRICS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8";
 
   private final HttpServer server;
+  private final Set<String> allowedHosts;
 
   /**
    * Binds and starts the listener.
@@ -62,11 +67,15 @@ public final class MetricsEndpoint implements AutoCloseable {
     if (address == null || !address.isLoopbackAddress()) {
       throw new IllegalArgumentException("The metrics endpoint only binds to loopback, not " + bind);
     }
+    // Without this, a web page could reach the listener through DNS rebinding.
+    this.allowedHosts = new HashSet<>(List.of("127.0.0.1", "localhost", "::1", address.getHostAddress()));
     this.server = HttpServer.create(bind, 0);
     server.createContext("/", exchange -> {
       try {
         final String path = exchange.getRequestURI().getPath();
-        if (!"GET".equals(exchange.getRequestMethod())) {
+        if (!hostAllowed(exchange.getRequestHeaders().getFirst("Host"))) {
+          reply(exchange, 403, "text/plain; charset=utf-8", "forbidden\n");
+        } else if (!"GET".equals(exchange.getRequestMethod())) {
           reply(exchange, 405, "text/plain; charset=utf-8", "method not allowed\n");
         } else if ("/metrics".equals(path)) {
           reply(exchange, 200, METRICS_CONTENT_TYPE, metrics.get());
@@ -111,6 +120,19 @@ public final class MetricsEndpoint implements AutoCloseable {
       throw new IllegalArgumentException("'" + host + "' is not a loopback address");
     }
     return new InetSocketAddress(address, hostAndPort.getPort());
+  }
+
+  // A missing Host is accepted: a local HTTP/1.0 scraper does not have to send one.
+  private boolean hostAllowed(final String hostHeader) {
+    if (hostHeader == null) {
+      return true;
+    }
+    try {
+      return allowedHosts.contains(HostAndPort.fromString(hostHeader.trim()).getHost()
+          .toLowerCase(Locale.ROOT));
+    } catch (final IllegalArgumentException e) {
+      return false;
+    }
   }
 
   /**

@@ -22,12 +22,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.btcvelocity.proxy.bridge.BridgeMetrics;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -86,6 +90,19 @@ class MetricsEndpointTest {
   }
 
   @Test
+  void aForeignHostHeaderIsRefusedAgainstDnsRebinding() throws Exception {
+    try (MetricsEndpoint endpoint = new MetricsEndpoint(
+        new InetSocketAddress("127.0.0.1", 0), () -> "ok", () -> true)) {
+      assertEquals(403, statusWithHost(endpoint, "evil.example"));
+      assertEquals(403, statusWithHost(endpoint, "evil.example:" + endpoint.port()));
+      assertEquals(200, statusWithHost(endpoint, "127.0.0.1:" + endpoint.port()));
+      assertEquals(200, statusWithHost(endpoint, "localhost:" + endpoint.port()));
+      assertEquals(200, statusWithHost(endpoint, "[::1]:" + endpoint.port()));
+      assertEquals(200, statusWithHost(endpoint, null));
+    }
+  }
+
+  @Test
   void theListenerRefusesToBindOutsideLoopback() {
     assertThrows(IllegalArgumentException.class,
         () -> new MetricsEndpoint(new InetSocketAddress("0.0.0.0", 0), () -> "", () -> true));
@@ -101,6 +118,19 @@ class MetricsEndpointTest {
         "[::]:9225", "example.com:9225", "127.0.0.1", "127.0.0.1:99999", "", ":9225")) {
       assertThrows(IllegalArgumentException.class, () -> MetricsEndpoint.parseLoopbackBind(bad),
           bad);
+    }
+  }
+
+  /** Raw HTTP/1.0 request: the JDK client does not let a test choose the Host header. */
+  private static int statusWithHost(final MetricsEndpoint endpoint, final String host)
+      throws IOException {
+    try (Socket socket = new Socket("127.0.0.1", endpoint.port())) {
+      socket.getOutputStream().write(("GET /metrics HTTP/1.0\r\n"
+          + (host == null ? "" : "Host: " + host + "\r\n") + "\r\n")
+          .getBytes(StandardCharsets.US_ASCII));
+      final String statusLine = new BufferedReader(new InputStreamReader(socket.getInputStream(),
+          StandardCharsets.US_ASCII)).readLine();
+      return Integer.parseInt(statusLine.split(" ")[1]);
     }
   }
 

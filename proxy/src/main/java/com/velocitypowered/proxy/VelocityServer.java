@@ -342,6 +342,15 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
   }
 
   /**
+   * Returns the queue manager, or {@code null} when it was not created at startup.
+   *
+   * @return the {@link VelocityQueueManager} or {@code null}
+   */
+  public @Nullable VelocityQueueManager getQueueManagerOrNull() {
+    return queueManager;
+  }
+
+  /**
    * Returns the queue manager currently in use.
    * Will throw when the queue is not enabled. Please check this beforehand with {@link #isQueueEnabled()}.
    *
@@ -669,7 +678,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       this.cm.queryBind(configuration.getBind().getHostString(), configuration.getQueryPort());
     }
 
-    this.observability = ObservabilityService.start(this, cm.getBossGroup(), cm.getWorkerGroup(),
+    this.observability = ObservabilityService.start(this, cm.getWorkerGroup(),
         configuration.getObservability());
 
     final String defaultPackage = new String(new byte[] {'o', 'r', 'g', '.', 'b', 's', 't', 'a', 't', 's' });
@@ -809,6 +818,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
     final VelocityConfiguration oldConfiguration = this.configuration;
     this.configuration = newConfiguration;
+    if (!oldConfiguration.getObservability().equals(newConfiguration.getObservability())) {
+      LOGGER.warn("[observability] changed: restart the proxy to apply");
+    }
 
     reloadServerList();
 
