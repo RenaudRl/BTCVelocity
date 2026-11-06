@@ -589,6 +589,11 @@ public final class LettuceProvider extends AbstractRedisProvider {
   @Override
   public boolean acquireLease(final @NotNull String key, final @NotNull String owner,
                               final @NotNull Duration ttl) {
+    if (this.depotConnection == null) {
+      LOGGER.warn("Attempted to take lease '{}' but the depot connection is not initialized", key);
+      return false;
+    }
+
     return this.depotConnection.sync()
         .set(key, owner, SetArgs.Builder.nx().px(ttl.toMillis())) != null;
   }
@@ -596,6 +601,11 @@ public final class LettuceProvider extends AbstractRedisProvider {
   @Override
   public boolean renewLease(final @NotNull String key, final @NotNull String owner,
                             final @NotNull Duration ttl) {
+    if (this.depotConnection == null) {
+      LOGGER.warn("Attempted to renew lease '{}' but the depot connection is not initialized", key);
+      return false;
+    }
+
     final Long renewed = this.depotConnection.sync().eval(RENEW_LEASE_SCRIPT,
         ScriptOutputType.INTEGER, new String[] {key}, owner, String.valueOf(ttl.toMillis()));
     return renewed != null && renewed > 0;
@@ -603,6 +613,11 @@ public final class LettuceProvider extends AbstractRedisProvider {
 
   @Override
   public boolean releaseLease(final @NotNull String key, final @NotNull String owner) {
+    if (this.depotConnection == null) {
+      LOGGER.warn("Attempted to release lease '{}' but the depot connection is not initialized", key);
+      return false;
+    }
+
     final Long released = this.depotConnection.sync().eval(RELEASE_LEASE_SCRIPT,
         ScriptOutputType.INTEGER, new String[] {key}, owner);
     return released != null && released > 0;
