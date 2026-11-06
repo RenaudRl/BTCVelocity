@@ -17,6 +17,7 @@
 
 package com.btcvelocity.proxy.redis.provider;
 
+import com.btcvelocity.proxy.redis.OrderedRedisExecutor;
 import com.btcvelocity.proxy.redis.depot.Depot;
 import com.btcvelocity.proxy.redis.depot.DepotEntry;
 import com.btcvelocity.proxy.redis.handler.RouteHandler;
@@ -28,14 +29,17 @@ import com.google.common.base.Preconditions;
 import com.google.gson.Gson;
 import com.velocitypowered.api.scheduler.Scheduler;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
+import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
+import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.lettuce.core.pubsub.api.async.RedisPubSubAsyncCommands;
 import io.lettuce.core.pubsub.api.sync.RedisPubSubCommands;
+import java.time.Duration;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.UUID;
@@ -56,6 +60,30 @@ public final class LettuceProvider extends AbstractRedisProvider {
    * Logger used for all Lettuce provider operations and diagnostics.
    */
   private static final Logger LOGGER = LoggerFactory.getLogger(LettuceProvider.class);
+
+  /**
+   * Upper bound of every Redis command, sync or async. A Redis that stops answering costs a
+   * caller this long at most, instead of Lettuce's 60 s default (or forever for async commands).
+   */
+  public static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(2);
+
+  /**
+   * Maximum number of received pub/sub messages waiting for their handler.
+   */
+  private static final int MESSAGE_QUEUE_CAPACITY = 8192;
+
+  /**
+   * How long {@link #disconnect()} waits for queued messages to be handled.
+   */
+  private static final Duration MESSAGE_DRAIN_GRACE = Duration.ofSeconds(2);
+
+  /**
+   * Runs the pub/sub handlers off Lettuce's I/O thread, in arrival order. Handlers may call the
+   * sync depot API; doing that on the I/O thread blocks it, and can stall the very connection
+   * that must deliver the answer.
+   */
+  private final OrderedRedisExecutor messageHandlers =
+      new OrderedRedisExecutor("btc-redis-pubsub", MESSAGE_QUEUE_CAPACITY);
 
   /**
    * The Redis configuration used by this provider.
@@ -101,7 +129,12 @@ public final class LettuceProvider extends AbstractRedisProvider {
             .withAuthentication(Objects.requireNonNullElse(config.getUsername(), ""),
                     Objects.requireNonNullElse(config.getPassword(), ""))
             .withSsl(config.isUseSsl())
+            .withTimeout(COMMAND_TIMEOUT)
             .build());
+    // Without this, async commands never time out and the sync ones wait Lettuce's 60 s default.
+    this.client.setOptions(ClientOptions.builder()
+        .timeoutOptions(TimeoutOptions.enabled(COMMAND_TIMEOUT))
+        .build());
   }
 
   /**
@@ -131,31 +164,14 @@ public final class LettuceProvider extends AbstractRedisProvider {
       public void subscribed(final String channel, final long count) {
         if (CHANNEL.equals(channel) && subscribedOnce.getAndSet(true)) {
           // Re-subscribe after a reconnect, notify listeners so they can reload state.
-          fireReconnectListeners();
+          messageHandlers.execute(LettuceProvider.this::fireReconnectListeners);
         }
       }
 
       @Override
       public void message(final String channel, final String message) {
-        if (!channel.equals(CHANNEL)) {
-          return;
-        }
-
-        final DataPacket dataPacket = packetSerializer.deserialize(message);
-        if (dataPacket == null) {
-          LOGGER.warn("Received a null packet from channel '{}', ignoring", channel);
-          return;
-        }
-
-        if (dataPacket.isOneWay()) {
-          handleOneWay(dataPacket);
-          return;
-        }
-
-        if (!dataPacket.isReply()) {
-          handleTransactionRequest(dataPacket);
-        } else {
-          handleTransactionReply(dataPacket);
+        if (channel.equals(CHANNEL)) {
+          messageHandlers.execute(() -> handleMessage(message));
         }
       }
     });
@@ -177,12 +193,38 @@ public final class LettuceProvider extends AbstractRedisProvider {
   }
 
   /**
+   * Decodes one pub/sub message and routes it. Runs on {@link #messageHandlers}.
+   *
+   * @param message the raw message
+   */
+  private void handleMessage(final String message) {
+    final DataPacket dataPacket = packetSerializer.deserialize(message);
+    if (dataPacket == null) {
+      LOGGER.warn("Received a null packet from channel '{}', ignoring", CHANNEL);
+      return;
+    }
+
+    if (dataPacket.isOneWay()) {
+      handleOneWay(dataPacket);
+      return;
+    }
+
+    if (!dataPacket.isReply()) {
+      handleTransactionRequest(dataPacket);
+    } else {
+      handleTransactionReply(dataPacket);
+    }
+  }
+
+  /**
    * Disconnects from the Redis server by closing the Pub/Sub connection and shutting down the client.
    *
    * <p>If no active connection exists, a warning is logged and the call is ignored.</p>
    */
   @Override
   public void disconnect() {
+    this.messageHandlers.shutdown(MESSAGE_DRAIN_GRACE);
+
     if (!this.isConnected()) {
       LOGGER.warn("Attempted to disconnect from Redis, but no connection was established");
       return;
