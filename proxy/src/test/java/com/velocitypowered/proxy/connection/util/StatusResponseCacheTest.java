@@ -213,6 +213,29 @@ class StatusResponseCacheTest {
   }
 
   @Test
+  void aRefusalBuiltForOneConnectionDoesNotCloseTheOnesWaitingOnIt() throws Exception {
+    ttl("5");
+    eventGate = new CompletableFuture<>();
+    final VelocityEventManager eventManager = server.getEventManager();
+    doAnswer(invocation -> {
+      final ProxyPingEvent event = invocation.getArgument(0);
+      if (events.incrementAndGet() == 1) {
+        event.setResult(ResultedEvent.GenericResult.denied()); // the first connection is banned
+      }
+      return eventGate.thenApply(ignored -> event);
+    }).when(eventManager).fire(any(ProxyPingEvent.class));
+
+    final CompletableFuture<Optional<String>> banned =
+        handler.getStatusResponse(client(ProtocolVersion.MINECRAFT_1_21, "play.example.com"));
+    final CompletableFuture<Optional<String>> other =
+        handler.getStatusResponse(client(ProtocolVersion.MINECRAFT_1_21, "play.example.com"));
+    eventGate.complete(null);
+
+    assertTrue(banned.get().isEmpty());
+    assertTrue(other.get().isPresent());
+    assertEquals(2, events.get());
+  }
+  @Test
   void aPingRefusedByAPluginIsNotKept() throws Exception {
     ttl("5");
     final VelocityEventManager eventManager = server.getEventManager();

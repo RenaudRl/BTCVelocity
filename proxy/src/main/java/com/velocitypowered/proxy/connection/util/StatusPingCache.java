@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -35,9 +36,11 @@ import org.checkerframework.checker.nullness.qual.Nullable;
  * succeeded and before it expires, receive the same future. Nothing here waits: callers get a
  * future and the build runs wherever the supplier runs it, so an event loop is never blocked.</p>
  *
- * <p>A refused ping (empty result) and a failed build are handed to the requests waiting on that
- * build but are not kept. The event sees the connection of the request that triggered the build
- * only, so a listener that answers differently per client address must run with the cache off.</p>
+ * <p>A refused ping (empty result) and a failed build are handed to the request that ran the build
+ * only, and are not kept: the requests that were waiting on it run their own build, without the
+ * cache. The event sees the connection of the request that ran a build and nobody else's, so a
+ * listener that reads {@code event.getConnection()} (address, rate, ban) must run with the cache
+ * off.</p>
  */
 public final class StatusPingCache {
 
@@ -123,17 +126,19 @@ public final class StatusPingCache {
       return created[0];
     });
     if (created[0] != entry) {
-      hits.increment();
-      return entry.future;
+      // A refusal or a failure belongs to the connection that built it: a waiter builds its own.
+      return entry.future.handle((value, error) -> {
+        if (error == null && value.isPresent()) {
+          hits.increment();
+          return CompletableFuture.completedFuture(value);
+        }
+        misses.increment();
+        return startBuild(build);
+      }).thenCompose(Function.identity());
     }
 
     misses.increment();
-    CompletableFuture<Optional<String>> built;
-    try {
-      built = build.get();
-    } catch (final RuntimeException e) {
-      built = CompletableFuture.failedFuture(e);
-    }
+    final CompletableFuture<Optional<String>> built = startBuild(build);
     built.whenComplete((value, error) -> {
       if (error != null) {
         entries.remove(key, entry);
@@ -147,6 +152,15 @@ public final class StatusPingCache {
       }
     });
     return entry.future;
+  }
+
+  private static CompletableFuture<Optional<String>> startBuild(
+      final Supplier<CompletableFuture<Optional<String>>> build) {
+    try {
+      return build.get();
+    } catch (final RuntimeException e) {
+      return CompletableFuture.failedFuture(e);
+    }
   }
 
   /** Forgets every response; builds already in flight still answer their waiters. */

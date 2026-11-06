@@ -19,7 +19,6 @@ package com.velocitypowered.proxy.connection.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -120,12 +119,57 @@ class StatusPingCacheTest {
       builds.incrementAndGet();
       return pending;
     });
-    assertSame(first, cache.get(KEY, 5, this::build));
+    final CompletableFuture<Optional<String>> waiter = cache.get(KEY, 5, this::build);
+    assertFalse(waiter.isDone());
     assertEquals(1, builds.get());
 
     advance(nanos, 31); // past the in-flight limit
     assertEquals("ping-2", cache.get(KEY, 5, this::build).get().orElseThrow());
     assertFalse(first.isDone());
+
+    pending.complete(Optional.of("late"));
+    assertEquals("late", waiter.get().orElseThrow());
+    assertEquals(2, builds.get());
+  }
+
+  @Test
+  void requestsWaitingOnASuccessfulBuildReceiveIt() throws Exception {
+    final CompletableFuture<Optional<String>> pending = new CompletableFuture<>();
+    cache.get(KEY, 5, () -> {
+      builds.incrementAndGet();
+      return pending;
+    });
+    final CompletableFuture<Optional<String>> waiter = cache.get(KEY, 5, this::build);
+    pending.complete(Optional.of("shared"));
+
+    assertEquals("shared", waiter.get().orElseThrow());
+    assertEquals(1, builds.get());
+  }
+
+  @Test
+  void aRefusalIsNotHandedToTheRequestsWaitingOnIt() throws Exception {
+    final CompletableFuture<Optional<String>> refusal = new CompletableFuture<>();
+    final CompletableFuture<Optional<String>> builder = cache.get(KEY, 5, () -> refusal);
+    final CompletableFuture<Optional<String>> waiter = cache.get(KEY, 5, this::build);
+    assertFalse(waiter.isDone());
+
+    refusal.complete(Optional.empty()); // connection A was refused
+
+    assertTrue(builder.get().isEmpty());
+    assertEquals("ping-1", waiter.get().orElseThrow()); // connection B got its own answer
+    assertEquals("ping-2", cache.get(KEY, 5, this::build).get().orElseThrow()); // and nothing was kept
+  }
+
+  @Test
+  void aFailureIsNotHandedToTheRequestsWaitingOnItEither() throws Exception {
+    final CompletableFuture<Optional<String>> failure = new CompletableFuture<>();
+    final CompletableFuture<Optional<String>> builder = cache.get(KEY, 5, () -> failure);
+    final CompletableFuture<Optional<String>> waiter = cache.get(KEY, 5, this::build);
+
+    failure.completeExceptionally(new IllegalStateException("boom"));
+
+    assertThrows(ExecutionException.class, builder::get);
+    assertEquals("ping-1", waiter.get().orElseThrow());
   }
 
   @Test
