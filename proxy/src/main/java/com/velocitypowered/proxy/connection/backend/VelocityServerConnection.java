@@ -73,7 +73,7 @@ public class VelocityServerConnection implements MinecraftConnectionAssociation,
 
   private boolean hasCompletedJoin = false;
   private boolean clientLoaded = false; // 1.21.4+
-  private boolean gracefulDisconnect = false;
+  private volatile boolean gracefulDisconnect = false;
   private volatile boolean proxySideFailure = false;
   private volatile boolean closedByBackend = false;
 

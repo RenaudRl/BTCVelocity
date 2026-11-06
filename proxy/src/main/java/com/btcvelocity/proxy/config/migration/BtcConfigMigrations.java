@@ -195,8 +195,8 @@ public class BtcConfigMigrations {
         ),
         migration(
             "Passive circuit breaker on backends. Nothing is probed: it watches the connections the proxy makes\n"
-                + " for its players. When this many consecutive connections to one backend fail within the window\n"
-                + " below (a success resets the count to zero), from at least 2 different players, routing plugins\n"
+                + " for its players. When this many different players have failed to connect to one backend within\n"
+                + " the window below (at least 2; a success resets the count to zero), routing plugins\n"
                 + " that choose a destination avoid that backend for the open delay, then try it again: the next\n"
                 + " success clears it, a failure of a new player avoids it again. One player failing over and over\n"
                 + " never opens it. A backend that answers and refuses the player (full, whitelist) is not a failure.\n"

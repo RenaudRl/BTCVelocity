@@ -38,15 +38,17 @@ class BackendCircuitBreakerTest {
   private static final UUID ALICE = UUID.fromString("00000000-0000-0000-0000-00000000000a");
   private static final UUID BOB = UUID.fromString("00000000-0000-0000-0000-00000000000b");
   private static final UUID CAROL = UUID.fromString("00000000-0000-0000-0000-00000000000c");
+  private static final UUID DAVE = UUID.fromString("00000000-0000-0000-0000-00000000000d");
 
   private final AtomicLong now = new AtomicLong(1_000_000L);
   private final BackendCircuitBreaker breaker =
       new BackendCircuitBreaker(3, WINDOW, OPEN_FOR, this.now::get);
 
-  /** {@code times} failures, alternating between two players so that they are never one alone. */
+  /** {@code times} failures from as many different players (ALICE, BOB, DAVE), one each. */
   private void fail(final int times) {
+    final UUID[] players = {ALICE, BOB, DAVE};
     for (int i = 0; i < times; i++) {
-      this.breaker.recordFailure(LOBBY, i % 2 == 0 ? ALICE : BOB);
+      this.breaker.recordFailure(LOBBY, players[i]);
     }
   }
 
@@ -68,7 +70,7 @@ class BackendCircuitBreakerTest {
   void theThresholdFailureOpensItAndSaysSo() {
     fail(2);
 
-    assertTrue(this.breaker.recordFailure(LOBBY, ALICE), "the failure that opens it is reported");
+    assertTrue(this.breaker.recordFailure(LOBBY, CAROL), "the failure that opens it is reported");
     assertEquals(OPEN, this.breaker.state(LOBBY));
     assertTrue(this.breaker.isAvoided(LOBBY));
   }
@@ -85,12 +87,27 @@ class BackendCircuitBreakerTest {
   }
 
   @Test
-  void aSecondPlayerFailingAfterManyFailuresOfTheFirstOpensIt() {
+  void aThirdPlayerFailingAfterManyFailuresOfTheFirstTwoOpensIt() {
+    // Witness: the ten failures of ALICE count once, so two players are not enough.
     for (int i = 0; i < 10; i++) {
       this.breaker.recordFailure(LOBBY, ALICE);
     }
+    assertFalse(this.breaker.recordFailure(LOBBY, BOB), "two players are not three");
+    assertEquals(CLOSED, this.breaker.state(LOBBY));
 
-    assertTrue(this.breaker.recordFailure(LOBBY, BOB), "the count was met, the second player was not");
+    assertTrue(this.breaker.recordFailure(LOBBY, CAROL), "the third player opens it");
+    assertEquals(OPEN, this.breaker.state(LOBBY));
+  }
+
+  @Test
+  void threeFailuresOfOnePlayerThenOneOfAnotherStayClosedUntilAThirdPlayerFails() {
+    for (int i = 0; i < 3; i++) {
+      assertFalse(this.breaker.recordFailure(LOBBY, ALICE));
+    }
+    assertFalse(this.breaker.recordFailure(LOBBY, BOB), "A counts once, so A and B are two");
+    assertEquals(CLOSED, this.breaker.state(LOBBY));
+
+    assertTrue(this.breaker.recordFailure(LOBBY, CAROL), "C is the third player: it opens");
     assertEquals(OPEN, this.breaker.state(LOBBY));
   }
 

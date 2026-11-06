@@ -32,9 +32,9 @@ import java.util.function.LongSupplier;
  *
  * <p>Nothing is probed: when a player's connection to a backend fails, the failure is recorded
  * here with the player's id, and when one succeeds the backend is cleared (the count restarts from
- * zero). A backend whose connections fail {@code failures} times within {@code window}, with no
- * success in between and for at least {@link #MIN_DISTINCT_PLAYERS} different players, is
- * <em>open</em>: routing avoids it for {@code open}. One player failing over and over (a broken
+ * zero). A backend is <em>open</em> when {@code failures} distinct players have failed to connect
+ * to it within {@code window}, with no success in between (and at least
+ * {@link #MIN_DISTINCT_PLAYERS} players): routing avoids it for {@code open}. One player failing over and over (a broken
  * client, a mod mismatch) says nothing about the backend and never opens it. Then it is
  * <em>half-open</em>: it may be tried again, and the next outcome decides — a success closes it, the
  * failure of a player not yet counted opens it again for another {@code open}.</p>
@@ -55,8 +55,8 @@ import java.util.function.LongSupplier;
 public final class BackendCircuitBreaker {
 
   /**
-   * Failed connections within the window that open the circuit. Zero or less turns it off, and it
-   * is off by default until the behaviour has been seen on a real network.
+   * Distinct players whose failed connections within the window open the circuit. Zero or less
+   * turns it off, and it is off by default until the behaviour has been seen on a real network.
    */
   public static final int DEFAULT_FAILURES = 0;
 
@@ -106,8 +106,8 @@ public final class BackendCircuitBreaker {
   /**
    * Creates a breaker.
    *
-   * @param failures     failed connections within the window that open the circuit; zero or less
-   *                     turns the breaker off
+   * @param failures     distinct players whose failed connections within the window open the
+   *                     circuit; zero or less turns the breaker off
    * @param windowMillis the span in which failures are counted, in milliseconds
    * @param openMillis   how long an open circuit lasts, in milliseconds
    * @param clock        the source of the current time, in milliseconds
@@ -161,7 +161,8 @@ public final class BackendCircuitBreaker {
       }
       recent.add(new Failure(now, player));
       players.add(player);
-      if (recent.size() >= this.failures && players.size() >= MIN_DISTINCT_PLAYERS) {
+      // Each player counts once: else one broken client plus one failure of another opens it.
+      if (players.size() >= Math.max(this.failures, MIN_DISTINCT_PLAYERS)) {
         opened[0] = true;
         return new Circuit(List.of(), now + this.openMillis, Set.copyOf(players));
       }
