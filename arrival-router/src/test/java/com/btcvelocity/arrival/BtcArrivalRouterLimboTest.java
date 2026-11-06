@@ -28,7 +28,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.btcvelocity.api.event.player.LimboHoldEvent;
 import com.btcvelocity.api.queue.QueueManager;
+import com.velocitypowered.api.event.EventManager;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerPostConnectEvent;
@@ -43,6 +45,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -56,8 +60,18 @@ class BtcArrivalRouterLimboTest {
   private final BtcArrivalRouterPlugin router = new BtcArrivalRouterPlugin(
       this.proxy, NOPLogger.NOP_LOGGER, ArrivalPolicy.parse("Lobby-*,*"), "limbo", null);
 
+  // Plugins hold a limbo player by answering this event; a test sets this to play one.
+  private Consumer<LimboHoldEvent> holder = event -> { };
+
   BtcArrivalRouterLimboTest() {
     doReturn(this.registered).when(this.proxy).getAllServers();
+    var events = mock(EventManager.class);
+    when(events.fire(any(LimboHoldEvent.class))).thenAnswer(invocation -> {
+      LimboHoldEvent event = invocation.getArgument(0);
+      this.holder.accept(event);
+      return CompletableFuture.completedFuture(event);
+    });
+    when(this.proxy.getEventManager()).thenReturn(events);
   }
 
   private RegisteredServer server(String name) {
@@ -264,6 +278,38 @@ class BtcArrivalRouterLimboTest {
 
     // Assert
     assertEquals(ArrivalMessages.defaults().get("limbo.maintenance"), sent);
+  }
+
+  @Test
+  void theSweepLeavesAPlayerAPluginHoldsAndReleasesThemOnceItLetsGo() {
+    // Arrange — a lobby is up; a plugin (service wake-up) holds the player in the limbo
+    var held = player();
+    var request = mock(ConnectionRequestBuilder.class);
+    when(held.createConnectionRequest(any())).thenReturn(request);
+    doReturn(List.of(held)).when(this.limbo).getPlayersConnected();
+    this.server("Lobby-1");
+    this.holder = event -> event.hold(Component.text("waking"));
+
+    // Act + Assert — kept while held (witness), released once the plugin lets go
+    this.router.releaseFromLimbo();
+    verify(request, never()).fireAndForget();
+    this.holder = event -> { };
+    this.router.releaseFromLimbo();
+    verify(request).fireAndForget();
+  }
+
+  @Test
+  void aHeldPlayerReachingTheLimboReadsTheHoldersReasonNotTheNoLobbyOne() {
+    // Arrange
+    var player = this.playerInTheLimbo();
+    var reason = Component.text("waking up Donjon");
+    this.holder = event -> event.hold(reason);
+
+    // Act
+    var sent = this.messageSentOnArrival(player);
+
+    // Assert
+    assertEquals(reason, sent);
   }
 
   @Test

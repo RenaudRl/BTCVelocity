@@ -17,6 +17,7 @@
 
 package com.btcvelocity.arrival;
 
+import com.btcvelocity.api.event.player.LimboHoldEvent;
 import com.google.inject.Inject;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
@@ -255,10 +256,16 @@ public final class BtcArrivalRouterPlugin {
           this.destinationFor(player, this.attempts.of(player.getUniqueId()));
       if (chosen.isPresent()) {
         var target = chosen.get();
-        this.attempts.record(player.getUniqueId(), target.getServerInfo().getName());
-        player.createConnectionRequest(target).fireAndForget();
-        this.logger.info("{} leaves the limbo for {}",
-            player.getUsername(), target.getServerInfo().getName());
+        // A plugin may park the player here on purpose (service being woken up for them).
+        this.proxy.getEventManager().fire(new LimboHoldEvent(player)).thenAccept(hold -> {
+          if (hold.isHeld()) {
+            return;
+          }
+          this.attempts.record(player.getUniqueId(), target.getServerInfo().getName());
+          player.createConnectionRequest(target).fireAndForget();
+          this.logger.info("{} leaves the limbo for {}",
+              player.getUsername(), target.getServerInfo().getName());
+        });
       }
     }
   }
@@ -275,7 +282,10 @@ public final class BtcArrivalRouterPlugin {
         .map(current -> this.isLimbo(current.getServerInfo().getName()))
         .orElse(false);
     if (inLimbo) {
-      player.sendMessage(this.messages.get(this.limboMessageKey(player)));
+      // A plugin that holds the player on purpose gives its own reason instead of "no lobby".
+      this.proxy.getEventManager().fire(new LimboHoldEvent(player)).thenAccept(hold ->
+          player.sendMessage(hold.getReason()
+              .orElseGet(() -> this.messages.get(this.limboMessageKey(player)))));
     }
   }
 
