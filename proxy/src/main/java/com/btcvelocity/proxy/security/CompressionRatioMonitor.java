@@ -124,7 +124,7 @@ public class CompressionRatioMonitor extends ChannelInboundHandlerAdapter {
       if (lastCompressedSize > 0 && lastCompressedSize < MIN_SUSPICIOUS_COMPRESSED_SIZE) {
         LOGGER.debug("[CompressionRatioMonitor] Suspiciously small compressed payload "
                 + "of {} bytes from {} — potential decompression bomb",
-            lastCompressedSize, ctx.channel().remoteAddress());
+            lastCompressedSize, LogAddress.of(ctx.channel().remoteAddress()));
       }
     }
 
@@ -183,11 +183,11 @@ public class CompressionRatioMonitor extends ChannelInboundHandlerAdapter {
                                   final String reason) {
     final int count = violations.incrementAndGet();
     LOGGER.warn("[CompressionRatioMonitor] {} — violation {}/{} from {}",
-        reason, count, maxViolations, remoteAddress);
+        reason, count, maxViolations, LogAddress.of(remoteAddress));
 
     if (count >= maxViolations) {
       LOGGER.warn("[CompressionRatioMonitor] Closing connection from {} after {} violations",
-          remoteAddress, count);
+          LogAddress.of(remoteAddress), count);
       ctx.close();
       return true;
     }
