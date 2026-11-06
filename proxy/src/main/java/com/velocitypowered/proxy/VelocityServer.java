@@ -455,6 +455,12 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     return backendHealthRegistry != null && backendHealthRegistry.isAvoided(serverName);
   }
 
+  @Override
+  public boolean isBackendHalfOpen(final String serverName) {
+    return backendHealthRegistry != null
+        && backendHealthRegistry.circuitState(serverName) == BackendCircuitBreaker.State.HALF_OPEN;
+  }
+
   /**
    * Returns the {@link WorldRegistry} that tracks which worlds are loaded on which backends.
    *

@@ -34,6 +34,7 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -267,19 +268,27 @@ public final class BtcArrivalRouterPlugin {
    */
   // shortcut: a server declared in velocity.toml is never re-registered, so once it failed for a
   // player it is not retried until they reconnect; fine while destinations are CloudNet services.
+  // shortcut: only this sweep limits the trial of a half-open backend to one player; initial
+  // arrivals and kick redirects may still send several at once, each failure re-avoiding it.
   void releaseFromLimbo() {
     Optional<RegisteredServer> limboServer = this.limboServer();
     if (limboServer.isEmpty()) {
       return;
     }
+    // Half-open backends already given their trial player this sweep; the others wait or go elsewhere.
+    Set<String> onTrial = new HashSet<>();
     for (Player player : limboServer.get().getPlayersConnected()) {
       if (this.isQueued(player)) {
         continue; // the queue owns their turn; releasing them here would drop them from it
       }
-      Optional<RegisteredServer> chosen =
-          this.destinationFor(player, this.attempts.of(player.getUniqueId()));
+      Set<String> excluded = new HashSet<>(this.attempts.of(player.getUniqueId()));
+      excluded.addAll(onTrial);
+      Optional<RegisteredServer> chosen = this.destinationFor(player, excluded);
       if (chosen.isPresent()) {
         var target = chosen.get();
+        if (this.proxy.isBackendHalfOpen(target.getServerInfo().getName())) {
+          onTrial.add(target.getServerInfo().getName());
+        }
         // A plugin may park the player here on purpose (service being woken up for them).
         this.proxy.getEventManager().fire(new LimboHoldEvent(player)).thenAccept(hold -> {
           if (hold.isHeld()) {

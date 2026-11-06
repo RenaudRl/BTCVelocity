@@ -255,6 +255,19 @@ public interface ProxyServer extends Audience {
   }
 
   /**
+   * Returns whether a backend that was avoided is now on trial: the delay is over and the next
+   * connection decides, a success clearing it and a failure avoiding it again. Such a backend is
+   * not {@linkplain #isBackendAvoided avoided}, but a routing code that sends many players at once
+   * should send one of them, not all.
+   *
+   * @param serverName the name of the backend server
+   * @return {@code true} while the backend is on trial
+   */
+  default boolean isBackendHalfOpen(String serverName) {
+    return false;
+  }
+
+  /**
    * Gets the {@link StorageService} used to persist player data and proxy state.
    *
    * @return the storage service, or {@code null} if PostgreSQL storage is not enabled
