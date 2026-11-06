@@ -1343,13 +1343,30 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    * @param filter how to rank the candidates
    * @param isAlive whether a proxy still beats its heartbeat
    * @param playersOn the number of players on a proxy
-   * @return the target, or {@code null} for none
+   * @return the target, or {@code null} for none, including when Redis cannot be read
    */
   static @Nullable ProxyAddress chooseTransferTarget(final Collection<ProxyAddress> configured,
                                                      final String selfId,
                                                      final DynamicProxyFilterMode filter,
                                                      final Predicate<String> isAlive,
                                                      final ToIntFunction<String> playersOn) {
+    if (filter == DynamicProxyFilterMode.NONE) {
+      return null;
+    }
+    // Runs inside shutdown: a Redis that does not answer must not abort it.
+    try {
+      return rankTransferTargets(configured, selfId, filter, isAlive, playersOn);
+    } catch (RuntimeException e) {
+      LOGGER.error("Could not pick a proxy to transfer players to; disconnecting them instead", e);
+      return null;
+    }
+  }
+
+  private static @Nullable ProxyAddress rankTransferTargets(final Collection<ProxyAddress> configured,
+                                                            final String selfId,
+                                                            final DynamicProxyFilterMode filter,
+                                                            final Predicate<String> isAlive,
+                                                            final ToIntFunction<String> playersOn) {
     List<ProxyAddress> addresses = new ArrayList<>(configured);
     addresses.removeIf(address -> selfId.equalsIgnoreCase(address.proxyId())
         || !isAlive.test(address.proxyId()));
@@ -1370,10 +1387,6 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         // Sort to get least empty first
         addresses.sort(Comparator.<ProxyAddress>comparingInt(
             address -> playersOn.applyAsInt(address.proxyId())).reversed());
-      }
-      case NONE -> {
-        // No next address
-        return null;
       }
       default -> {
         throw new IllegalStateException("Invalid filter '" + filter + "'.");

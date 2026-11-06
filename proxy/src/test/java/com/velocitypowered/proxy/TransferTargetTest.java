@@ -60,6 +60,22 @@ class TransferTargetTest {
     assertNull(choose(DynamicProxyFilterMode.NONE, all));
   }
 
+  @Test
+  void noneNeverReadsRedis() {
+    assertNull(VelocityServer.chooseTransferTarget(CONFIGURED, SELF.proxyId(),
+        DynamicProxyFilterMode.NONE, id -> {
+          throw new AssertionError("NONE must not query liveness");
+        }, PLAYERS::get));
+  }
+
+  @Test
+  void anUnreachableRedisMeansNoTransferInsteadOfAnAbortedShutdown() {
+    assertNull(VelocityServer.chooseTransferTarget(CONFIGURED, SELF.proxyId(),
+        DynamicProxyFilterMode.FIRST_FOUND, id -> {
+          throw new IllegalStateException("Command timed out after 2 second(s)");
+        }, PLAYERS::get));
+  }
+
   private static ProxyAddress choose(final DynamicProxyFilterMode mode, final Set<String> alive) {
     return VelocityServer.chooseTransferTarget(CONFIGURED, SELF.proxyId(), mode, alive::contains,
         PLAYERS::get);

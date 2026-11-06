@@ -30,6 +30,7 @@ import com.btcvelocity.proxy.redis.transaction.Transaction;
 import com.btcvelocity.proxy.redis.transaction.TransactionData;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import org.jetbrains.annotations.NotNull;
 
@@ -117,10 +118,23 @@ public final class VelocityRedis {
 
     shutdown = true;
 
-    this.playerService.teardown();
-    this.proxyService.teardown();
-    this.queueService.teardown();
-    this.provider.disconnect();
+    // Each step runs even if an earlier one failed (Redis down): the connection must be closed.
+    RuntimeException failure = null;
+    for (Runnable step : List.<Runnable>of(this.playerService::teardown,
+        this.proxyService::teardown, this.queueService::teardown, this.provider::disconnect)) {
+      try {
+        step.run();
+      } catch (RuntimeException e) {
+        if (failure == null) {
+          failure = e;
+        } else {
+          failure.addSuppressed(e);
+        }
+      }
+    }
+    if (failure != null) {
+      throw failure;
+    }
   }
 
   /**
