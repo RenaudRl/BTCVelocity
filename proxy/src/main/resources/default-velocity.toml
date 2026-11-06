@@ -517,6 +517,12 @@ use-ssl = false
 # Your server will not start if this is blank and Redis is on.
 proxy-id = ""
 
+# What to do with a login when Redis does not answer the duplicate-login check within 500 ms.
+# "deny" refuses the login: a player can never be online on two proxies at once.
+# "allow" lets the player in unchecked: the network stays joinable while Redis is down,
+# at the risk of one player holding two sessions (duplicated items or money).
+login-check-failure = "deny"
+
 [postgresql]
 # Should PostgreSQL be used as a persistent storage backend?
 # When enabled, BTC Velocity will use PostgreSQL for player data, proxy state,

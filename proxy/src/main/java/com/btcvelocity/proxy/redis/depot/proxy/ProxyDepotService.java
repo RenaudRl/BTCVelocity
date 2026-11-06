@@ -19,7 +19,6 @@ package com.btcvelocity.proxy.redis.depot.proxy;
 
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.depot.AbstractDepotService;
-import com.btcvelocity.proxy.redis.depot.player.PlayerEntry;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.time.Duration;
@@ -101,12 +100,15 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
       this.reapDeadProxiesTask.cancel();
     }
 
-    // Delete own heartbeat key so surviving proxies don't try to reap us while we're cleaning up.
-    this.redis.getProvider().deleteKey(HEARTBEAT_KEY_PREFIX + this.redis.getProxyId());
+    // Locked against a heartbeat already in flight, which would register this proxy again.
+    synchronized (this) {
+      // Delete own heartbeat key so surviving proxies don't try to reap us while we're cleaning up.
+      this.redis.getProvider().deleteKey(HEARTBEAT_KEY_PREFIX + this.redis.getProxyId());
 
-    final ProxyEntry proxyEntry = this.get(this.redis.getServer().getProxyId());
-    if (proxyEntry != null) {
-      proxyEntry.remove();
+      final ProxyEntry proxyEntry = this.get(this.redis.getServer().getProxyId());
+      if (proxyEntry != null) {
+        proxyEntry.remove();
+      }
     }
   }
 
@@ -129,10 +131,21 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   }
 
   /**
-   * Publishes this proxy's heartbeat key to Redis with a TTL of {@link #HEARTBEAT_TTL}.
-   * Called every {@link #HEARTBEAT_INTERVAL} by the scheduler.
+   * Whether a proxy still beats: its heartbeat key has not expired. Blocking Redis read.
+   *
+   * @param proxyId the proxy to check
+   * @return {@code true} if its heartbeat key exists
    */
-  private void publishHeartbeat() {
+  public boolean isAlive(final @NotNull String proxyId) {
+    return this.redis.getProvider().existsKey(HEARTBEAT_KEY_PREFIX + proxyId);
+  }
+
+  /**
+   * Publishes this proxy's heartbeat key to Redis with a TTL of {@link #HEARTBEAT_TTL}.
+   * Called every {@link #HEARTBEAT_INTERVAL} by the scheduler. The shutdown flag is set before
+   * {@link #teardown()}, which takes the same lock, so no beat can follow the teardown.
+   */
+  private synchronized void publishHeartbeat() {
     if (this.redis.isShutdown()) {
       return;
     }
@@ -142,6 +155,12 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
             "1",
             HEARTBEAT_TTL.toSeconds()
     );
+
+    // A lapse longer than the TTL (pause, Redis hiccup) lets a peer reap this live proxy.
+    if (!this.depot.contains(this.redis.getProxyId())) {
+      LOGGER.warn("This proxy was reaped from redis while still running; registering it again.");
+      this.depot.upsert(new ProxyEntry(this.redis.getServer()));
+    }
   }
 
   /**
@@ -176,9 +195,8 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   private void reapProxy(final @NotNull String proxyId) {
     LOGGER.warn("Reaping proxy {} from redis. This proxy shut down improperly.", proxyId);
 
-    for (final PlayerEntry playerEntry : this.redis.getPlayerService().getPlayerEntriesOnProxy(proxyId)) {
-      playerEntry.remove();
-    }
+    // Owner-guarded: a player that already moved to a live proxy keeps that proxy's entry.
+    this.redis.getPlayerService().removeEntriesOf(proxyId);
 
     this.depot.remove(proxyId);
   }

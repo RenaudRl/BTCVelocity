@@ -17,6 +17,7 @@
 
 package com.btcvelocity.proxy.redis.provider;
 
+import com.btcvelocity.proxy.redis.OrderedRedisExecutor;
 import com.btcvelocity.proxy.redis.depot.Depot;
 import com.btcvelocity.proxy.redis.depot.DepotEntry;
 import com.btcvelocity.proxy.redis.handler.RouteHandler;
@@ -28,18 +29,30 @@ import com.google.common.base.Preconditions;
 import com.google.gson.Gson;
 import com.velocitypowered.api.scheduler.Scheduler;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
+import io.lettuce.core.ClientOptions;
+import io.lettuce.core.RedisBusyException;
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisCommandExecutionException;
+import io.lettuce.core.RedisCommandTimeoutException;
+import io.lettuce.core.RedisFuture;
+import io.lettuce.core.RedisLoadingException;
 import io.lettuce.core.RedisURI;
+import io.lettuce.core.ScriptOutputType;
+import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.api.async.RedisAsyncCommands;
 import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import io.lettuce.core.pubsub.api.async.RedisPubSubAsyncCommands;
 import io.lettuce.core.pubsub.api.sync.RedisPubSubCommands;
+import java.time.Duration;
 import java.util.Collection;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
@@ -56,6 +69,90 @@ public final class LettuceProvider extends AbstractRedisProvider {
    * Logger used for all Lettuce provider operations and diagnostics.
    */
   private static final Logger LOGGER = LoggerFactory.getLogger(LettuceProvider.class);
+
+  /**
+   * Upper bound of every Redis command, sync or async. A Redis that stops answering costs a
+   * caller this long at most, instead of Lettuce's 60 s default (or forever for async commands).
+   */
+  public static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(2);
+
+  /**
+   * Maximum number of received pub/sub messages waiting for their handler.
+   */
+  private static final int MESSAGE_QUEUE_CAPACITY = 8192;
+
+  /**
+   * How long {@link #disconnect()} waits for queued messages to be handled.
+   */
+  private static final Duration MESSAGE_DRAIN_GRACE = Duration.ofSeconds(2);
+
+  /**
+   * Commands waiting on one connection before new ones are rejected, instead of piling up in
+   * memory while Redis does not answer.
+   */
+  private static final int REQUEST_QUEUE_SIZE = 10_000;
+
+  /**
+   * Lua: lower-cased {@code proxyId} of a JSON entry, or nil. Shared by the owner-aware scripts.
+   * Every key is passed in KEYS, as Dragonfly requires.
+   */
+  private static final String OWNER_FUNCTION = "local function owner(json) "
+      + "local ok, entry = pcall(cjson.decode, json) "
+      + "if ok and type(entry) == 'table' and type(entry.proxyId) == 'string' then "
+      + "return string.lower(entry.proxyId) end "
+      + "return nil end\n";
+
+  /**
+   * Lua with cjson, as the owner-aware scripts use it: answers 1 where they can run.
+   */
+  private static final String SCRIPTING_PROBE = "return cjson.decode('{\"a\":1}').a";
+
+  /**
+   * KEYS[1] hash, ARGV: field, json, proxyId, force ("1"). Writes unless another proxy owns the
+   * field (or force); returns that proxy's entry, or nil.
+   */
+  private static final String CLAIM_SCRIPT = OWNER_FUNCTION
+      + "local current = redis.call('HGET', KEYS[1], ARGV[1])\n"
+      + "if current then\n"
+      + "  local holder = owner(current)\n"
+      + "  if holder and holder ~= string.lower(ARGV[3]) then\n"
+      + "    if ARGV[4] == '1' then redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]) end\n"
+      + "    return current\n"
+      + "  end\n"
+      + "end\n"
+      + "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])\n"
+      + "return false\n";
+
+  /**
+   * KEYS[1] hash, ARGV: field, proxyId. Deletes the field only if that proxy owns it.
+   */
+  private static final String REMOVE_IF_OWNER_SCRIPT = OWNER_FUNCTION
+      + "local current = redis.call('HGET', KEYS[1], ARGV[1])\n"
+      + "if current and owner(current) == string.lower(ARGV[2]) then\n"
+      + "  return redis.call('HDEL', KEYS[1], ARGV[1])\n"
+      + "end\n"
+      + "return 0\n";
+
+  /**
+   * KEYS[1] hash, ARGV: proxyId. Deletes every field that proxy owns.
+   */
+  private static final String REMOVE_ALL_OWNED_SCRIPT = OWNER_FUNCTION
+      + "local all = redis.call('HGETALL', KEYS[1])\n"
+      + "local removed = 0\n"
+      + "for i = 1, #all, 2 do\n"
+      + "  if owner(all[i + 1]) == string.lower(ARGV[1]) then\n"
+      + "    removed = removed + redis.call('HDEL', KEYS[1], all[i])\n"
+      + "  end\n"
+      + "end\n"
+      + "return removed\n";
+
+  /**
+   * Runs the pub/sub handlers off Lettuce's I/O thread, in arrival order. Handlers may call the
+   * sync depot API; doing that on the I/O thread blocks it, and can stall the very connection
+   * that must deliver the answer.
+   */
+  private final OrderedRedisExecutor messageHandlers =
+      new OrderedRedisExecutor("btc-redis-pubsub", MESSAGE_QUEUE_CAPACITY);
 
   /**
    * The Redis configuration used by this provider.
@@ -101,7 +198,66 @@ public final class LettuceProvider extends AbstractRedisProvider {
             .withAuthentication(Objects.requireNonNullElse(config.getUsername(), ""),
                     Objects.requireNonNullElse(config.getPassword(), ""))
             .withSsl(config.isUseSsl())
+            .withTimeout(COMMAND_TIMEOUT)
             .build());
+    // Without the timeout, async commands never time out and the sync ones wait Lettuce's 60 s
+    // default. While disconnected, commands fail at once instead of queueing until a reconnect.
+    this.client.setOptions(ClientOptions.builder()
+        .timeoutOptions(TimeoutOptions.enabled(COMMAND_TIMEOUT))
+        .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
+        .requestQueueSize(REQUEST_QUEUE_SIZE)
+        .build());
+  }
+
+  /**
+   * Checks once that the server runs the Lua scripts the player depot relies on. A server that
+   * refuses them (Lua disabled, ACL {@code -@scripting}, out of memory, no cjson) makes every
+   * duplicate-login check fail, so this names the cause at startup. Never blocks longer than one
+   * command: a server that cannot be reached is only warned about, as before.
+   *
+   * @return {@code false} if the server refused the script (logged as an error)
+   */
+  public boolean verifyScripting() {
+    try {
+      final Long answer = this.depotConnection.sync().eval(SCRIPTING_PROBE, ScriptOutputType.INTEGER);
+      if (answer != null && answer == 1) {
+        return true;
+      }
+      LOGGER.error("{} ran the Lua/cjson probe but answered {} instead of 1: the duplicate-login "
+          + "check cannot work.", this.config.getBackend(), answer);
+      return false;
+    } catch (RuntimeException e) {
+      if (isScriptRefusal(e)) {
+        LOGGER.error("{} refused the Lua scripts BTCVelocity needs ({}). Every duplicate-login "
+            + "check will fail: with redis.login-check-failure = \"deny\" NO player can log in. "
+            + "Allow EVAL with cjson (Lua enabled, no ACL -@scripting, memory not full).",
+            this.config.getBackend(), e.getMessage());
+        return false;
+      }
+      LOGGER.warn("Could not check {} Lua support at startup: {}", this.config.getBackend(),
+          e.toString());
+      return true;
+    }
+  }
+
+  /**
+   * Whether a failure is the server refusing a command (an error reply such as {@code ERR},
+   * {@code NOSCRIPT}, {@code NOPERM}, {@code OOM}), as opposed to the network or a timeout.
+   * {@code LOADING} and {@code BUSY} are passing server states, not refusals.
+   *
+   * @param failure the failure, possibly wrapped by a future
+   * @return {@code true} for an error reply that will come back on every try
+   */
+  public static boolean isScriptRefusal(final @NotNull Throwable failure) {
+    Throwable cause = failure;
+    while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+        && cause.getCause() != null) {
+      cause = cause.getCause();
+    }
+    return cause instanceof RedisCommandExecutionException
+        && !(cause instanceof RedisCommandTimeoutException)
+        && !(cause instanceof RedisLoadingException)
+        && !(cause instanceof RedisBusyException);
   }
 
   /**
@@ -131,31 +287,14 @@ public final class LettuceProvider extends AbstractRedisProvider {
       public void subscribed(final String channel, final long count) {
         if (CHANNEL.equals(channel) && subscribedOnce.getAndSet(true)) {
           // Re-subscribe after a reconnect, notify listeners so they can reload state.
-          fireReconnectListeners();
+          messageHandlers.execute(LettuceProvider.this::fireReconnectListeners);
         }
       }
 
       @Override
       public void message(final String channel, final String message) {
-        if (!channel.equals(CHANNEL)) {
-          return;
-        }
-
-        final DataPacket dataPacket = packetSerializer.deserialize(message);
-        if (dataPacket == null) {
-          LOGGER.warn("Received a null packet from channel '{}', ignoring", channel);
-          return;
-        }
-
-        if (dataPacket.isOneWay()) {
-          handleOneWay(dataPacket);
-          return;
-        }
-
-        if (!dataPacket.isReply()) {
-          handleTransactionRequest(dataPacket);
-        } else {
-          handleTransactionReply(dataPacket);
+        if (channel.equals(CHANNEL)) {
+          messageHandlers.execute(() -> handleMessage(message));
         }
       }
     });
@@ -177,31 +316,56 @@ public final class LettuceProvider extends AbstractRedisProvider {
   }
 
   /**
+   * Decodes one pub/sub message and routes it. Runs on {@link #messageHandlers}.
+   *
+   * @param message the raw message
+   */
+  private void handleMessage(final String message) {
+    final DataPacket dataPacket = packetSerializer.deserialize(message);
+    if (dataPacket == null) {
+      LOGGER.warn("Received a null packet from channel '{}', ignoring", CHANNEL);
+      return;
+    }
+
+    if (dataPacket.isOneWay()) {
+      handleOneWay(dataPacket);
+      return;
+    }
+
+    if (!dataPacket.isReply()) {
+      handleTransactionRequest(dataPacket);
+    } else {
+      handleTransactionReply(dataPacket);
+    }
+  }
+
+  /**
    * Disconnects from the Redis server by closing the Pub/Sub connection and shutting down the client.
    *
    * <p>If no active connection exists, a warning is logged and the call is ignored.</p>
    */
   @Override
   public void disconnect() {
+    this.messageHandlers.shutdown(MESSAGE_DRAIN_GRACE);
+
     if (!this.isConnected()) {
-      LOGGER.warn("Attempted to disconnect from Redis, but no connection was established");
-      return;
+      LOGGER.warn("Disconnecting from Redis while it is unreachable");
     }
 
-    if (publisher.getStatefulConnection().isOpen()) {
+    // Closed even when not open: a closed connection stops its reconnect attempts, and the client
+    // shutdown releases Lettuce's threads, whatever state Redis is in.
+    if (publisher != null) {
       publisher.getStatefulConnection().close();
+      publisher = null;
     }
-    publisher = null;
 
-    if (syncPublisher.getStatefulConnection().isOpen()) {
+    if (syncPublisher != null) {
       syncPublisher.getStatefulConnection().close();
+      syncPublisher = null;
     }
-    syncPublisher = null;
 
     if (this.depotConnection != null) {
-      if (this.depotConnection.isOpen()) {
-        this.depotConnection.close();
-      }
+      this.depotConnection.close();
       this.depotConnection = null;
     }
 
@@ -246,7 +410,7 @@ public final class LettuceProvider extends AbstractRedisProvider {
   public <K, V extends DepotEntry<K, V>> @NotNull Depot<K, V> createDepot(final Class<V> valueClass) {
     Preconditions.checkState(this.depotConnection != null,
         "depot connection is not initialized; call restart() first");
-    return new LettuceDepot<>(valueClass, this.depotConnection.sync());
+    return new LettuceDepot<>(valueClass, this.depotConnection);
   }
 
   /**
@@ -502,16 +666,22 @@ public final class LettuceProvider extends AbstractRedisProvider {
     private final RedisCommands<String, String> connection;
 
     /**
+     * The async API of the same connection: commands from both keep their issue order.
+     */
+    private final RedisAsyncCommands<String, String> async;
+
+    /**
      * Constructs a new {@link LettuceDepot} instance using the shared depot connection.
      *
      * @param valueClass the class of the depot value
-     * @param connection the shared sync Redis commands used for hash operations
+     * @param connection the shared Redis connection used for hash operations
      */
     public LettuceDepot(final @NotNull Class<V> valueClass,
-                        final @NotNull RedisCommands<String, String> connection) {
+                        final @NotNull StatefulRedisConnection<String, String> connection) {
       this.name = valueClass.getSimpleName().toLowerCase();
       this.valueClass = valueClass;
-      this.connection = connection;
+      this.connection = connection.sync();
+      this.async = connection.async();
     }
 
     /**
@@ -574,6 +744,30 @@ public final class LettuceProvider extends AbstractRedisProvider {
     @Override
     public Collection<V> values() {
       return this.connection.hvals(this.name).stream().map(this::deserialize).toList();
+    }
+
+    @Override
+    public CompletableFuture<@Nullable V> claim(final @NotNull V value, final @NotNull String proxyId,
+                                                final boolean force) {
+      final RedisFuture<String> previous = this.async.eval(CLAIM_SCRIPT, ScriptOutputType.VALUE,
+          new String[] {this.name}, parseKey(value.getUniqueId()), serialize(value),
+          proxyId, force ? "1" : "0");
+      value.setDepot(this);
+      return previous.toCompletableFuture().thenApply(json -> json == null ? null : deserialize(json));
+    }
+
+    @Override
+    public boolean removeIfOwner(final @NotNull K key, final @NotNull String proxyId) {
+      final Long removed = this.connection.eval(REMOVE_IF_OWNER_SCRIPT, ScriptOutputType.INTEGER,
+          new String[] {this.name}, parseKey(key), proxyId);
+      return removed != null && removed > 0;
+    }
+
+    @Override
+    public long removeAllOwnedBy(final @NotNull String proxyId) {
+      final Long removed = this.connection.eval(REMOVE_ALL_OWNED_SCRIPT, ScriptOutputType.INTEGER,
+          new String[] {this.name}, proxyId);
+      return removed == null ? 0 : removed;
     }
 
     /**

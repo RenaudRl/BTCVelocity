@@ -17,27 +17,89 @@
 
 package com.btcvelocity.proxy.redis.depot.player;
 
+import com.btcvelocity.proxy.redis.LogThrottle;
+import com.btcvelocity.proxy.redis.OrderedRedisExecutor;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.data.VelocityKick;
 import com.btcvelocity.proxy.redis.depot.AbstractDepotService;
+import com.btcvelocity.proxy.redis.provider.LettuceProvider;
 import com.velocitypowered.api.proxy.player.PlayerSettings;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.plugin.virtual.VelocityVirtualPlugin;
 import java.time.Duration;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Unmodifiable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Represents an extension of the {@link AbstractDepotService} for the player depot, including
  * functionality to track certain information about a single player, or multiple players.
+ *
+ * <p>The player lifecycle hooks are called from Netty event loops. They never touch Redis on the
+ * calling thread: the login check is one async atomic claim, every later write goes through one
+ * ordered worker ({@link OrderedRedisExecutor}), and the counts read on hot paths come from a
+ * snapshot refreshed in the background. Every write and removal is owner-guarded in Redis, so a
+ * proxy never overwrites nor deletes an entry another proxy holds.</p>
  */
 public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerEntry> {
+
+  /**
+   * How long a login waits for the cross-proxy duplicate check. Past it, the login is refused or
+   * let in unchecked, following {@code redis.login-check-failure}.
+   */
+  public static final Duration CONNECT_CHECK_TIMEOUT = Duration.ofMillis(500);
+
+  /**
+   * Past this age the cluster snapshot is considered dead (Redis unreachable) and per-server
+   * counts fall back to this proxy's own players.
+   */
+  public static final Duration SNAPSHOT_MAX_AGE = Duration.ofSeconds(5);
+
+  /**
+   * How often the snapshot is rebuilt and the depot is repaired against this proxy's players.
+   */
+  public static final Duration REFRESH_INTERVAL = Duration.ofSeconds(1);
+
+  /**
+   * Maximum number of player writes waiting for Redis. Beyond it, writes are dropped and the
+   * periodic repair restores the entries.
+   */
+  public static final int WRITE_QUEUE_CAPACITY = 4096;
+
+  /**
+   * How long {@link #releaseAll()} waits for the worker before removing the entries directly.
+   */
+  private static final Duration RELEASE_BARRIER_TIMEOUT = Duration.ofSeconds(3);
+
+  /**
+   * How long shutdown waits for queued player writes before dropping them.
+   */
+  private static final Duration SHUTDOWN_GRACE = Duration.ofSeconds(3);
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(PlayerDepotService.class);
 
   /**
    * The Redis manager used to coordinate multi-proxy player synchronization.
@@ -50,21 +112,39 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   private final VelocityServer server;
 
   /**
-   * Scheduled task responsible for periodically updating the total count of players
-   * present across all proxies.
+   * The single ordered worker for every Redis access of this service.
    */
-  private final ScheduledTask updateTotalPlayerCountTask;
+  private final OrderedRedisExecutor worker;
 
   /**
-   * Scheduled task responsible for synchronizing player entries between Redis and
-   * the current proxy, ensuring consistency with online players.
+   * Scheduled task that queues a {@link #refreshNow() refresh} every {@link #REFRESH_INTERVAL}.
    */
-  private final ScheduledTask syncPlayerEntriesTask;
+  private final ScheduledTask refreshTask;
 
   /**
-   * The number of players currently recorded across all proxies.
+   * Whether a refresh is already waiting in the worker queue, so an outage queues one at most.
    */
-  private int totalPlayerCount = 0;
+  private final AtomicBoolean refreshPending = new AtomicBoolean();
+
+  /**
+   * Players with a settings write waiting in the worker queue.
+   */
+  private final Set<UUID> pendingSettings = ConcurrentHashMap.newKeySet();
+
+  /**
+   * Throttles the warning for logins let in without a duplicate check.
+   */
+  private final LogThrottle uncheckedLogins = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
+
+  /**
+   * The last cluster view read from Redis, or {@code null} before the first successful read.
+   */
+  private volatile @Nullable Snapshot snapshot;
+
+  /**
+   * Set by {@link #releaseAll()}: this proxy hands its players over and writes nothing more.
+   */
+  private volatile boolean released;
 
   /**
    * Constructs a new {@link PlayerDepotService}.
@@ -76,130 +156,241 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
 
     this.redis = redis;
     this.server = redis.getServer();
+    this.worker = new OrderedRedisExecutor("btc-redis-players", WRITE_QUEUE_CAPACITY);
 
-    this.updateTotalPlayerCountTask = redis.getServer().getScheduler()
-            .buildTask(VelocityVirtualPlugin.INSTANCE, this::updateTotalPlayerCount)
-            .repeat(Duration.ofMillis(250L))
-            .schedule();
-
-    this.syncPlayerEntriesTask = redis.getServer().getScheduler()
-            .buildTask(VelocityVirtualPlugin.INSTANCE, this::syncPlayerEntries)
-            .repeat(Duration.ofSeconds(1L))
+    this.refreshTask = redis.getServer().getScheduler()
+            .buildTask(VelocityVirtualPlugin.INSTANCE, this::queueRefresh)
+            .repeat(REFRESH_INTERVAL)
             .schedule();
   }
 
   @Override
   public void teardown() {
-    for (ConnectedPlayer player : this.server.getAllPlayers()) {
-      this.depot.remove(player.getUniqueId());
+    if (this.refreshTask != null) {
+      this.refreshTask.cancel();
     }
 
-    if (this.updateTotalPlayerCountTask != null) {
-      this.updateTotalPlayerCountTask.cancel();
-    }
+    // Writes queued after the shutdown flag bail out at once; wait for the one in flight.
+    this.worker.shutdown(SHUTDOWN_GRACE);
 
-    if (this.syncPlayerEntriesTask != null) {
-      this.syncPlayerEntriesTask.cancel();
-    }
+    // Remove by owner rather than by local players: by now the players are gone locally, and the
+    // disconnect writes they queued were skipped by the shutdown flag.
+    this.depot.removeAllOwnedBy(this.redis.getProxyId());
   }
 
   /**
-   * Called when a {@link ConnectedPlayer} connects to the proxy.
+   * Removes every entry of this proxy in one round trip and stops writing new ones. Called on
+   * shutdown before the players are transferred, so the receiving proxy does not see them here.
+   */
+  public void releaseAll() {
+    this.released = true;
+    // Through the worker: the write in flight there (a repair that read the hash before the flag)
+    // lands first, so it cannot claim a released player again after the removal.
+    final CompletableFuture<Void> removed = new CompletableFuture<>();
+    final boolean queued = this.worker.execute(() -> {
+      try {
+        this.depot.removeAllOwnedBy(this.redis.getProxyId());
+        removed.complete(null);
+      } catch (RuntimeException e) {
+        removed.completeExceptionally(e);
+      }
+    });
+    try {
+      if (queued) {
+        removed.get(RELEASE_BARRIER_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        return;
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (ExecutionException | TimeoutException e) {
+      LOGGER.warn("Releasing this proxy's players through the Redis worker failed ({}); "
+          + "removing them directly", e.toString());
+    }
+    // A stuck or full worker must not hold the shutdown: remove directly, the guards in the
+    // repair and the updates keep a late write from claiming the players again.
+    this.depot.removeAllOwnedBy(this.redis.getProxyId());
+  }
+
+  /**
+   * Removes every entry owned by another proxy, e.g. one that died, in one round trip.
+   *
+   * @param proxyId the owning proxy
+   */
+  public void removeEntriesOf(final @NotNull String proxyId) {
+    this.depot.removeAllOwnedBy(proxyId);
+  }
+
+  /**
+   * Called when a {@link ConnectedPlayer} connects to the proxy. Claims the player's entry in one
+   * atomic Redis call, off the ordered worker so a busy worker never delays or skips the check.
    *
    * @param player the player that connected
-   * @return {@code true} if the player was successfully added to the depot, {@code false} otherwise
+   * @return a future completed with {@code false} if the player was refused (and disconnected):
+   *         held by another proxy, or Redis did not answer within {@link #CONNECT_CHECK_TIMEOUT}
+   *         and {@code login-check-failure} is {@code deny}
    */
-  public boolean onPlayerConnect(final ConnectedPlayer player) {
-    if (this.redis.isShutdown()) {
-      return false;
+  public CompletableFuture<Boolean> onPlayerConnect(final ConnectedPlayer player) {
+    if (this.redis.isShutdown() || this.released || !isCurrentSession(player)) {
+      return CompletableFuture.completedFuture(false);
     }
 
-    if (this.depot.contains(player.getUniqueId())) {
-      if (this.server.getConfiguration().isKickExistingPlayers()) {
-        final Component component = Component.translatable("multiplayer.disconnect.duplicate_login");
-        final PlayerEntry existingEntry = this.depot.get(player.getUniqueId());
-        // Only send a VelocityKick if the existing player is on a DIFFERENT proxy.
-        // If they are on this proxy, registerConnection() already kicked them locally.
-        if (existingEntry != null && !existingEntry.getProxyId().equalsIgnoreCase(this.redis.getProxyId())) {
-          this.redis.publish(new VelocityKick(player.getUniqueId(), component, existingEntry.getProxyId()));
-        }
-      } else {
-        final Component component = Component.translatable("velocity.error.already-connected-proxy.remote");
-        player.disconnect0(component, true);
-        return false;
-      }
+    final boolean kickExisting = this.server.getConfiguration().isKickExistingPlayers();
+    CompletableFuture<@Nullable PlayerEntry> claim;
+    try {
+      claim = this.depot.claim(newEntry(player), this.redis.getProxyId(), kickExisting);
+    } catch (RuntimeException e) {
+      claim = CompletableFuture.failedFuture(e);
     }
 
-    this.upsertPlayerEntry(player);
-    return true;
+    return claim
+        .orTimeout(CONNECT_CHECK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)
+        .handle((holder, failure) -> {
+          if (failure != null) {
+            return onLoginCheckFailed(player, failure);
+          }
+          if (holder == null) {
+            return true;
+          }
+          if (kickExisting) {
+            final Component reason = Component.translatable("multiplayer.disconnect.duplicate_login");
+            this.redis.publish(new VelocityKick(player.getUniqueId(), reason, holder.getProxyId()));
+            return true;
+          }
+          player.disconnect0(Component.translatable("velocity.error.already-connected-proxy.remote"),
+              true);
+          return false;
+        });
+  }
+
+  private boolean onLoginCheckFailed(final ConnectedPlayer player, final Throwable failure) {
+    final boolean allow = this.server.getConfiguration().getRedis().isLoginAllowedWhenUnchecked();
+    final long quiet = this.uncheckedLogins.acquire();
+    if (quiet >= 0) {
+      LOGGER.warn("The duplicate-login check for {} failed ({}): {} (login-check-failure = {}; "
+          + "{} similar logins not logged)", player.getUsername(), describeFailure(failure),
+          allow ? "let in unchecked" : "refused", allow ? "allow" : "deny", quiet);
+    }
+    if (!allow) {
+      player.disconnect0(Component.translatable("velocity.error.login-check-unavailable"), true);
+    }
+    return allow;
   }
 
   /**
-   * Called when a {@link ConnectedPlayer} disconnects from the proxy.
+   * Names why a login check failed: a script refused on every try is not a slow Redis.
+   */
+  static String describeFailure(final Throwable failure) {
+    Throwable cause = failure;
+    while (cause instanceof CompletionException && cause.getCause() != null) {
+      cause = cause.getCause();
+    }
+    if (cause instanceof TimeoutException) {
+      return "no answer within " + CONNECT_CHECK_TIMEOUT.toMillis() + " ms";
+    }
+    if (LettuceProvider.isScriptRefusal(cause)) {
+      return "the server refused the Lua script: " + cause.getMessage();
+    }
+    return cause.toString();
+  }
+
+  /**
+   * Called when a {@link ConnectedPlayer} disconnects from the proxy. Returns at once.
    *
    * @param player the player that disconnected
    */
   public void onPlayerDisconnect(final ConnectedPlayer player) {
-    if (this.redis.isShutdown()) {
-      return;
+    if (!this.redis.isShutdown()) {
+      this.worker.execute(() -> disconnectNow(player));
     }
-
-    final PlayerEntry existing = this.depot.get(player.getUniqueId());
-    if (existing == null) {
-      return;
-    }
-
-    if (!existing.getProxyId().equalsIgnoreCase(this.redis.getProxyId())) {
-      return;
-    }
-
-    final ConnectedPlayer currentPlayer = this.server.getPlayer(player.getUniqueId()).orElse(null);
-    if (currentPlayer != null && currentPlayer != player) {
-      return;
-    }
-
-    this.depot.remove(player.getUniqueId());
   }
 
   /**
-   * Called when a {@link ConnectedPlayer} switches servers.
+   * Called when a {@link ConnectedPlayer} switches servers. Returns at once.
    *
    * @param player the player that switched servers
    * @param serverName the name of the server that the player switched to
    */
   public void onPlayerSwitchServer(final ConnectedPlayer player, final String serverName) {
-    final PlayerEntry playerEntry = this.getPlayerEntry(player.getUniqueId());
-    if (playerEntry == null) {
-      return;
-    }
-
-    playerEntry.setServerName(serverName);
-    playerEntry.upsert();
+    this.worker.execute(() -> updateOwnEntry(player, entry -> entry.setServerName(serverName)));
   }
 
   /**
-   * Called when a {@link ConnectedPlayer} changes its {@link PlayerSettings}.
+   * Called when a {@link ConnectedPlayer} changes its {@link PlayerSettings}. Returns at once.
    *
    * @param player the player that got its settings changed
    * @param settings the new settings
    */
   public void onPlayerSettingsChange(final ConnectedPlayer player, final PlayerSettings settings) {
-    final PlayerEntry playerEntry = this.getPlayerEntry(player.getUniqueId());
-    if (playerEntry == null) {
+    // Coalesced: at most one settings write waits per player, and it reads the settings when it
+    // runs, so a client flipping them on every packet cannot fill the queue that carries the
+    // disconnects. Connects, switches and disconnects are never coalesced.
+    final UUID uniqueId = player.getUniqueId();
+    if (!this.pendingSettings.add(uniqueId)) {
       return;
     }
-
-    playerEntry.setClientListingAllowed(settings.isClientListingAllowed());
-    playerEntry.upsert();
+    final boolean queued = this.worker.execute(() -> {
+      this.pendingSettings.remove(uniqueId);
+      this.server.getPlayer(uniqueId).ifPresent(current -> updateOwnEntry(current, entry ->
+          entry.setClientListingAllowed(current.getPlayerSettings().isClientListingAllowed())));
+    });
+    if (!queued) {
+      this.pendingSettings.remove(uniqueId);
+    }
   }
 
   /**
-   * Get the total player count across all proxies, currently present in the depot.
-   *
-   * @return the total player count
+   * Runs on the worker: changes this session's entry, never another proxy's.
    */
-  public int getTotalPlayerCount() {
-    return this.totalPlayerCount;
+  private void updateOwnEntry(final ConnectedPlayer player, final Consumer<PlayerEntry> change) {
+    if (!isWriting() || !isCurrentSession(player)) {
+      return;
+    }
+    final PlayerEntry entry = this.depot.get(player.getUniqueId());
+    if (entry == null || !ownedHere(entry)) {
+      return;
+    }
+    change.accept(entry);
+    if (isWriting()) { // checked again: releaseAll() may have run during the read
+      this.depot.claim(entry, this.redis.getProxyId(), false).join();
+    }
+  }
+
+  /**
+   * Gets the number of players the other proxies hold, from the last snapshot. No I/O. Callers
+   * add this proxy's live count, which the snapshot would show up to a refresh late.
+   *
+   * @return the other proxies' count, or 0 if the snapshot is missing or older than
+   *         {@link #SNAPSHOT_MAX_AGE}
+   */
+  public int getCachedPlayerCountOnOtherProxies() {
+    final Snapshot current = this.snapshot;
+    return current == null || current.isStale(System.nanoTime()) ? 0 : current.othersTotal();
+  }
+
+  /**
+   * Gets the number of players the other proxies hold on a server, from the last snapshot. No I/O.
+   * Callers add this proxy's live count: a burst of arrivals routed here then shows at once,
+   * instead of piling onto the server a one-second-old count calls the emptiest.
+   *
+   * @param serverName the backend server name, case-insensitive
+   * @return the other proxies' count, or empty if the snapshot is missing or older than
+   *         {@link #SNAPSHOT_MAX_AGE}
+   */
+  public OptionalInt getCachedPlayersOnOtherProxies(final @NotNull String serverName) {
+    final Snapshot current = this.snapshot;
+    return current == null ? OptionalInt.empty() : current.countOn(serverName, System.nanoTime());
+  }
+
+  /**
+   * Gets every player entry from the last snapshot. No I/O.
+   *
+   * @return the entries read by the last refresh, or empty if the snapshot is missing or older
+   *         than {@link #SNAPSHOT_MAX_AGE}
+   */
+  public Optional<@Unmodifiable List<PlayerEntry>> getCachedEntries() {
+    final Snapshot current = this.snapshot;
+    return current == null || current.isStale(System.nanoTime())
+        ? Optional.empty() : Optional.of(current.entries());
   }
 
   /**
@@ -276,60 +467,141 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     return List.copyOf(this.queryAll(playerEntry -> playerEntry.getProxyId().equalsIgnoreCase(proxyId)));
   }
 
-  /**
-   * Upserts a player's entry in the depot. If an entry for the given player already exists,
-   * it is updated with the latest details. If it doesn't exist, a new entry is created.
-   *
-   * @param player the {@link ConnectedPlayer} object representing the player for whom the entry is to be upserted; must not be null
-   * @return the {@link PlayerEntry} object representing the player's entry; never null
-   */
-  public @NotNull PlayerEntry upsertPlayerEntry(final @NotNull ConnectedPlayer player) {
-    final PlayerEntry playerEntry = new PlayerEntry(player, this.redis.getProxyId());
-    playerEntry.setDepot(this.depot);
-
-    this.depot.upsert(playerEntry);
-    return playerEntry;
+  private PlayerEntry newEntry(final ConnectedPlayer player) {
+    final PlayerEntry entry = new PlayerEntry(player, this.redis.getProxyId());
+    entry.setDepot(this.depot);
+    return entry;
   }
 
   /**
-   * Updates the total player count by recalculating the number of entries in the depot.
+   * Runs on the worker: removes the player's entry if this proxy owns it and no newer session of
+   * the player lives here. An entry another proxy claimed meanwhile is left alone.
    */
-  private void updateTotalPlayerCount() {
-    if (this.redis.isShutdown()) {
+  private void disconnectNow(final ConnectedPlayer player) {
+    if (!isWriting()) {
       return;
     }
 
-    this.totalPlayerCount = this.depot.size();
+    final ConnectedPlayer currentPlayer = this.server.getPlayer(player.getUniqueId()).orElse(null);
+    if (currentPlayer != null && currentPlayer != player) {
+      return;
+    }
+
+    this.depot.removeIfOwner(player.getUniqueId(), this.redis.getProxyId());
+  }
+
+  private boolean isCurrentSession(final ConnectedPlayer player) {
+    return this.server.getPlayer(player.getUniqueId()).orElse(null) == player;
+  }
+
+  private boolean ownedHere(final PlayerEntry entry) {
+    return entry.getProxyId().equalsIgnoreCase(this.redis.getProxyId());
   }
 
   /**
-   * Synchronizes the player entries within the depot. This method ensures that the depot's
-   * player entries are kept up to date and consistent with the current state of players on
-   * the server.
+   * Whether worker writes still apply: not after shutdown, nor after {@link #releaseAll()}.
    */
-  private void syncPlayerEntries() {
-    if (this.redis.isShutdown()) {
+  private boolean isWriting() {
+    return !this.redis.isShutdown() && !this.released;
+  }
+
+  /**
+   * Queues one refresh on the worker unless one is already waiting.
+   */
+  private void queueRefresh() {
+    if (this.redis.isShutdown() || !this.refreshPending.compareAndSet(false, true)) {
       return;
     }
 
+    final boolean queued = this.worker.execute(() -> {
+      try {
+        refreshNow();
+      } finally {
+        this.refreshPending.set(false);
+      }
+    });
+    if (!queued) {
+      this.refreshPending.set(false);
+    }
+  }
+
+  /**
+   * Reads the depot once, repairs this proxy's entries against its live players, and publishes
+   * the snapshot. Repairing is what makes the dropped or failed writes of an outage converge
+   * once Redis answers again. Runs on the worker, so it is ordered with the lifecycle writes.
+   */
+  void refreshNow() {
+    if (!isWriting()) {
+      return;
+    }
+
+    final Collection<PlayerEntry> entries = this.depot.values();
+    final String proxyId = this.redis.getProxyId();
+    final Map<UUID, PlayerEntry> byId = new HashMap<>();
+    for (PlayerEntry entry : entries) {
+      byId.putIfAbsent(entry.getUniqueId(), entry);
+    }
+
+    // Owner-guarded both ways: an entry another proxy claimed since the read above is never
+    // overwritten nor removed.
     for (ConnectedPlayer player : this.server.getAllPlayers()) {
-      if (this.depot.contains(player.getUniqueId())) {
-        continue;
+      final PlayerEntry entry = byId.get(player.getUniqueId());
+      // isWriting() again before each claim: a releaseAll() during the read must win.
+      if (isWriting() && (entry == null || (ownedHere(entry)
+          && !Objects.equals(entry.getServerName(), currentServerName(player))))) {
+        this.depot.claim(newEntry(player), proxyId, false).join();
       }
-
-      this.upsertPlayerEntry(player);
     }
 
-    for (PlayerEntry playerEntry : this.depot.values()) {
-      if (!playerEntry.getProxyId().equalsIgnoreCase(this.redis.getProxyId())) {
-        continue;
+    for (PlayerEntry entry : entries) {
+      if (ownedHere(entry) && this.server.getPlayer(entry.getUniqueId()).isEmpty()) {
+        this.depot.removeIfOwner(entry.getUniqueId(), proxyId);
       }
+    }
 
-      if (this.server.getPlayer(playerEntry.getUniqueId()).isPresent()) {
-        continue;
+    this.snapshot = Snapshot.of(entries, proxyId, System.nanoTime());
+  }
+
+  private static @Nullable String currentServerName(final ConnectedPlayer player) {
+    return player.getCurrentServer().map(connection -> connection.getServerInfo().getName()).orElse(null);
+  }
+
+  /**
+   * An immutable cluster view: every entry, and the other proxies' counts.
+   *
+   * @param entries every player entry read
+   * @param countsByServer other proxies' player count per lower-cased server name
+   * @param othersTotal other proxies' player count
+   * @param takenAtNanos {@link System#nanoTime()} when the entries were read
+   */
+  record Snapshot(List<PlayerEntry> entries, Map<String, Integer> countsByServer, int othersTotal,
+                  long takenAtNanos) {
+
+    static Snapshot of(final Collection<PlayerEntry> entries, final String selfProxyId,
+                       final long takenAtNanos) {
+      final Map<String, Integer> counts = new HashMap<>();
+      int others = 0;
+      for (PlayerEntry entry : entries) {
+        if (entry.getProxyId().equalsIgnoreCase(selfProxyId)) {
+          continue;
+        }
+        others++;
+        if (entry.getServerName() != null) {
+          counts.merge(entry.getServerName().toLowerCase(Locale.ROOT), 1, Integer::sum);
+        }
       }
+      return new Snapshot(List.copyOf(entries), Map.copyOf(counts), others, takenAtNanos);
+    }
 
-      playerEntry.remove();
+    boolean isStale(final long nowNanos) {
+      return nowNanos - this.takenAtNanos > SNAPSHOT_MAX_AGE.toNanos();
+    }
+
+    OptionalInt countOn(final String serverName, final long nowNanos) {
+      if (isStale(nowNanos)) {
+        return OptionalInt.empty();
+      }
+      return OptionalInt.of(this.countsByServer.getOrDefault(serverName.toLowerCase(Locale.ROOT), 0));
     }
   }
 }

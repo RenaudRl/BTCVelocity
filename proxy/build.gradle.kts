@@ -107,6 +107,17 @@ tasks {
         standardInput = System.`in` // Doesn't work?
     }
 
+    // Tests against a real Redis (Docker) run only with -PredisIntegration.
+    test {
+        useJUnitPlatform {
+            if (!project.hasProperty("redisIntegration")) {
+                excludeTags("redis-integration")
+            }
+        }
+        // -PredisImage=valkey/valkey:8.1.1-alpine: the image the stop test starts again.
+        project.findProperty("redisImage")?.let { systemProperty("btc.redis.image", it) }
+    }
+
     withType<JavaCompile>().configureEach {
         options.compilerArgs.addAll(
             listOf(

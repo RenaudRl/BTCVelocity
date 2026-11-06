@@ -24,6 +24,7 @@ import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Provides player tracking and query operations across the cluster.
@@ -52,7 +53,14 @@ public interface VelocityClusterPlayerService extends ClusterPlayerService {
   @Override
   Optional<VelocityClusterPlayer> getPlayer(UUID uniqueId);
 
-  boolean onPlayerConnect(ConnectedPlayer player);
+  /**
+   * Registers a player who just logged in. Called on the player's event loop: implementations
+   * must not block it.
+   *
+   * @param player the player
+   * @return a future completed with {@code false} if the player was refused and disconnected
+   */
+  CompletableFuture<Boolean> onPlayerConnect(ConnectedPlayer player);
 
   void onPlayerDisconnect(ConnectedPlayer player);
 

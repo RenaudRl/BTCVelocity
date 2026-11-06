@@ -126,6 +126,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -142,6 +143,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.audience.ForwardingAudience;
@@ -1191,6 +1194,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
             player.disconnect(reason);
           }
         } else {
+          releaseRedisPlayers();
           try {
             LOGGER.log(Level.INFO, "Transferring all players to new proxy...");
             Thread.sleep(1000);
@@ -1252,10 +1256,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         this.worldRegistry.clear();
       }
 
-      // Disable Redis if we have it enabled
-      if (this.configuration.getRedis().isEnabled()) {
-        this.redis.shutdown();
-      }
+      shutdownRedis();
 
       // Shut down PostgreSQL storage if it is enabled, stopping the heartbeat first so
       // that it can never run against an already closed storage service.
@@ -1308,14 +1309,80 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     shutdown(true);
   }
 
+  /**
+   * Shuts down the Redis module started at boot, if any. Follows the instance, not the current
+   * flag: a reload can enable Redis without starting it, or disable it while it runs. A failure
+   * here (Redis unreachable) must not skip the rest of the proxy shutdown.
+   */
+  void shutdownRedis() {
+    if (this.redis == null) {
+      return;
+    }
+    try {
+      this.redis.shutdown();
+    } catch (RuntimeException e) {
+      LOGGER.error("Redis did not shut down cleanly; other proxies will reap this one", e);
+    }
+  }
+
+  /**
+   * Drops this proxy's player entries in one round trip before the players are transferred, so
+   * the receiving proxy does not refuse them as already connected here.
+   */
+  private void releaseRedisPlayers() {
+    try {
+      this.redis.getPlayerService().releaseAll();
+    } catch (RuntimeException e) {
+      LOGGER.error("Could not release this proxy's players in Redis before the transfer", e);
+    }
+  }
+
   private @Nullable ProxyAddress getProxyAddressToUse() {
     if (!this.getClusterProxyService().isMultiProxy()) {
       return null;
     }
 
-    DynamicProxyFilterMode filter = getConfiguration().getDynamicProxyFilter();
-    List<ProxyAddress> addresses = new ArrayList<>(getConfiguration().getProxyAddresses().stream().toList());
-    addresses.removeIf(address -> getProxyId().equalsIgnoreCase(address.proxyId()));
+    return chooseTransferTarget(getConfiguration().getProxyAddresses(), getProxyId(),
+        getConfiguration().getDynamicProxyFilter(),
+        proxyId -> redis.getProxyService().isAlive(proxyId),
+        proxyId -> redis.getPlayerService().getPlayerEntriesOnProxy(proxyId).size());
+  }
+
+  /**
+   * Picks the proxy that receives this proxy's players on shutdown.
+   *
+   * @param configured the configured proxy addresses
+   * @param selfId this proxy's id, never chosen
+   * @param filter how to rank the candidates
+   * @param isAlive whether a proxy still beats its heartbeat
+   * @param playersOn the number of players on a proxy
+   * @return the target, or {@code null} for none, including when Redis cannot be read
+   */
+  static @Nullable ProxyAddress chooseTransferTarget(final Collection<ProxyAddress> configured,
+                                                     final String selfId,
+                                                     final DynamicProxyFilterMode filter,
+                                                     final Predicate<String> isAlive,
+                                                     final ToIntFunction<String> playersOn) {
+    if (filter == DynamicProxyFilterMode.NONE) {
+      return null;
+    }
+    // Runs inside shutdown: a Redis that does not answer must not abort it.
+    try {
+      return rankTransferTargets(configured, selfId, filter, isAlive, playersOn);
+    } catch (RuntimeException e) {
+      LOGGER.error("Could not pick a proxy to transfer players to; disconnecting them instead", e);
+      return null;
+    }
+  }
+
+  private static @Nullable ProxyAddress rankTransferTargets(final Collection<ProxyAddress> configured,
+                                                            final String selfId,
+                                                            final DynamicProxyFilterMode filter,
+                                                            final Predicate<String> isAlive,
+                                                            final ToIntFunction<String> playersOn) {
+    List<ProxyAddress> addresses = new ArrayList<>(configured);
+    addresses.removeIf(address -> selfId.equalsIgnoreCase(address.proxyId())
+        || !isAlive.test(address.proxyId()));
 
     if (addresses.isEmpty()) {
       return null;
@@ -1327,23 +1394,12 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       }
       case MOST_EMPTY -> {
         // Sort to get most empty first
-        addresses.sort((o1, o2) -> {
-          int connectedSize1 = redis.getPlayerService().getPlayerEntriesOnProxy(o1.proxyId()).size();
-          int connectedSize2 = redis.getPlayerService().getPlayerEntriesOnProxy(o2.proxyId()).size();
-          return Long.compare(connectedSize1, connectedSize2);
-        });
+        addresses.sort(Comparator.comparingInt(address -> playersOn.applyAsInt(address.proxyId())));
       }
       case LEAST_EMPTY -> {
         // Sort to get least empty first
-        addresses.sort((o1, o2) -> {
-          int connectedSize1 = redis.getPlayerService().getPlayerEntriesOnProxy(o1.proxyId()).size();
-          int connectedSize2 = redis.getPlayerService().getPlayerEntriesOnProxy(o2.proxyId()).size();
-          return Long.compare(connectedSize2, connectedSize1);
-        });
-      }
-      case NONE -> {
-        // No next address
-        return null;
+        addresses.sort(Comparator.<ProxyAddress>comparingInt(
+            address -> playersOn.applyAsInt(address.proxyId())).reversed());
       }
       default -> {
         throw new IllegalStateException("Invalid filter '" + filter + "'.");
