@@ -282,6 +282,8 @@ haproxy-protocol-trusted-proxies = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12"
 # (the default) disables it. This listener ALWAYS expects the PROXY protocol, whatever haproxy-protocol
 # says. On Geyser's side that is "advanced.java.use-haproxy-protocol: true" in its config.yml (the
 # Geyser version that has the "java" section; older config files call it "remote.use-proxy-protocol").
+# Geyser also needs "advanced.java.use-direct-connection: false" (it defaults to true, and then
+# Geyser never uses this listener).
 # Only the sources of geyser-listener-trusted-proxies may send the header, any other connection is
 # closed. Plugins read the listener from the pre-login (ListenerOrigin.of(connection)), and the
 # admission shield treats its connections as coming from Geyser, judged on the player's real address.
@@ -291,7 +293,10 @@ geyser-listener = ""
 # name; same rules as haproxy-protocol-trusted-proxies). A list of its own, loopback only by default,
 # because whoever may send this header chooses the client address and gets the Geyser origin: do not
 # put a network your backends share. Only add the address Geyser connects from if it is not on the
-# same machine as the proxy.
+# same machine as the proxy. Loopback means ANY local process of the node: on a node shared with
+# backends, a compromised backend can claim any client address. On Linux, if the UIDs differ, restrict
+# the port to Geyser's UID, for example:
+#   iptables -A OUTPUT -o lo -p tcp --dport <port> -m owner ! --uid-owner <geyser-uid> -j REJECT
 geyser-listener-trusted-proxies = ["127.0.0.0/8", "::1/128"]
 
 # Enables TCP fast open support on the proxy. Requires the proxy to run on Linux.
