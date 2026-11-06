@@ -251,7 +251,9 @@ public final class VelocityBridgeChannel implements BridgeChannel {
           BridgeCodec.Limits.defaults());
     } catch (Exception e) {
       metrics.record(BridgeMetrics.Event.REJECTED_PAYLOAD);
-      LOGGER.warn("Failed to decode btc:bridge message from '{}'", sourceServer, e);
+      // Type only: a parser message can quote the payload, which is never logged.
+      LOGGER.warn("Failed to decode btc:bridge message from '{}' ({})", sourceServer,
+          e.getClass().getName());
       return;
     }
     if (!decoded.accepted()) {
