@@ -1194,6 +1194,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
             player.disconnect(reason);
           }
         } else {
+          releaseRedisPlayers();
           try {
             LOGGER.log(Level.INFO, "Transferring all players to new proxy...");
             Thread.sleep(1000);
@@ -1321,6 +1322,18 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       this.redis.shutdown();
     } catch (RuntimeException e) {
       LOGGER.error("Redis did not shut down cleanly; other proxies will reap this one", e);
+    }
+  }
+
+  /**
+   * Drops this proxy's player entries in one round trip before the players are transferred, so
+   * the receiving proxy does not refuse them as already connected here.
+   */
+  private void releaseRedisPlayers() {
+    try {
+      this.redis.getPlayerService().releaseAll();
+    } catch (RuntimeException e) {
+      LOGGER.error("Could not release this proxy's players in Redis before the transfer", e);
     }
   }
 
