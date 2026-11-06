@@ -585,12 +585,11 @@ override-bungee-messaging = true
 # uncompressed payload, consuming memory and CPU. This is a critical security
 # measure for any proxy exposed to the internet.
 #
-# When enabled, the proxy inserts two Netty handlers into every connection's
-# pipeline whenever compression is active:
-#   1. CompressionRatioMonitor — records the compressed size before decompression
-#   2. DecompressionBombHandler — checks the decompressed size and compression
-#      ratio after decompression, drops violating packets, and closes the
-#      connection after too many violations.
+# When enabled, the compression decoder of every connection checks each packet's
+# decompressed size and compression ratio BEFORE inflating it, drops violating
+# packets, and closes the connection after too many violations. It complements
+# the decoder's fixed size caps and the [packet-limiter] decompressed-bytes-per-second
+# limit, which stops sustained floods (client to proxy only).
 enabled = true
 
 # The maximum allowed decompressed payload size, in bytes.

@@ -34,10 +34,11 @@ import java.util.zip.Deflater;
 import org.junit.jupiter.api.Test;
 
 /**
- * Replays the same decompression bombs through the upstream decoder alone, through the BTC
- * handlers around the upstream decoder, and through both together (the production wiring), to
- * record what each defence stops. Every packet is a valid deflate stream of zeros, so its ratio is
- * close to deflate's maximum of about 1000:1.
+ * Replays decompression bombs through the compression decoder with the upstream packet limiter
+ * alone, with the BTC guard alone, and with both (the production wiring), to pin what each
+ * defence stops. Every packet is a valid deflate stream of zeros, so its ratio is close to
+ * deflate's maximum of about 1000:1. A packet that makes the decoder throw ends the connection in
+ * production, so the replay stops there and reports it as rejected.
  */
 class DecompressionBombReplayTest {
 
@@ -50,26 +51,26 @@ class DecompressionBombReplayTest {
   private static final int UPSTREAM_BYTES_PER_SECOND = 5_242_880;
   private static final int UPSTREAM_WINDOW_SECONDS = 7;
 
-  /** Which defences surround the decoder. The decoder's own size and claim checks are always on. */
+  /** Which defences the decoder carries. Its own size and claim checks are always on. */
   private enum Defense {
-    /** The decoder with the packet limiter the proxy installs for serverbound traffic. */
+    /** The packet limiter the proxy installs for serverbound traffic. */
     UPSTREAM(true, false),
-    /** The decoder without a limiter, wrapped by the BTC monitor and handler. */
+    /** The BTC guard, without a limiter. */
     BTC(false, true),
-    /** The production wiring: limiter and BTC handlers. */
+    /** The production wiring: limiter and guard. */
     BOTH(true, true);
 
     private final boolean limiter;
-    private final boolean btcHandlers;
+    private final boolean guard;
 
-    Defense(final boolean limiter, final boolean btcHandlers) {
+    Defense(final boolean limiter, final boolean guard) {
       this.limiter = limiter;
-      this.btcHandlers = btcHandlers;
+      this.guard = guard;
     }
   }
 
   /** What reached the end of the pipeline for a series of packets. */
-  private record Outcome(int passed, int dropped, boolean rejected, boolean closed) {
+  private record Outcome(int passed, int dropped, boolean rejected) {
   }
 
   private static Outcome replay(final Direction direction, final Defense defense,
@@ -82,13 +83,11 @@ class DecompressionBombReplayTest {
       decoder.setPacketLimiter(new SimpleBytesPerSecondLimiter(
           -1, UPSTREAM_BYTES_PER_SECOND, UPSTREAM_WINDOW_SECONDS));
     }
-    final EmbeddedChannel channel = defense.btcHandlers
-        ? new EmbeddedChannel(
-            new CompressionRatioMonitor(btcMaxSize, BTC_MAX_RATIO, BTC_MAX_VIOLATIONS),
-            decoder,
-            new DecompressionBombHandler(btcMaxSize, BTC_MAX_RATIO, BTC_MAX_VIOLATIONS,
-                BTC_RATIO_FLOOR))
-        : new EmbeddedChannel(decoder);
+    if (defense.guard) {
+      decoder.setDecompressionGuard(new DecompressionGuard(
+          btcMaxSize, BTC_MAX_RATIO, BTC_MAX_VIOLATIONS, BTC_RATIO_FLOOR));
+    }
+    final EmbeddedChannel channel = new EmbeddedChannel(decoder);
 
     int fed = 0;
     boolean rejected = false;
@@ -109,9 +108,8 @@ class DecompressionBombReplayTest {
       passed++;
       out.release();
     }
-    final boolean closed = !channel.isOpen();
     channel.finishAndReleaseAll();
-    return new Outcome(passed, fed - passed - (rejected ? 1 : 0), rejected, closed);
+    return new Outcome(passed, fed - passed - (rejected ? 1 : 0), rejected);
   }
 
   private static Outcome replay(final Direction direction, final Defense defense,
@@ -155,54 +153,54 @@ class DecompressionBombReplayTest {
   void largestServerboundBombPassesUpstreamAndIsDroppedByBtc() {
     final byte[] bomb = bomb(2 * MIB);
 
-    assertEquals(new Outcome(1, 0, false, false), replay(Direction.SERVERBOUND, Defense.UPSTREAM, bomb));
-    assertEquals(new Outcome(0, 1, false, false), replay(Direction.SERVERBOUND, Defense.BTC, bomb));
-    assertEquals(new Outcome(0, 1, false, false), replay(Direction.SERVERBOUND, Defense.BOTH, bomb));
+    assertEquals(new Outcome(1, 0, false), replay(Direction.SERVERBOUND, Defense.UPSTREAM, bomb));
+    assertEquals(new Outcome(0, 1, false), replay(Direction.SERVERBOUND, Defense.BTC, bomb));
+    assertEquals(new Outcome(0, 1, false), replay(Direction.SERVERBOUND, Defense.BOTH, bomb));
   }
 
   @Test
   void largestClientboundBombPassesUpstreamAndIsDroppedByBtc() {
     final byte[] bomb = bomb(8 * MIB);
 
-    assertEquals(new Outcome(1, 0, false, false), replay(Direction.CLIENTBOUND, Defense.UPSTREAM, bomb));
-    assertEquals(new Outcome(0, 1, false, false), replay(Direction.CLIENTBOUND, Defense.BTC, bomb));
-    assertEquals(new Outcome(0, 1, false, false), replay(Direction.CLIENTBOUND, Defense.BOTH, bomb));
+    assertEquals(new Outcome(1, 0, false), replay(Direction.CLIENTBOUND, Defense.UPSTREAM, bomb));
+    assertEquals(new Outcome(0, 1, false), replay(Direction.CLIENTBOUND, Defense.BTC, bomb));
+    assertEquals(new Outcome(0, 1, false), replay(Direction.CLIENTBOUND, Defense.BOTH, bomb));
   }
 
   @Test
-  void repeatedBombsCloseTheConnectionOnlyWithBtc() {
+  void thirdBombEndsTheConnectionOnlyWithBtc() {
     final byte[][] bombs = repeat(bomb(2 * MIB), 3);
 
-    assertEquals(new Outcome(3, 0, false, false), replay(Direction.SERVERBOUND, Defense.UPSTREAM, bombs));
-    assertEquals(new Outcome(0, 3, false, true), replay(Direction.SERVERBOUND, Defense.BTC, bombs));
-    assertEquals(new Outcome(0, 3, false, true), replay(Direction.SERVERBOUND, Defense.BOTH, bombs));
+    assertEquals(new Outcome(3, 0, false), replay(Direction.SERVERBOUND, Defense.UPSTREAM, bombs));
+    assertEquals(new Outcome(0, 2, true), replay(Direction.SERVERBOUND, Defense.BTC, bombs));
+    assertEquals(new Outcome(0, 2, true), replay(Direction.SERVERBOUND, Defense.BOTH, bombs));
   }
 
   @Test
   void sustainedBombsBelowTheRatioFloorAreStoppedOnlyByTheUpstreamLimiter() {
     final byte[][] bombs = repeat(bomb(MIB), 40);
 
-    assertEquals(new Outcome(35, 0, true, false), replay(Direction.SERVERBOUND, Defense.UPSTREAM, bombs));
-    assertEquals(new Outcome(40, 0, false, false), replay(Direction.SERVERBOUND, Defense.BTC, bombs));
-    assertEquals(new Outcome(35, 0, true, false), replay(Direction.SERVERBOUND, Defense.BOTH, bombs));
+    assertEquals(new Outcome(35, 0, true), replay(Direction.SERVERBOUND, Defense.UPSTREAM, bombs));
+    assertEquals(new Outcome(40, 0, false), replay(Direction.SERVERBOUND, Defense.BTC, bombs));
+    assertEquals(new Outcome(35, 0, true), replay(Direction.SERVERBOUND, Defense.BOTH, bombs));
   }
 
   @Test
   void sustainedClientboundBombsAreStoppedByNeitherDefense() {
     final byte[][] bombs = repeat(bomb(MIB), 40);
 
-    assertEquals(new Outcome(40, 0, false, false), replay(Direction.CLIENTBOUND, Defense.UPSTREAM, bombs));
-    assertEquals(new Outcome(40, 0, false, false), replay(Direction.CLIENTBOUND, Defense.BTC, bombs));
-    assertEquals(new Outcome(40, 0, false, false), replay(Direction.CLIENTBOUND, Defense.BOTH, bombs));
+    assertEquals(new Outcome(40, 0, false), replay(Direction.CLIENTBOUND, Defense.UPSTREAM, bombs));
+    assertEquals(new Outcome(40, 0, false), replay(Direction.CLIENTBOUND, Defense.BTC, bombs));
+    assertEquals(new Outcome(40, 0, false), replay(Direction.CLIENTBOUND, Defense.BOTH, bombs));
   }
 
   @Test
   void configuredSizeCapBelowTheDecoderCapIsEnforcedOnlyByBtc() {
     final byte[] packet = bomb(3 * MIB / 2);
 
-    assertEquals(new Outcome(1, 0, false, false), replay(Direction.SERVERBOUND, Defense.UPSTREAM, MIB, packet));
-    assertEquals(new Outcome(0, 1, false, false), replay(Direction.SERVERBOUND, Defense.BTC, MIB, packet));
-    assertEquals(new Outcome(0, 1, false, false), replay(Direction.SERVERBOUND, Defense.BOTH, MIB, packet));
+    assertEquals(new Outcome(1, 0, false), replay(Direction.SERVERBOUND, Defense.UPSTREAM, MIB, packet));
+    assertEquals(new Outcome(0, 1, false), replay(Direction.SERVERBOUND, Defense.BTC, MIB, packet));
+    assertEquals(new Outcome(0, 1, false), replay(Direction.SERVERBOUND, Defense.BOTH, MIB, packet));
   }
 
   @Test
@@ -211,8 +209,8 @@ class DecompressionBombReplayTest {
     final byte[] clientbound = bomb(8 * MIB + 1);
 
     for (final Defense defense : Defense.values()) {
-      assertEquals(new Outcome(0, 0, true, false), replay(Direction.SERVERBOUND, defense, serverbound));
-      assertEquals(new Outcome(0, 0, true, false), replay(Direction.CLIENTBOUND, defense, clientbound));
+      assertEquals(new Outcome(0, 0, true), replay(Direction.SERVERBOUND, defense, serverbound));
+      assertEquals(new Outcome(0, 0, true), replay(Direction.CLIENTBOUND, defense, clientbound));
     }
   }
 
@@ -221,7 +219,7 @@ class DecompressionBombReplayTest {
     final byte[] lying = frame(1024, MIB);
 
     for (final Defense defense : Defense.values()) {
-      assertEquals(new Outcome(0, 0, true, false), replay(Direction.SERVERBOUND, defense, lying));
+      assertEquals(new Outcome(0, 0, true), replay(Direction.SERVERBOUND, defense, lying));
     }
   }
 
@@ -230,8 +228,8 @@ class DecompressionBombReplayTest {
     final byte[] packet = bomb(256 * 1024);
 
     for (final Defense defense : Defense.values()) {
-      assertEquals(new Outcome(1, 0, false, false), replay(Direction.SERVERBOUND, defense, packet));
-      assertEquals(new Outcome(1, 0, false, false), replay(Direction.CLIENTBOUND, defense, packet));
+      assertEquals(new Outcome(1, 0, false), replay(Direction.SERVERBOUND, defense, packet));
+      assertEquals(new Outcome(1, 0, false), replay(Direction.CLIENTBOUND, defense, packet));
     }
   }
 }
