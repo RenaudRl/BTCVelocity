@@ -14,6 +14,12 @@ dependencies {
     compileOnly("eu.cloudnetservice.cloudnet:driver-api:$cloudnetVersion")
     compileOnly("eu.cloudnetservice.cloudnet:wrapper-jvm-api:$cloudnetVersion")
     compileOnly(libs.jspecify)
+
+    // The listener maps CloudNet snapshots: its tests need the same API on the test classpath.
+    testImplementation(project(":velocity-api"))
+    testImplementation("eu.cloudnetservice.cloudnet:driver-api:$cloudnetVersion")
+    testImplementation("eu.cloudnetservice.cloudnet:wrapper-jvm-api:$cloudnetVersion")
+    testImplementation(libs.mockito)
 }
 
 tasks {

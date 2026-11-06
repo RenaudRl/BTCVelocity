@@ -115,8 +115,7 @@ public class VelocityQueueManager implements QueueManager {
     for (VelocityRegisteredServer rs : server.getAllServers()) {
       final String name = rs.getServerInfo().getName();
       queues.computeIfAbsent(name, n -> {
-        final boolean inactive = server.getConfiguration().getQueue()
-            .getNoQueueServers().contains(n);
+        final boolean inactive = server.getConfiguration().getQueue().isNoQueueServer(n);
         return createQueue(rs, inactive ? QueueState.INACTIVE : QueueState.ACTIVE);
       });
     }
@@ -190,7 +189,7 @@ public class VelocityQueueManager implements QueueManager {
         .orElseThrow(() -> new IllegalArgumentException("Unknown server: " + serverName));
 
     return queues.computeIfAbsent(serverName, n -> {
-      final boolean inactive = server.getConfiguration().getQueue().getNoQueueServers().contains(n);
+      final boolean inactive = server.getConfiguration().getQueue().isNoQueueServer(n);
       return createQueue(rs, inactive ? QueueState.INACTIVE : QueueState.ACTIVE);
     });
   }

@@ -101,8 +101,7 @@ public class QueueAdminCommand implements BuiltinCommand {
                       }
 
                       for (VelocityRegisteredServer s : server.getAllServers()) {
-                        if (this.server.getConfiguration().getQueue().getNoQueueServers()
-                                .contains(s.getServerInfo().getName())) {
+                        if (this.server.getConfiguration().getQueue().isNoQueueServer(s.getServerInfo().getName())) {
                           continue;
                         }
 
@@ -196,7 +195,7 @@ public class QueueAdminCommand implements BuiltinCommand {
     source.sendMessage(Component.translatable("velocity.queue.command.listqueues.header"));
 
     for (VelocityRegisteredServer server : this.server.getAllServers()) {
-      if (this.server.getConfiguration().getQueue().getNoQueueServers().contains(server.getServerInfo().getName())) {
+      if (this.server.getConfiguration().getQueue().isNoQueueServer(server.getServerInfo().getName())) {
         continue;
       }
 
@@ -265,7 +264,7 @@ public class QueueAdminCommand implements BuiltinCommand {
       }
 
       for (VelocityRegisteredServer s : this.server.getAllServers()) {
-        if (this.server.getConfiguration().getQueue().getNoQueueServers().contains(s.getServerInfo().getName())) {
+        if (this.server.getConfiguration().getQueue().isNoQueueServer(s.getServerInfo().getName())) {
           continue;
         }
 
@@ -296,7 +295,7 @@ public class QueueAdminCommand implements BuiltinCommand {
 
     List<Component> players = new ArrayList<>();
 
-    if (this.server.getConfiguration().getQueue().getNoQueueServers().contains(server.getServerInfo().getName())) {
+    if (this.server.getConfiguration().getQueue().isNoQueueServer(server.getServerInfo().getName())) {
       String newName = serverName;
       if (serverName.equalsIgnoreCase("current") && ctx.getSource() instanceof ConnectedPlayer cp) {
         VelocityServerConnection conn = cp.getCurrentServer().orElse(null);

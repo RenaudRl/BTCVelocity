@@ -85,7 +85,7 @@ public class BungeeCordMessageResponder {
 
     proxy.getServer(serverName).ifPresent(server -> {
       if (queue && proxy.isQueueEnabled()) {
-        if (this.proxy.getConfiguration().getQueue().getNoQueueServers().contains(server.getServerInfo().getName())) {
+        if (this.proxy.getConfiguration().getQueue().isNoQueueServer(server.getServerInfo().getName())) {
           player.createConnectionRequest(server).connectWithIndication();
           return;
         }
@@ -115,7 +115,7 @@ public class BungeeCordMessageResponder {
       }
 
       if (queue && proxy.isQueueEnabled()) {
-        if (this.proxy.getConfiguration().getQueue().getNoQueueServers().contains(referencedServer.get().getServerInfo().getName())) {
+        if (this.proxy.getConfiguration().getQueue().isNoQueueServer(referencedServer.get().getServerInfo().getName())) {
           player.createConnectionRequest(referencedServer.get()).connectWithIndication();
           return;
         }

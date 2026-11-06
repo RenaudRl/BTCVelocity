@@ -64,7 +64,7 @@ public class LeaveQueueCommand implements BuiltinCommand {
   @Override
   public BrigadierCommand build() {
     LiteralArgumentBuilder<CommandSource> rootNode = BrigadierCommand.literalArgumentBuilder(label())
-            .requires(src -> src instanceof ConnectedPlayer && src.getPermissionValue("velocity.queue.leave") == Tristate.TRUE)
+            .requires(LeaveQueueCommand::canUse)
             .then(BrigadierCommand
                     .requiredArgumentBuilder("server", StringArgumentType.word())
                     .suggests(CommandUtils.suggestServer(server, "server", false, true))
@@ -73,6 +73,11 @@ public class LeaveQueueCommand implements BuiltinCommand {
             .executes(this::leaveAllQueues);
 
     return new BrigadierCommand(rootNode);
+  }
+
+  // A player command: allowed unless explicitly denied, like /server (no permission plugin = UNDEFINED).
+  static boolean canUse(CommandSource src) {
+    return src instanceof ConnectedPlayer && src.getPermissionValue("velocity.queue.leave") != Tristate.FALSE;
   }
 
   private int leaveAllQueues(CommandContext<CommandSource> ctx) {

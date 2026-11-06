@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -310,6 +311,75 @@ class BtcArrivalRouterLimboTest {
 
     // Assert
     assertEquals(reason, sent);
+  }
+
+  // The player is now on this server, as the proxy tells the router once the switch is complete.
+  private void arriveOn(Player player, RegisteredServer server) {
+    var info = server.getServerInfo();
+    var connection = mock(ServerConnection.class);
+    when(connection.getServerInfo()).thenReturn(info);
+    doReturn(Optional.of(connection)).when(player).getCurrentServer();
+    this.router.onServerPostConnect(new ServerPostConnectEvent(player, null));
+  }
+
+  @Test
+  void aPlayerWhoReachedTheLobbyAndIsSentBackToTheLimboIsReleasedToItAgain() {
+    // Arrange — released to the lobby by the sweep, and the connection succeeds
+    var lobby = this.server("Lobby-1");
+    var player = player();
+    var request = mock(ConnectionRequestBuilder.class);
+    when(player.createConnectionRequest(any())).thenReturn(request);
+    doReturn(List.of(player)).when(this.limbo).getPlayersConnected();
+    this.router.releaseFromLimbo();
+    this.arriveOn(player, lobby);
+
+    // Act — the lobby sends them back (wake-up over, queueadmin remove...), the next sweep runs
+    this.arriveOn(player, this.limbo);
+    this.router.releaseFromLimbo();
+
+    // Assert — witness: on the old code the successful arrival stayed an "attempt" forever
+    verify(player, times(2)).createConnectionRequest(lobby);
+  }
+
+  @Test
+  void aLobbyThatRefusesTheConnectionIsNotRetriedByTheSweep() {
+    // Arrange — the connection never completes: no post-connect event, the player stays put
+    var lobby = this.server("Lobby-1");
+    var player = player();
+    var request = mock(ConnectionRequestBuilder.class);
+    when(player.createConnectionRequest(any())).thenReturn(request);
+    doReturn(List.of(player)).when(this.limbo).getPlayersConnected();
+    this.arriveOn(player, this.limbo);
+
+    // Act
+    this.router.releaseFromLimbo();
+    this.router.releaseFromLimbo();
+    this.router.releaseFromLimbo();
+
+    // Assert
+    verify(player, times(1)).createConnectionRequest(lobby);
+  }
+
+  @Test
+  void aLobbyThatKicksTheArrivedPlayerIsNotRetriedByTheSweep() {
+    // Arrange — the lobby accepts the connection, then kicks; the router redirects to the limbo
+    var lobby = this.server("Lobby-1");
+    var player = player();
+    var request = mock(ConnectionRequestBuilder.class);
+    when(player.createConnectionRequest(any())).thenReturn(request);
+    doReturn(List.of(player)).when(this.limbo).getPlayersConnected();
+    this.router.releaseFromLimbo();
+    this.arriveOn(player, lobby);
+    var kick = kick(player, lobby);
+    this.router.onKickedFromServer(kick);
+    assertSame(this.limbo, assertInstanceOf(KickedFromServerEvent.RedirectPlayer.class, kick.getResult()).getServer());
+    this.arriveOn(player, this.limbo);
+
+    // Act
+    this.router.releaseFromLimbo();
+
+    // Assert — the kick is a refusal and keeps its mark: still only the first send
+    verify(player, times(1)).createConnectionRequest(lobby);
   }
 
   @Test

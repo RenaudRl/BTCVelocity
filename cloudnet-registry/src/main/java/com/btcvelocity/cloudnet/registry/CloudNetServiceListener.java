@@ -63,9 +63,15 @@ public final class CloudNetServiceListener {
     var environment = snapshot.serviceId().environment();
     var javaServer = environment != null
         && Boolean.TRUE.equals(environment.readProperty(ServiceEnvironmentType.JAVA_SERVER));
+    return viewOf(snapshot, javaServer);
+  }
+
+  // Split from toView: the environment type needs a CloudNet runtime to initialise, the rest does not.
+  static ServiceView viewOf(ServiceInfoSnapshot snapshot, boolean javaServer) {
     var eligible = javaServer
         && snapshot.connected()
         && snapshot.lifeCycle() == ServiceLifeCycle.RUNNING
+        && publishedByTheWrapper(snapshot)
         && snapshot.propertyHolder().getBoolean(ONLINE_PROPERTY, false);
 
     return new ServiceView(
@@ -76,11 +82,31 @@ public final class CloudNetServiceListener {
   }
 
   /**
+   * Whether the service's own wrapper has published this snapshot in the current run.
+   *
+   * <p>A restarted PREPARED service keeps the properties of its previous run (node
+   * {@code AbstractService#pushServiceInfoSnapshotUpdate}, RC17 l.747), {@code Online} included.
+   * When the wrapper authenticates, the node broadcasts that snapshot as it stands (same class,
+   * {@code publishServiceInfoSnapshot}, called from {@code AuthorizationPacketListener} l.141):
+   * connected, RUNNING, stale {@code Online}, and an empty process snapshot (pid -1, l.743) because
+   * no wrapper has published yet. The first wrapper publish is the bridge's own, on the first
+   * server tick ({@code BukkitBridgePlugin#onLoad}, {@code PlatformBridgeManagement#postInit}): it
+   * carries this run's real pid ({@code WrapperServiceInfoHolder#createServiceInfoSnapshot}) and a
+   * fresh {@code Online}. So an empty process snapshot means the properties cannot be trusted yet.
+   */
+  private static boolean publishedByTheWrapper(ServiceInfoSnapshot snapshot) {
+    return snapshot.processSnapshot().pid() > 0;
+  }
+
+  /**
    * Applies a snapshot and logs only the transitions, never the steady state: a service updates
    * itself every few seconds and an unfiltered log would bury everything else.
    */
   public void accept(ServiceInfoSnapshot snapshot) {
-    var view = toView(snapshot);
+    this.accept(toView(snapshot));
+  }
+
+  void accept(ServiceView view) {
     if (this.registry.apply(view)) {
       if (view.eligible()) {
         this.logger.info("Registered CloudNet service {} at {}", view.name(), view.address());
