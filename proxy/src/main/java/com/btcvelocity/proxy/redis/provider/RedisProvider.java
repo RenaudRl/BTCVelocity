@@ -24,6 +24,7 @@ import com.btcvelocity.proxy.redis.transaction.Transaction;
 import com.btcvelocity.proxy.redis.transaction.TransactionData;
 import com.btcvelocity.proxy.redis.transaction.TransactionHandler;
 import com.google.common.collect.ImmutableList;
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.jetbrains.annotations.NotNull;
@@ -195,6 +196,35 @@ public sealed interface RedisProvider permits AbstractRedisProvider {
    * @return a future that completes when the operation is done
    */
   CompletableFuture<Void> deleteKeyAsync(@NotNull String key);
+
+  /**
+   * Takes a lease: {@code SET key owner NX PX ttl}. Blocking Redis call.
+   *
+   * @param key the lease key
+   * @param owner who takes it
+   * @param ttl how long it lasts unless renewed
+   * @return {@code true} if the key was free and this owner now holds it
+   */
+  boolean acquireLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl);
+
+  /**
+   * Extends a lease, only if {@code owner} still holds it (one Lua script). Blocking Redis call.
+   *
+   * @param key the lease key
+   * @param owner who must hold it
+   * @param ttl the new time to live
+   * @return {@code false} if the lease expired or another owner holds it
+   */
+  boolean renewLease(@NotNull String key, @NotNull String owner, @NotNull Duration ttl);
+
+  /**
+   * Deletes a lease, only if {@code owner} still holds it (one Lua script). Blocking Redis call.
+   *
+   * @param key the lease key
+   * @param owner who must hold it
+   * @return {@code true} if the lease was held by this owner and is gone
+   */
+  boolean releaseLease(@NotNull String key, @NotNull String owner);
 
   /**
    * Check if the Redis provider is connected.

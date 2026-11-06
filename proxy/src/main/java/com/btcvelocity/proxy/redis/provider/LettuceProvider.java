@@ -38,6 +38,7 @@ import io.lettuce.core.RedisFuture;
 import io.lettuce.core.RedisLoadingException;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.ScriptOutputType;
+import io.lettuce.core.SetArgs;
 import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.async.RedisAsyncCommands;
@@ -145,6 +146,24 @@ public final class LettuceProvider extends AbstractRedisProvider {
       + "  end\n"
       + "end\n"
       + "return removed\n";
+
+  /**
+   * KEYS[1] lease, ARGV: owner, ttl in ms. Extends the lease only if that owner holds it.
+   */
+  private static final String RENEW_LEASE_SCRIPT =
+      "if redis.call('GET', KEYS[1]) == ARGV[1] then\n"
+      + "  return redis.call('PEXPIRE', KEYS[1], ARGV[2])\n"
+      + "end\n"
+      + "return 0\n";
+
+  /**
+   * KEYS[1] lease, ARGV: owner. Deletes the lease only if that owner holds it.
+   */
+  private static final String RELEASE_LEASE_SCRIPT =
+      "if redis.call('GET', KEYS[1]) == ARGV[1] then\n"
+      + "  return redis.call('DEL', KEYS[1])\n"
+      + "end\n"
+      + "return 0\n";
 
   /**
    * Runs the pub/sub handlers off Lettuce's I/O thread, in arrival order. Handlers may call the
@@ -565,6 +584,28 @@ public final class LettuceProvider extends AbstractRedisProvider {
     }
 
     this.syncPublisher.del(key);
+  }
+
+  @Override
+  public boolean acquireLease(final @NotNull String key, final @NotNull String owner,
+                              final @NotNull Duration ttl) {
+    return this.depotConnection.sync()
+        .set(key, owner, SetArgs.Builder.nx().px(ttl.toMillis())) != null;
+  }
+
+  @Override
+  public boolean renewLease(final @NotNull String key, final @NotNull String owner,
+                            final @NotNull Duration ttl) {
+    final Long renewed = this.depotConnection.sync().eval(RENEW_LEASE_SCRIPT,
+        ScriptOutputType.INTEGER, new String[] {key}, owner, String.valueOf(ttl.toMillis()));
+    return renewed != null && renewed > 0;
+  }
+
+  @Override
+  public boolean releaseLease(final @NotNull String key, final @NotNull String owner) {
+    final Long released = this.depotConnection.sync().eval(RELEASE_LEASE_SCRIPT,
+        ScriptOutputType.INTEGER, new String[] {key}, owner);
+    return released != null && released > 0;
   }
 
   /**
