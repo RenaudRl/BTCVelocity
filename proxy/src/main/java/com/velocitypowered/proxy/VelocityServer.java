@@ -829,6 +829,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
     final VelocityConfiguration oldConfiguration = this.configuration;
     this.configuration = newConfiguration;
+    serverListPingHandler.getStatusCache().clear();
     if (!oldConfiguration.getObservability().equals(newConfiguration.getObservability())) {
       LOGGER.warn("[observability] changed: restart the proxy to apply");
     }

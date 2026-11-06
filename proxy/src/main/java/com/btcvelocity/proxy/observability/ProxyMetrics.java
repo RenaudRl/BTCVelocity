@@ -42,12 +42,15 @@ public final class ProxyMetrics {
    * @param playersByBackend players of this proxy, by backend name
    * @param queueLengths queue length, by backend name (empty when queues are off)
    * @param bridge bridge counters, by event
+   * @param statusCacheHits status pings answered by the status cache
+   * @param statusCacheMisses status pings the status cache had to build
    * @param loops event loop readings (empty when the watchdog is off)
    * @return the exposition text
    */
   public static String render(final long players, final Map<String, Long> playersByBackend,
                               final Map<String, Integer> queueLengths,
                               final Map<BridgeMetrics.Event, Long> bridge,
+                              final long statusCacheHits, final long statusCacheMisses,
                               final List<LoopWatchdog.Reading> loops) {
     final StringBuilder out = new StringBuilder(2048);
 
@@ -69,6 +72,11 @@ public final class ProxyMetrics {
         .sorted(Map.Entry.comparingByKey())
         .forEach(entry -> sample(out, "btc_proxy_bridge_events_total", "event",
             entry.getKey().name().toLowerCase(Locale.ROOT), String.valueOf(entry.getValue())));
+
+    header(out, "btc_proxy_status_cache_total", "counter",
+        "Server list pings answered from the status cache (hit) or built (miss); 0 while it is off.");
+    sample(out, "btc_proxy_status_cache_total", "result", "hit", String.valueOf(statusCacheHits));
+    sample(out, "btc_proxy_status_cache_total", "result", "miss", String.valueOf(statusCacheMisses));
 
     header(out, "btc_proxy_eventloop_lag_seconds", "gauge",
         "How late the last task marker ran on each Netty event loop.");

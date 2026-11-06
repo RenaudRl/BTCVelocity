@@ -181,6 +181,17 @@ public class BtcConfigMigrations {
             "advanced.custom-brand-backend",
             "Paper"
         ),
+        migration(
+            "Seconds the server list ping response is kept, per client protocol version and forced host\n"
+                + " (all hosts that match no forced host share one entry).\n"
+                + " The time is counted from the build and never extended. 0 or -1 turns the cache off.\n"
+                + " Pings no longer reach the backends, the cluster counts or ProxyPingEvent plugins on each\n"
+                + " request. A plugin that reads event.getConnection() in ProxyPingEvent (address, rate, ban) sees\n"
+                + " only the connection that builds the response: turn the cache off for such a plugin.\n"
+                + " 3 to 10 is a good value against ping floods.",
+            "advanced.status-cache-ttl",
+            0
+        ),
 
         // [observability]
         migration(
