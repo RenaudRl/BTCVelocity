@@ -17,6 +17,7 @@
 
 package com.btcvelocity.proxy.bridge;
 
+import com.btcvelocity.api.bridge.BridgeCodec;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -39,8 +40,12 @@ import java.util.UUID;
  */
 public final class BridgeDeduplication {
 
-  /** Matches the backend's default deduplication window. */
-  public static final long DEFAULT_WINDOW_MILLIS = 60_000L;
+  /**
+   * As long as a frame can still pass the codec's time checks after its first delivery: issued up
+   * to one skew in the future, accepted until one skew past an expiry at most one lifetime later.
+   * A shorter window let a captured frame be replayed once its id was forgotten but before expiry.
+   */
+  public static final long DEFAULT_WINDOW_MILLIS = replayHorizon(BridgeCodec.Limits.defaults());
 
   /** Upper bound on remembered ids, so the registry cannot grow without limit. */
   public static final int DEFAULT_MAX_ENTRIES = 4096;
@@ -63,9 +68,14 @@ public final class BridgeDeduplication {
     this.maxEntries = maxEntries;
   }
 
-  /** Creates a registry with the defaults shared with the backend. */
+  /** Creates a registry whose window covers every replay the codec would still accept. */
   public static BridgeDeduplication defaults() {
     return new BridgeDeduplication(DEFAULT_WINDOW_MILLIS, DEFAULT_MAX_ENTRIES);
+  }
+
+  /** The longest delay between two deliveries of one frame that the codec still accepts. */
+  static long replayHorizon(final BridgeCodec.Limits limits) {
+    return limits.maxMessageLifetimeMillis() + 2 * limits.maxClockSkewMillis();
   }
 
   /**
