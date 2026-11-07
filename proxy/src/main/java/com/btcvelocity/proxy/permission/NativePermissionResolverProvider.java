@@ -22,16 +22,38 @@ import com.btcvelocity.api.permission.PermissionResolverProvider;
 import com.velocitypowered.api.permission.PermissionFunction;
 import com.velocitypowered.api.permission.PermissionSubject;
 import com.velocitypowered.api.proxy.Player;
+import java.io.IOException;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 /** Optional native BTC provider; disabled by default for public standalone proxies. */
 final class NativePermissionResolverProvider implements PermissionResolverProvider, AutoCloseable {
 
+  private static final Logger LOGGER = LogManager.getLogger(NativePermissionResolverProvider.class);
+
   private final NativePermissionService service = new NativePermissionService();
 
+  /**
+   * The provider stays off, leaving Velocity's default permissions, when the flag is absent or when
+   * the configuration is invalid (for instance a {@code ${env:NAME}} whose variable is unset). An
+   * unreadable file is not a verdict: the service retries it on demand.
+   */
   @Override
   public boolean isAvailable() {
-    return NativePermissionConfig.isEnabled();
+    if (!NativePermissionConfig.isEnabled()) {
+      return false;
+    }
+    try {
+      NativePermissionConfig.load(NativePermissionConfig.configPath());
+    } catch (IOException unreadable) {
+      // Retried on demand by the service.
+    } catch (IllegalArgumentException invalid) {
+      // The message names settings and variables, never values.
+      LOGGER.error("Native BTC permissions disabled, default permissions apply: {}", invalid.getMessage());
+      return false;
+    }
+    return true;
   }
 
   @Override

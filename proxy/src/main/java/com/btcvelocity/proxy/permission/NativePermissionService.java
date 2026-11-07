@@ -25,7 +25,6 @@ import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
-import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -199,20 +198,9 @@ final class NativePermissionService implements AutoCloseable {
 
   private void initializeBlocking() {
     try {
-      final Path configPath = Path.of(System.getProperty("btc.permissions.config", "btc-permissions.properties"));
-      final NativePermissionConfig.Config loaded = NativePermissionConfig.load(configPath);
+      final NativePermissionConfig.Config loaded = NativePermissionConfig.load(NativePermissionConfig.configPath());
       config = loaded;
-
-      final HikariConfig hikari = new HikariConfig();
-      hikari.setJdbcUrl(loaded.jdbcUrl());
-      hikari.setUsername(loaded.username());
-      hikari.setPassword(loaded.password());
-      hikari.setMaximumPoolSize(4);
-      hikari.setMinimumIdle(1);
-      hikari.setConnectionTimeout(3_000);
-      hikari.setValidationTimeout(2_000);
-      hikari.setPoolName("btc-velocity-permissions");
-      dataSource = new HikariDataSource(hikari);
+      dataSource = new HikariDataSource(hikariConfig(loaded));
 
       try {
         groupCatalog = readGroups();
@@ -229,7 +217,11 @@ final class NativePermissionService implements AutoCloseable {
       LOGGER.info("Native BTC permissions backend configured for network {} and server {}.",
           loaded.networkId(), loaded.serverId());
     } catch (Throwable error) {
-      LOGGER.error("Native BTC permissions backend could not initialize; proxy permissions remain undefined until it recovers.", error);
+      // Neither the original exception nor its cause is logged or chained: a pool or client error
+      // can quote the connection string, password included. The type is enough to triage; the
+      // redacted detail is in the health state.
+      LOGGER.error("Native BTC permissions backend could not initialize ({}); proxy permissions remain undefined until it recovers.",
+          error.getClass().getSimpleName());
       lastFailureReason = describeFailure(error);
       final HikariDataSource source = dataSource;
       dataSource = null;
@@ -237,8 +229,27 @@ final class NativePermissionService implements AutoCloseable {
       if (source != null) {
         source.close();
       }
-      throw new IllegalStateException("Native BTC permissions initialization failed", error);
+      throw new IllegalStateException(
+          "Native BTC permissions initialization failed (" + error.getClass().getSimpleName() + ")");
     }
+  }
+
+  /** Pool settings; read-only because the proxy never writes the permission tables (AD-041). */
+  static HikariConfig hikariConfig(final NativePermissionConfig.Config loaded) {
+    final HikariConfig hikari = new HikariConfig();
+    hikari.setJdbcUrl(loaded.jdbcUrl());
+    hikari.setUsername(loaded.username());
+    hikari.setPassword(loaded.password());
+    hikari.setReadOnly(true);
+    // pgjdbc's default readOnlyMode=transaction sends nothing in autocommit, so setReadOnly alone
+    // would not protect; "always" makes the driver enforce it. Set here, not in the user's URL.
+    hikari.addDataSourceProperty("readOnlyMode", "always");
+    hikari.setMaximumPoolSize(4);
+    hikari.setMinimumIdle(1);
+    hikari.setConnectionTimeout(3_000);
+    hikari.setValidationTimeout(2_000);
+    hikari.setPoolName("btc-velocity-permissions");
+    return hikari;
   }
 
   private void startRedis(final NativePermissionConfig.Config loaded) {
