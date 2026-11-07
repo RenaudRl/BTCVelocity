@@ -42,6 +42,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.translation.Argument;
@@ -97,6 +98,15 @@ public class VelocityQueueManager implements QueueManager {
   private int actionBarTick = 0;
 
   /**
+   * How many backend-ping passes between two sweeps of the persisted snapshots (a pass runs every
+   * {@code backend-ping-interval} seconds).
+   */
+  private static final int SNAPSHOT_SWEEP_EVERY_PASSES = 30;
+
+  /** Backend-ping passes made so far; passes run on a pool and may overlap. */
+  private final AtomicInteger pingPasses = new AtomicInteger();
+
+  /**
    * Constructs a new {@link VelocityQueueManager} and starts periodic tasks.
    *
    * <p>The constructor calls {@link #preInitialize()} before filling in server queues
@@ -129,6 +139,14 @@ public class VelocityQueueManager implements QueueManager {
    * Called at the start of the constructor, before the server queue fill-gap loop.
    */
   protected void preInitialize() {
+    // no-op
+  }
+
+  /**
+   * Removes persisted queue snapshots that nothing will ever load or prune again. Called now and
+   * then on the master, from the scheduler thread; nothing to do without a persisted state.
+   */
+  protected void sweepOrphanSnapshots() {
     // no-op
   }
 
@@ -405,7 +423,8 @@ public class VelocityQueueManager implements QueueManager {
    *
    * <p>Ephemeral services (CloudNet {@code Dungeon-7}) each leave a queue behind otherwise: the map
    * only ever grew. A queue with players in it is kept, so a service restarted under the same name
-   * finds its waiting players again.</p>
+   * finds its waiting players again. A dropped queue is {@link VelocityQueue#discard() discarded},
+   * which also removes its snapshot from the Redis depot.</p>
    *
    * @return the names of the dropped queues
    */
@@ -416,7 +435,7 @@ public class VelocityQueueManager implements QueueManager {
       final VelocityQueue queue = entry.getValue();
       if (queue.size() == 0 && !isRegistered.test(entry.getKey())
           && queues.remove(entry.getKey(), queue)) {
-        queue.teardown();
+        queue.discard();
         dropped.add(entry.getKey());
       }
     }
@@ -430,6 +449,10 @@ public class VelocityQueueManager implements QueueManager {
 
     pruneStaleQueues(queues, name -> server.getServer(name).isPresent())
         .forEach(lastTurnedOnlineTime::remove);
+
+    if (pingPasses.incrementAndGet() % SNAPSHOT_SWEEP_EVERY_PASSES == 0) {
+      sweepOrphanSnapshots();
+    }
 
     final List<CompletableFuture<?>> pingFutures = new ArrayList<>();
 

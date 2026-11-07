@@ -31,6 +31,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import net.kyori.adventure.text.Component;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 
@@ -39,7 +41,12 @@ import org.jetbrains.annotations.NotNull;
  */
 public final class RedisVelocityQueue extends VelocityQueue {
 
+  private static final Logger LOGGER = LogManager.getLogger(RedisVelocityQueue.class);
+
   private final VelocityRedis redis;
+
+  /** Set once the manager dropped this queue; from then on no snapshot of it may be written. */
+  private volatile boolean discarded;
 
   /**
    * Creates a fresh Redis-backed queue for the given backend server.
@@ -125,6 +132,32 @@ public final class RedisVelocityQueue extends VelocityQueue {
     persistAsync();
   }
 
+  /**
+   * Drops this queue's snapshot from the Redis depot, after clearing it in memory.
+   *
+   * <p>No final {@link #persistAsync()} here (that is what {@link #teardown()} does): it would
+   * write the emptied queue right back. The depot belongs to the master role, so only the master
+   * removes, and only a snapshot that is empty (atomically, in Redis): a server registered again
+   * under the same name with players waiting keeps its snapshot. Both the master check and the
+   * removal run off the caller's thread. A failure here leaves an empty snapshot for the master's
+   * periodic sweep.</p>
+   */
+  @Override
+  void discard() {
+    discarded = true;
+    super.teardown();
+
+    final String name = getName();
+    CompletableFuture.runAsync(() -> {
+      if (manager.isMasterProxy()) {
+        server.getRedis().getQueueService().removeQueueIfEmpty(name);
+      }
+    }).exceptionally(error -> {
+          LOGGER.warn("Could not remove the Redis snapshot of the dropped queue '{}'", name, error);
+          return null;
+        });
+  }
+
   @Override
   void removeEntry(final VelocityQueueEntry entry) {
     super.removeEntry(entry);
@@ -207,8 +240,15 @@ public final class RedisVelocityQueue extends VelocityQueue {
    * Only executed when this proxy is currently the master.
    */
   private void persistAsync() {
-    if (manager.isMasterProxy()) {
-      CompletableFuture.runAsync(() -> server.getRedis().getQueueService().upsertQueue(this));
-    }
+    // The master check is a Redis read (proxy list): never on the caller's thread, which can be
+    // a Netty event loop.
+    CompletableFuture.runAsync(() -> {
+      // shortcut: the flag is read before the write, not atomically with it; a write already
+      // under way can still land after discard()'s removal, leaving one empty snapshot that the
+      // master's periodic sweep removes.
+      if (!discarded && manager.isMasterProxy()) {
+        server.getRedis().getQueueService().upsertQueue(this);
+      }
+    });
   }
 }

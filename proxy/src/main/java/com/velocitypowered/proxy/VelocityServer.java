@@ -26,7 +26,6 @@ import com.btcvelocity.api.connection.ListenerOrigin;
 import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
 import com.btcvelocity.proxy.bridge.VelocityBridgeChannel;
-import com.btcvelocity.proxy.bridge.WorldRegistry;
 import com.btcvelocity.proxy.network.TrackedListener;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayerService;
 import com.btcvelocity.proxy.cluster.VelocityClusterProxyService;
@@ -328,11 +327,6 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    */
   private @MonotonicNonNull BackendHealthRegistry backendHealthRegistry;
 
-  /**
-   * Registry of the worlds currently loaded on each backend, tracked via the bridge channel.
-   */
-  private @MonotonicNonNull WorldRegistry worldRegistry;
-
   VelocityServer(final ProxyOptions options) {
     pluginManager = new VelocityPluginManager(this);
     eventManager = new VelocityEventManager(pluginManager);
@@ -462,15 +456,6 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
   public boolean isBackendHalfOpen(final String serverName) {
     return backendHealthRegistry != null
         && backendHealthRegistry.circuitState(serverName) == BackendCircuitBreaker.State.HALF_OPEN;
-  }
-
-  /**
-   * Returns the {@link WorldRegistry} that tracks which worlds are loaded on which backends.
-   *
-   * @return the world registry
-   */
-  public WorldRegistry getWorldRegistry() {
-    return worldRegistry;
   }
 
   @Override
@@ -659,13 +644,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
             configuration.getBackendCircuitWindowSeconds() * 1_000L,
             configuration.getBackendCircuitOpenSeconds() * 1_000L,
             System::currentTimeMillis));
-    worldRegistry = new WorldRegistry();
     bridgeChannel.registerListener(backendHealthRegistry::onHealth);
-    bridgeChannel.registerListener(worldRegistry::onWorldLoaded);
-    bridgeChannel.registerListener(worldRegistry::onWorldUnloaded);
-    // The periodic health report lists every loaded world: it reconciles the world view of a
-    // backend, and it is what keeps that view from expiring while the backend is alive and quiet.
-    bridgeChannel.registerListener(worldRegistry::onHealth);
     // Proxy-driven social transport (connect / party warp) from the social extensions.
     bridgeChannel.registerListener(
         new com.btcvelocity.proxy.bridge.SocialTransferHandler(clusterPlayerService, this));
@@ -1251,9 +1230,6 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       // Shut down the btc:bridge channel and its listeners
       if (this.bridgeChannel != null) {
         this.bridgeChannel.shutdown();
-      }
-      if (this.worldRegistry != null) {
-        this.worldRegistry.clear();
       }
 
       shutdownRedis();

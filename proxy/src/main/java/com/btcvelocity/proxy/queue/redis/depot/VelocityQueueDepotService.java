@@ -20,6 +20,7 @@ package com.btcvelocity.proxy.queue.redis.depot;
 import com.btcvelocity.proxy.queue.RedisVelocityQueue;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.btcvelocity.proxy.redis.depot.AbstractDepotService;
+import java.util.Collection;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -49,6 +50,28 @@ public final class VelocityQueueDepotService
    */
   public void upsertQueue(final @NotNull RedisVelocityQueue queue) {
     this.depot.upsert(new VelocityQueueDepotEntry(queue));
+  }
+
+  /**
+   * Removes a server's snapshot if, and only if, it holds nobody, in one atomic step. The depot
+   * belongs to the master role, not to one proxy, so emptiness is the guard: a snapshot with
+   * players in it, or one that cannot be read, stays. It also closes the race with a server that
+   * registers again under the same name while this runs.
+   *
+   * @param serverName the name of the server whose queue is gone
+   * @return {@code true} if the snapshot was removed
+   */
+  public boolean removeQueueIfEmpty(final @NotNull String serverName) {
+    return this.depot.removeIfEmpty(serverName);
+  }
+
+  /**
+   * Returns the server names that have a snapshot.
+   *
+   * @return the keys of the depot
+   */
+  public @NotNull Collection<String> getQueueKeys() {
+    return this.depot.keys();
   }
 
   /**

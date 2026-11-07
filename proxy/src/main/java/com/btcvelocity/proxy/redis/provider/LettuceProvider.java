@@ -134,6 +134,20 @@ public final class LettuceProvider extends AbstractRedisProvider {
       + "return 0\n";
 
   /**
+   * KEYS[1] hash, ARGV: field. Deletes the field only if its JSON has an {@code entries} array
+   * and that array is empty; a missing, null or unreadable entry is kept.
+   */
+  private static final String REMOVE_IF_EMPTY_SCRIPT =
+      "local current = redis.call('HGET', KEYS[1], ARGV[1])\n"
+      + "if not current then return 0 end\n"
+      + "local ok, entry = pcall(cjson.decode, current)\n"
+      + "if ok and type(entry) == 'table' and type(entry.entries) == 'table'"
+      + " and next(entry.entries) == nil then\n"
+      + "  return redis.call('HDEL', KEYS[1], ARGV[1])\n"
+      + "end\n"
+      + "return 0\n";
+
+  /**
    * KEYS[1] hash, ARGV: proxyId. Deletes every field that proxy owns.
    */
   private static final String REMOVE_ALL_OWNED_SCRIPT = OWNER_FUNCTION
@@ -871,6 +885,13 @@ public final class LettuceProvider extends AbstractRedisProvider {
     public boolean removeIfOwner(final @NotNull K key, final @NotNull String proxyId) {
       final Long removed = this.connection.eval(REMOVE_IF_OWNER_SCRIPT, ScriptOutputType.INTEGER,
           new String[] {this.name}, parseKey(key), proxyId);
+      return removed != null && removed > 0;
+    }
+
+    @Override
+    public boolean removeIfEmpty(final @NotNull K key) {
+      final Long removed = this.connection.eval(REMOVE_IF_EMPTY_SCRIPT, ScriptOutputType.INTEGER,
+          new String[] {this.name}, parseKey(key));
       return removed != null && removed > 0;
     }
 

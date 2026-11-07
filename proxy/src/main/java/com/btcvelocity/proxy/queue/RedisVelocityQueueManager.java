@@ -30,7 +30,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Predicate;
 import net.kyori.adventure.text.Component;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.NotNull;
 import static com.btcvelocity.api.queue.ServerStatus.WAITING;
 
@@ -38,6 +41,8 @@ import static com.btcvelocity.api.queue.ServerStatus.WAITING;
  * Redis-aware extension of {@link VelocityQueueManager}.
  */
 public final class RedisVelocityQueueManager extends VelocityQueueManager {
+
+  private static final Logger LOGGER = LogManager.getLogger(RedisVelocityQueueManager.class);
 
   public RedisVelocityQueueManager(final @NotNull VelocityServer server) {
     super(server);
@@ -55,6 +60,42 @@ public final class RedisVelocityQueueManager extends VelocityQueueManager {
             .buildTask(VelocityVirtualPlugin.INSTANCE, this::reloadFromRedis)
             .schedule()
     );
+  }
+
+  /**
+   * The master sweeps the depot: a snapshot of a server that is neither registered nor in memory
+   * is never loaded ({@link #loadFromRedis()} skips it) nor pruned, so an empty one is removed
+   * here. Covers a master that changed, a failed removal and snapshots of an older build.
+   */
+  @Override
+  protected void sweepOrphanSnapshots() {
+    try {
+      final List<String> removed = removeOrphanSnapshots(server.getRedis().getQueueService(),
+          name -> server.getServer(name).isPresent() || queues.containsKey(name));
+      if (!removed.isEmpty()) {
+        LOGGER.info("Removed {} orphaned queue snapshot(s) from Redis: {}", removed.size(), removed);
+      }
+    } catch (RuntimeException e) {
+      LOGGER.warn("Could not sweep the orphaned queue snapshots in Redis", e);
+    }
+  }
+
+  /**
+   * Removes the empty snapshots of servers that are not known.
+   *
+   * @param service the queue depot
+   * @param isKnown whether a server name is registered or has a queue in memory
+   * @return the names whose snapshot was removed
+   */
+  static List<String> removeOrphanSnapshots(final VelocityQueueDepotService service,
+                                            final Predicate<String> isKnown) {
+    final List<String> removed = new ArrayList<>();
+    for (final String name : List.copyOf(service.getQueueKeys())) {
+      if (!isKnown.test(name) && service.removeQueueIfEmpty(name)) {
+        removed.add(name);
+      }
+    }
+    return removed;
   }
 
   @Override
