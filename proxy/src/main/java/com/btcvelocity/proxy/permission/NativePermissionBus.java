@@ -57,6 +57,8 @@ final class NativePermissionBus {
   private final AtomicLong subscriptionsAtDisconnect = new AtomicLong();
 
   /**
+   * Builds a bus that is idle until {@link #attach} subscribes it.
+   *
    * @param onResubscribed          every confirmed subscription but the first
    * @param onResubscriptionMissing a reconnection not confirmed within {@link #RESUBSCRIBE_GRACE}
    * @param graceDelay              runs a task {@link #RESUBSCRIBE_GRACE} later

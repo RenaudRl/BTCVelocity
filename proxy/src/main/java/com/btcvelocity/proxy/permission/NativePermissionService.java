@@ -174,6 +174,17 @@ final class NativePermissionService implements AutoCloseable {
     return awaitLoaded(subject);
   }
 
+  CompletableFuture<Void> awaitLoaded(final UUID subject, final Duration timeout) {
+    return load(subject)
+        .<Void>handle((snapshot, error) -> null)
+        .orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
+        .exceptionally(timedOut -> {
+          LOGGER.warn("Native BTC permissions snapshot of {} is not ready after {} ms; the player enters"
+              + " without rights and the load continues.", subject, timeout.toMillis());
+          return null;
+        });
+  }
+
   /**
    * Ends {@code session}, and evicts the account when it was its last (M4). A session that never
    * loaded holds nothing, so a refused duplicate login evicts nothing. The eviction runs inside the
@@ -188,17 +199,6 @@ final class NativePermissionService implements AutoCloseable {
       evict(key);
       return null;
     });
-  }
-
-  CompletableFuture<Void> awaitLoaded(final UUID subject, final Duration timeout) {
-    return load(subject)
-        .<Void>handle((snapshot, error) -> null)
-        .orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
-        .exceptionally(timedOut -> {
-          LOGGER.warn("Native BTC permissions snapshot of {} is not ready after {} ms; the player enters"
-              + " without rights and the load continues.", subject, timeout.toMillis());
-          return null;
-        });
   }
 
   CompletableFuture<NativePermissionSnapshot> load(final UUID subject) {
