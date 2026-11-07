@@ -19,7 +19,9 @@ package com.velocitypowered.proxy.connection.client;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.btcvelocity.api.event.connection.ConnectionEstablishEvent;
+import com.btcvelocity.proxy.security.HandshakeHosts;
 import com.velocitypowered.api.event.connection.ConnectionHandshakeEvent;
 import com.velocitypowered.api.network.HandshakeIntent;
 import com.velocitypowered.api.network.ProtocolState;
@@ -67,6 +69,9 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
 
   private final VelocityServer server;
 
+  // Written and read on the connection's event loop only.
+  private boolean handshakeReceived;
+
   /**
    * The configured minimum version string used to validate connecting clients.
    */
@@ -85,8 +90,26 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
         .orElse(ProtocolVersion.MAXIMUM_VERSION.getMostRecentSupportedVersion());
   }
 
+  /**
+   * Whether the client has sent its handshake (or a legacy ping/handshake). A connection that has
+   * not, after the handshake deadline, is closed by the channel initializer.
+   *
+   * @return {@code true} once a handshake packet has arrived
+   */
+  public boolean isHandshakeReceived() {
+    return this.handshakeReceived;
+  }
+
   @Override
   public boolean handle(final LegacyPingPacket packet) {
+    this.handshakeReceived = true;
+    // A 1.6 ping carries a host, the older ones none (read as "", so enforce refuses them): it must
+    // not hand out the MOTD and player count to a client the list would refuse.
+    final InetSocketAddress legacyHost = packet.getVhost();
+    if (hostRefused(legacyHost == null ? "" : legacyHost.getHostString())) {
+      connection.close(true);
+      return true;
+    }
     connection.setProtocolVersion(ProtocolVersion.LEGACY);
     final StatusSessionHandler handler = new StatusSessionHandler(server, new LegacyInboundConnection(connection, packet));
     connection.setActiveSessionHandler(StateRegistry.STATUS, handler);
@@ -96,6 +119,7 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
 
   @Override
   public boolean handle(final LegacyHandshakePacket packet) {
+    this.handshakeReceived = true;
     connection.closeWith(LegacyDisconnect.from(Component.text(
         "Your client is extremely old. Please update to a newer version of Minecraft.",
         NamedTextColor.RED)
@@ -106,9 +130,12 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
 
   @Override
   public boolean handle(final HandshakePacket handshake) {
+    this.handshakeReceived = true;
     final StateRegistry nextState = getStateForProtocol(handshake.getNextStatus());
     if (nextState == null) {
       LOGGER.error("{} provided invalid protocol {}", this, handshake.getNextStatus());
+      connection.close(true);
+    } else if (this.hostRefused(handshake)) {
       connection.close(true);
     } else {
       final InitialInboundConnection ic = new InitialInboundConnection(connection, cleanVhost(handshake.getServerAddress()), handshake);
@@ -143,6 +170,18 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
     }
 
     return true;
+  }
+
+  /** Whether the handshake host is outside the allow list in enforce mode (counted either way). */
+  private boolean hostRefused(final HandshakePacket handshake) {
+    return hostRefused(handshake.getServerAddress());
+  }
+
+  private boolean hostRefused(final String serverAddress) {
+    // Geyser sends the address from its own config, not a public name: that listener is not judged.
+    final boolean geyser = connection.getListenerName().filter(ListenerOrigin.GEYSER::equals).isPresent();
+    return server.getConnectionAdmission().checkHost(serverAddress, geyser)
+        == HandshakeHosts.Verdict.REFUSE;
   }
 
   private static @Nullable StateRegistry getStateForProtocol(final int status) {

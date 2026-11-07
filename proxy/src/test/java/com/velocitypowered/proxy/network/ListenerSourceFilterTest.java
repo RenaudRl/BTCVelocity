@@ -57,6 +57,7 @@ class ListenerSourceFilterTest {
     final VelocityServer server = mock(VelocityServer.class);
     final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
     when(server.getConfiguration()).thenReturn(configuration);
+    when(server.getConnectionAdmission()).thenReturn(NoAdmission.checks());
     when(configuration.isProxyProtocol()).thenReturn(mainFlag);
     when(configuration.getProxyProtocolTrustedProxies())
         .thenReturn(TrustedProxies.parse(TrustedProxies.DEFAULT_ENTRIES));

@@ -299,6 +299,52 @@ geyser-listener = ""
 #   iptables -A OUTPUT -o lo -p tcp --dport <port> -m owner ! --uid-owner <geyser-uid> -j REJECT
 geyser-listener-trusted-proxies = ["127.0.0.0/8", "::1/128"]
 
+# What to do with a connection whose handshake host (the name the player typed) is neither in
+# handshake-allowed-hosts nor a forced host. Scanners arrive with the IP address as the host.
+#   "off"     checks nothing (default).
+#   "observe" lets everyone in, counts the unlisted hosts (btc_proxy_admission_total on /metrics) and
+#             logs each new one once. Start here, read the log, complete the list.
+#   "enforce" closes the connection without an answer. Refused at startup if handshake-allowed-hosts
+#             is empty (the forced hosts do not count: the example ones below would pass).
+# The handshake host is not always what the player typed: with an SRV record it is the record's
+# target (often with a trailing dot, which is ignored), and a cluster transfer (/transfer, the Redis
+# routes) connects to the target proxy's IP address, which must be listed. The TRANSFER intent is
+# NOT exempted. The Geyser listener is never judged. Case, the DNS root dot and the Forge marker
+# (\0FML\0) are ignored in the comparison. A legacy (1.6) ping is judged too; the oldest ones carry
+# no host and are refused by enforce.
+# To try it, set: handshake-host-filter = "observe"
+handshake-host-filter = "off"
+
+# Exact host names or addresses, no port, no wildcard, no network: an entry with a port, '*' or '/'
+# never matches and is warned about. An IPv6 address literal is accepted, without brackets
+# ("2001:db8::1"). Forced hosts are also allowed, but do not replace this list in enforce mode.
+# List the public names, the SRV targets, the IP address of this proxy that cluster transfers use,
+# and the IP or name staff and health checks connect with.
+handshake-allowed-hosts = []
+
+# New connections a single source may open per connection-rate-window-ms, status pings included,
+# counted before the handshake is read (login-ratelimit above only sees logins). The source is the
+# client address after the PROXY protocol, an IPv6 address counts as its /64. Over the limit, the
+# connection is closed without an answer. 0 (the default) turns it off.
+# CAUTION: behind one NAT, one load balancer WITHOUT the PROXY protocol, or a cluster of players
+# sharing an address, all players are ONE source: a low value locks them out. Leave it off unless
+# the real client address reaches the proxy; then start high (for example 20 per 10 s) and watch
+# btc_proxy_admission_total{result="rate_limited"}.
+connection-rate-limit = 0
+
+# Length of that window, in milliseconds.
+connection-rate-window-ms = 10000
+
+# Sources never limited (address or CIDR, never a host name; at most /8 for IPv4): monitoring,
+# your own tools. Add the local address Geyser connects from, and the one SoulFire bots use, if
+# either runs on this network: they open many connections from a single address.
+connection-rate-exempt = []
+
+# Slow-loris guard: a connection that has not sent its handshake after this many milliseconds is
+# closed, long before read-timeout. A handshake is a single small packet, so 5000 is generous; it
+# also covers the PROXY protocol header. 0 (the default) means no deadline, only read-timeout.
+handshake-timeout-ms = 0
+
 # Enables TCP fast open support on the proxy. Requires the proxy to run on Linux.
 tcp-fast-open = false
 

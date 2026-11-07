@@ -118,6 +118,7 @@ public final class ObservabilityService implements AutoCloseable {
         server.getServerListPingHandler().getStatusCache().misses(),
         redis == null ? 0 : redis.getPlayerService().getDuplicateSessionsClosed(),
         redis == null ? 0 : redis.getPlayerService().getDuplicateForcedCloses(),
+        server.getAdmissionStats().snapshot(),
         watchdog == null ? List.of() : watchdog.readings());
   }
 

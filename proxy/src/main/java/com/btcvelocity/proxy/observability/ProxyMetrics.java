@@ -18,6 +18,7 @@
 package com.btcvelocity.proxy.observability;
 
 import com.btcvelocity.proxy.bridge.BridgeMetrics;
+import com.btcvelocity.proxy.security.AdmissionStats;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.util.List;
@@ -48,6 +49,7 @@ public final class ProxyMetrics {
    *                          Redis is off)
    * @param duplicateForcedCloses duplicate sessions whose connection had to be closed by force (0
    *                              when Redis is off)
+   * @param admission pre-handshake admission counters, by outcome
    * @param loops event loop readings (empty when the watchdog is off)
    * @return the exposition text
    */
@@ -56,6 +58,7 @@ public final class ProxyMetrics {
                               final Map<BridgeMetrics.Event, Long> bridge,
                               final long statusCacheHits, final long statusCacheMisses,
                               final long duplicateSessions, final long duplicateForcedCloses,
+                              final Map<AdmissionStats.Result, Long> admission,
                               final List<LoopWatchdog.Reading> loops) {
     final StringBuilder out = new StringBuilder(2048);
 
@@ -91,6 +94,14 @@ public final class ProxyMetrics {
         "Duplicate sessions that outlived their disconnect and had their connection closed by force.");
     out.append("btc_proxy_cluster_duplicate_forced_closes_total ")
         .append(duplicateForcedCloses).append('\n');
+
+    header(out, "btc_proxy_admission_total", "counter",
+        "Connections judged before the handshake completes, by outcome (host_observed and "
+            + "host_refused: handshake host outside the allow list).");
+    admission.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .forEach(entry -> sample(out, "btc_proxy_admission_total", "result",
+            entry.getKey().name().toLowerCase(Locale.ROOT), String.valueOf(entry.getValue())));
 
     header(out, "btc_proxy_eventloop_lag_seconds", "gauge",
         "How late the last task marker ran on each Netty event loop.");

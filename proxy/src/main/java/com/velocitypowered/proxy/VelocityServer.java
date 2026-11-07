@@ -52,6 +52,8 @@ import com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory;
 import com.btcvelocity.proxy.queue.RedisVelocityQueueManager;
 import com.btcvelocity.proxy.queue.VelocityQueueManager;
 import com.btcvelocity.proxy.redis.VelocityRedis;
+import com.btcvelocity.proxy.security.AdmissionStats;
+import com.btcvelocity.proxy.security.ConnectionAdmission;
 import com.btcvelocity.proxy.storage.PostgresConfiguration;
 import com.btcvelocity.proxy.storage.PostgresPool;
 import com.btcvelocity.proxy.storage.VelocityStorageService;
@@ -247,6 +249,10 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
   private final VelocityConsole console;
 
   private @MonotonicNonNull Ratelimiter<InetAddress> ipAttemptLimiter;
+
+  private final AdmissionStats admissionStats = new AdmissionStats();
+
+  private volatile @MonotonicNonNull ConnectionAdmission connectionAdmission;
 
   private @MonotonicNonNull Ratelimiter<UUID> commandRateLimiter;
 
@@ -655,6 +661,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     translationRegistryManager.registerTranslations();
 
     ipAttemptLimiter = Ratelimiters.createWithMilliseconds(configuration.getLoginRatelimit());
+    connectionAdmission = configuration.createConnectionAdmission(admissionStats);
     commandRateLimiter = Ratelimiters.createWithMilliseconds(configuration.getCommandRatelimit());
     tabCompleteRateLimiter = Ratelimiters.createWithMilliseconds(configuration.getTabCompleteRatelimit());
     loadPlugins();
@@ -925,6 +932,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
     commandManager.setAnnounceProxyCommands(newConfiguration.isAnnounceProxyCommands());
     ipAttemptLimiter = Ratelimiters.createWithMilliseconds(newConfiguration.getLoginRatelimit());
+    connectionAdmission = newConfiguration.createConnectionAdmission(admissionStats);
     this.configuration = newConfiguration;
     eventManager.fireAndForget(new ProxyReloadEvent());
 
@@ -1406,6 +1414,19 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
   public @MonotonicNonNull Ratelimiter<InetAddress> getIpAttemptLimiter() {
     return ipAttemptLimiter;
+  }
+
+  /**
+   * The pre-handshake checks of the current configuration.
+   *
+   * @return the checks, rebuilt on reload
+   */
+  public ConnectionAdmission getConnectionAdmission() {
+    return connectionAdmission;
+  }
+
+  public AdmissionStats getAdmissionStats() {
+    return admissionStats;
   }
 
   public @MonotonicNonNull Ratelimiter<UUID> getCommandRateLimiter() {

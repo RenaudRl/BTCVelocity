@@ -31,4 +31,20 @@ public final class Ratelimiters {
   public static Ratelimiter createWithMilliseconds(final long ms) {
     return ms <= 0 ? NoopCacheRatelimiter.INSTANCE : new CaffeineCacheRatelimiter(ms, TimeUnit.MILLISECONDS);
   }
+
+  /**
+   * A limiter that allows {@code limit} attempts per key in each window.
+   *
+   * @param limit attempts allowed per window; 0 or less turns the limiter off
+   * @param windowMillis the window, at least 1 when the limiter is on
+   * @param maxKeys keys followed at once; the least recently used are forgotten beyond that
+   * @param <T> the type of key
+   * @return the limiter
+   */
+  @SuppressWarnings("unchecked")
+  public static <T> Ratelimiter<T> createWindowed(final int limit, final long windowMillis,
+      final long maxKeys) {
+    return limit <= 0 ? (Ratelimiter<T>) NoopCacheRatelimiter.INSTANCE
+        : new WindowedRatelimiter<>(limit, windowMillis, maxKeys);
+  }
 }

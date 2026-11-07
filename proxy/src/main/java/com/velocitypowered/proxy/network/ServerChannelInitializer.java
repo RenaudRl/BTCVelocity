@@ -26,6 +26,7 @@ import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 import static com.velocitypowered.proxy.network.Connections.READ_TIMEOUT;
 
 import com.btcvelocity.api.connection.ListenerOrigin;
+import com.btcvelocity.proxy.security.ConnectionAdmission;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
@@ -44,8 +45,10 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
 import io.netty.handler.timeout.ReadTimeoutHandler;
+import io.netty.util.concurrent.ScheduledFuture;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
@@ -86,6 +89,29 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
         : configuration.getProxyProtocolTrustedProxies();
   }
 
+  /**
+   * Closes the channel if its handshake has not arrived within the configured deadline (slow-loris
+   * guard, well before the read timeout). Does nothing when the deadline is off.
+   *
+   * @param ch the new channel
+   * @param admission the checks of the current configuration
+   * @param handshakeReceived whether the client has sent its handshake yet
+   */
+  static void scheduleHandshakeDeadline(final Channel ch, final ConnectionAdmission admission,
+      final BooleanSupplier handshakeReceived) {
+    final long timeout = admission.handshakeTimeoutMillis();
+    if (timeout <= 0) {
+      return;
+    }
+    final ScheduledFuture<?> deadline = ch.eventLoop().schedule(() -> {
+      if (ch.isActive() && !handshakeReceived.getAsBoolean()) {
+        admission.recordHandshakeTimeout();
+        ch.close();
+      }
+    }, timeout, TimeUnit.MILLISECONDS);
+    ch.closeFuture().addListener(closed -> deadline.cancel(false));
+  }
+
   @Override
   protected void initChannel(final Channel ch) {
     // A source that may not send a PROXY header never gets here: ListenerSourceFilter closes it
@@ -93,6 +119,11 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
     // The filter's decision, not the configuration (it may have been reloaded since). A channel the
     // filter never saw has no decision: no PROXY decoder for a source nobody verified.
     final boolean proxyProtocol = Boolean.TRUE.equals(ch.attr(Connections.PROXY_PROTOCOL).get());
+
+    // The connection limit is applied earlier, by ListenerSourceFilter (direct peer) or when the
+    // PROXY header arrives (MinecraftConnection): refusing here would hand a plugin that wraps this
+    // initializer (Floodgate) a channel without a pipeline.
+    final ConnectionAdmission admission = this.server.getConnectionAdmission();
 
     ch.pipeline()
         .addLast(LEGACY_PING_DECODER, new LegacyPingDecoder())
@@ -104,9 +135,10 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
         .addLast(MINECRAFT_ENCODER, new MinecraftEncoder(ProtocolUtils.Direction.CLIENTBOUND));
 
     final MinecraftConnection connection = new MinecraftConnection(ch, this.server, UUID.randomUUID());
-    connection.setActiveSessionHandler(StateRegistry.HANDSHAKE,
-        new HandshakeSessionHandler(connection, this.server));
+    final HandshakeSessionHandler handshakeHandler = new HandshakeSessionHandler(connection, this.server);
+    connection.setActiveSessionHandler(StateRegistry.HANDSHAKE, handshakeHandler);
     ch.pipeline().addLast(Connections.HANDLER, connection);
+    scheduleHandshakeDeadline(ch, admission, handshakeHandler::isHandshakeReceived);
 
     VelocityConfiguration.PacketLimiterConfig packetLimiterConfig =
         server.getConfiguration().getPacketLimiterConfig();
