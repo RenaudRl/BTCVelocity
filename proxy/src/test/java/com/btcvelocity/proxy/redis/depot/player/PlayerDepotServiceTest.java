@@ -612,8 +612,38 @@ class PlayerDepotServiceTest {
     depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
     service.releaseForTransfer(List.of(alice.getUniqueId()));
 
-    service.keepPlayers();
+    service.keepPlayers(List.of(alice.getUniqueId()));
     repair();
+
+    assertNotNull(depot.map.get(alice.getUniqueId()));
+  }
+
+  @Test
+  void liftingTheHoldOfOnePlayerLeavesThePlayersAlreadySentHeld() {
+    final ConnectedPlayer alice = join("alice");
+    final ConnectedPlayer bob = join("bob");
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    depot.put(entry(bob.getUniqueId(), "bob", SELF, "lobby"));
+    service.releaseForTransfer(List.of(alice.getUniqueId(), bob.getUniqueId()));
+
+    service.keepPlayers(List.of(alice.getUniqueId())); // bob was sent: its hold runs out alone
+    repair();
+
+    assertNotNull(depot.map.get(alice.getUniqueId()), "the player that stays is repaired");
+    assertNull(depot.map.get(bob.getUniqueId()), "a recreated entry would be refused as duplicate");
+  }
+
+  @Test
+  void aRefusedPlayerGetsItsEntryBackAtTheNextRepairWithoutWaitingForTheHold() {
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    service.releaseForTransfer(List.of(alice.getUniqueId()));
+    advance(Duration.ofSeconds(1)); // far less than HANDOVER_HOLD
+    service.refreshNow();
+    assertNull(depot.map.get(alice.getUniqueId()), "still held");
+
+    service.keepPlayers(List.of(alice.getUniqueId())); // the target refused her
+    service.refreshNow();
 
     assertNotNull(depot.map.get(alice.getUniqueId()));
   }

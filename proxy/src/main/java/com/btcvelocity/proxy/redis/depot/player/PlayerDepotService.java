@@ -274,7 +274,7 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    *
    * <p>The players are held out of {@link #refreshNow()} and the entry updates for
    * {@link #HANDOVER_HOLD}. One that is still connected here after that was not transferred, and
-   * the repair claims it again. {@link #keepPlayers()} lifts the hold at once.</p>
+   * the repair claims it again. {@link #keepPlayers(Collection)} lifts the hold at once.</p>
    *
    * @param uniqueIds the players to hand over
    * @return {@code false} if the removal did not finish in time: nothing is held back any more and
@@ -303,11 +303,14 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   }
 
   /**
-   * Lifts the hold of {@link #releaseForTransfer(Collection)}: the repair writes this proxy's
-   * remaining players back within a refresh interval. Called when a drain is cancelled.
+   * Lifts the hold of {@link #releaseForTransfer(Collection)} for these players only: the repair
+   * writes them back within a refresh interval. The others stay held (they were sent, and the
+   * hold expires on its own). Called when a drain is cancelled or a transfer is refused.
+   *
+   * @param uniqueIds the players that stay on this proxy
    */
-  public void keepPlayers() {
-    this.handedOver.clear();
+  public void keepPlayers(final @NotNull Collection<UUID> uniqueIds) {
+    this.handedOver.keySet().removeAll(uniqueIds);
   }
 
   /**

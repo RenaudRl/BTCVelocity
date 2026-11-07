@@ -1328,9 +1328,9 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       }
 
       @Override
-      public void keepPlayers() {
+      public void keepPlayers(final Collection<UUID> players) {
         if (redis != null) {
-          redis.getPlayerService().keepPlayers();
+          redis.getPlayerService().keepPlayers(players);
         }
       }
     };

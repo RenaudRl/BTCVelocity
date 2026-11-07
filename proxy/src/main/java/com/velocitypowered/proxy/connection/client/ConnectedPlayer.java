@@ -1471,7 +1471,8 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
    * transfer went out (the drain counts only the players it really sent).
    *
    * @param address where to transfer the player
-   * @return a future completed with {@code true} once the transfer packet was written, or
+   * @return a future completed with {@code true} once the transfer packet was queued on the
+   *         connection (not once it was flushed: a write that fails later is not reported), or
    *         {@code false} if a {@link PreTransferEvent} handler denied the transfer
    */
   public CompletableFuture<Boolean> requestTransfer(final @NotNull InetSocketAddress address) {

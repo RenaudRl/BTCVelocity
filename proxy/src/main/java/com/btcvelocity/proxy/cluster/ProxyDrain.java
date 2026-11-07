@@ -88,9 +88,13 @@ public final class ProxyDrain {
     boolean releasePlayers(Collection<UUID> players);
 
     /**
-     * Takes back the players released and not yet gone: the drain was cancelled. Not blocking.
+     * Takes back players released and not gone (drain cancelled, pass abandoned, transfer refused):
+     * their entries are written again. The others stay released; their hold expires by itself.
+     * Not blocking.
+     *
+     * @param players the players that stay on this proxy
      */
-    void keepPlayers();
+    void keepPlayers(Collection<UUID> players);
   }
 
   /**
@@ -136,6 +140,8 @@ public final class ProxyDrain {
   private final Set<UUID> refused = ConcurrentHashMap.newKeySet();
   /** Held by a pass, so a slow one is not overtaken by the next: both would pick the same batch. */
   private final ReentrantLock passLock = new ReentrantLock();
+  /** The batch released and not yet sent: what a cancel takes back. Cleared under {@code this}. */
+  private volatile List<UUID> unsent = List.of();
   private volatile boolean draining;
   private volatile boolean passesStopped;
   private @Nullable Runnable stopTask; // guarded by this
@@ -197,8 +203,12 @@ public final class ProxyDrain {
     }
     this.draining = false;
     stopPasses();
-    // Players freed for a transfer that is not coming keep their entry from now on.
-    this.cluster.keepPlayers();
+    // Only what did not leave: players already sent are not on this proxy any more, and their
+    // hold expires by itself. Lifting it would let the repair recreate an entry the target refuses.
+    if (!this.unsent.isEmpty()) {
+      this.cluster.keepPlayers(this.unsent);
+      this.unsent = List.of();
+    }
     publishMark(false);
     return true;
   }
@@ -261,15 +271,23 @@ public final class ProxyDrain {
       return; // retried at the next pass
     }
     // Without their entries, the peer's claim cannot be refused as a duplicate of this proxy's.
-    if (!releasePlayers(batch.stream().map(ConnectedPlayer::getUniqueId).toList())) {
+    final List<UUID> uniqueIds = batch.stream().map(ConnectedPlayer::getUniqueId).toList();
+    this.unsent = uniqueIds;
+    if (!releasePlayers(uniqueIds)) {
+      this.unsent = List.of(); // not released: the service holds nothing back
       return; // retried at the next pass
     }
-    if (!isRunning()) {
-      this.cluster.keepPlayers(); // cancelled while releasing: the entries go back
-      return;
-    }
-    for (final ConnectedPlayer player : batch) {
-      send(player, target);
+    // Read and send under the monitor: a cancel cannot come between the two (requestTransfer only
+    // queues the packet), so it takes back exactly the players not sent.
+    synchronized (this) {
+      if (isRunning()) {
+        for (final ConnectedPlayer player : batch) {
+          send(player, target);
+        }
+      } else {
+        this.cluster.keepPlayers(uniqueIds); // cancelled while releasing: the entries go back
+      }
+      this.unsent = List.of();
     }
   }
 
@@ -296,6 +314,8 @@ public final class ProxyDrain {
   private void refuse(final UUID uniqueId) {
     this.refused.add(uniqueId);
     this.sent.remove(uniqueId);
+    // It stays here: otherwise its entry would only come back when the hold expires.
+    this.cluster.keepPlayers(List.of(uniqueId));
   }
 
   /** Clients older than 1.20.5 have no transfer packet; Geyser has no Bedrock host to give. */

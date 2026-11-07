@@ -67,9 +67,12 @@ class ProxyDrainTest {
   /** What happened, in order: "release" when players were freed, "send" for each transfer. */
   private final List<String> events = new CopyOnWriteArrayList<>();
   private final AtomicBoolean releaseFails = new AtomicBoolean();
-  private final AtomicInteger kept = new AtomicInteger();
+  /** The players taken back, in order, over all the {@code keepPlayers} calls. */
+  private final List<UUID> kept = new CopyOnWriteArrayList<>();
   /** Runs inside {@code pickTarget}, to let a test act while a pass waits on Redis. */
   private final AtomicReference<Runnable> duringPick = new AtomicReference<>(() -> { });
+  /** Runs inside {@code releasePlayers}, to let a test act while the entries are being freed. */
+  private final AtomicReference<Runnable> duringRelease = new AtomicReference<>(() -> { });
 
   private final ProxyDrain drain = new ProxyDrain(new ProxyDrain.Cluster() {
     @Override
@@ -90,12 +93,13 @@ class ProxyDrainTest {
     @Override
     public boolean releasePlayers(final Collection<UUID> players) {
       events.add("release");
+      duringRelease.get().run();
       return !releaseFails.get();
     }
 
     @Override
-    public void keepPlayers() {
-      kept.incrementAndGet();
+    public void keepPlayers(final Collection<UUID> players) {
+      kept.addAll(players);
     }
   }, () -> List.copyOf(online), repeated -> {
     task.set(repeated);
@@ -382,23 +386,63 @@ class ProxyDrainTest {
     final ConnectedPlayer player = join(ProtocolVersion.MAXIMUM_VERSION);
     drain.start();
     duringPick.set(drain::cancel);
-    final int keptBefore = kept.get();
 
     pass();
 
     verify(player, never()).requestTransfer(any());
-    assertEquals(keptBefore + 1, kept.get(), "only the cancel gives entries back");
+    assertTrue(kept.isEmpty(), "nobody was freed yet: nothing to give back");
     assertFalse(events.contains("release"), "the pass stopped before freeing anyone");
   }
 
   @Test
-  void cancellingGivesTheFreedEntriesBack() {
+  void cancellingWhileTheEntriesAreFreedGivesTheBatchBackAndSendsNobody() {
+    final ConnectedPlayer player = join(ProtocolVersion.MAXIMUM_VERSION);
     drain.start();
-    final int keptBefore = kept.get();
+    duringRelease.set(drain::cancel);
+
+    pass();
+
+    verify(player, never()).requestTransfer(any());
+    assertEquals(List.of(player.getUniqueId()), kept.stream().distinct().toList());
+  }
+
+  @Test
+  void cancellingAfterABatchWasSentTakesBackNobodyThatLeft() {
+    final ConnectedPlayer gone = join(ProtocolVersion.MAXIMUM_VERSION);
+    drain.start();
+    pass();
+    final ConnectedPlayer staying = join(ProtocolVersion.MAXIMUM_VERSION);
+    duringRelease.set(drain::cancel); // the second batch is being freed when the cancel comes
+
+    pass();
+
+    assertFalse(kept.contains(gone.getUniqueId()), "a sent player's hold must run out by itself");
+    assertTrue(kept.contains(staying.getUniqueId()), "a player not sent gets its entry back");
+    verify(staying, never()).requestTransfer(any());
+  }
+
+  @Test
+  void cancellingWithNothingInFlightTakesBackNobody() {
+    join(ProtocolVersion.MAXIMUM_VERSION);
+    drain.start();
+    pass();
 
     drain.cancel();
 
-    assertEquals(keptBefore + 1, kept.get());
+    assertTrue(kept.isEmpty(), "the only player was sent; nobody is left unsent");
+  }
+
+  @Test
+  void aRefusedPlayerIsTakenBackAtOnceAndOnlyHim() {
+    final ConnectedPlayer denied = join(ProtocolVersion.MAXIMUM_VERSION);
+    when(denied.requestTransfer(any())).thenReturn(CompletableFuture.completedFuture(false));
+    final ConnectedPlayer fine = join(ProtocolVersion.MAXIMUM_VERSION);
+    drain.start();
+
+    pass();
+
+    assertEquals(List.of(denied.getUniqueId()), kept);
+    assertFalse(kept.contains(fine.getUniqueId()));
   }
 
   @Test
