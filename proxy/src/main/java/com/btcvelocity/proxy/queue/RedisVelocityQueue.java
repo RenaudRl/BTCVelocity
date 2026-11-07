@@ -136,8 +136,11 @@ public final class RedisVelocityQueue extends VelocityQueue {
    * Drops this queue's snapshot from the Redis depot, after clearing it in memory.
    *
    * <p>No final {@link #persistAsync()} here (that is what {@link #teardown()} does): it would
-   * write the emptied queue right back. The removal only touches a snapshot this proxy wrote, so
-   * a snapshot of another proxy survives it, and it runs off the caller's thread.</p>
+   * write the emptied queue right back. The depot belongs to the master role, so only the master
+   * removes, and only a snapshot that is empty (atomically, in Redis): a server registered again
+   * under the same name with players waiting keeps its snapshot. Both the master check and the
+   * removal run off the caller's thread. A failure here leaves an empty snapshot for the master's
+   * periodic sweep.</p>
    */
   @Override
   void discard() {
@@ -145,8 +148,11 @@ public final class RedisVelocityQueue extends VelocityQueue {
     super.teardown();
 
     final String name = getName();
-    CompletableFuture.runAsync(() -> server.getRedis().getQueueService().removeQueueIfOwner(name))
-        .exceptionally(error -> {
+    CompletableFuture.runAsync(() -> {
+      if (manager.isMasterProxy()) {
+        server.getRedis().getQueueService().removeQueueIfEmpty(name);
+      }
+    }).exceptionally(error -> {
           LOGGER.warn("Could not remove the Redis snapshot of the dropped queue '{}'", name, error);
           return null;
         });
@@ -234,15 +240,15 @@ public final class RedisVelocityQueue extends VelocityQueue {
    * Only executed when this proxy is currently the master.
    */
   private void persistAsync() {
-    if (manager.isMasterProxy()) {
+    // The master check is a Redis read (proxy list): never on the caller's thread, which can be
+    // a Netty event loop.
+    CompletableFuture.runAsync(() -> {
       // shortcut: the flag is read before the write, not atomically with it; a write already
-      // under way can still land after discard()'s removal, leaving one empty snapshot. Harmless
-      // (a registered server's queue reloads empty), tolerated until it shows up.
-      CompletableFuture.runAsync(() -> {
-        if (!discarded) {
-          server.getRedis().getQueueService().upsertQueue(this);
-        }
-      });
-    }
+      // under way can still land after discard()'s removal, leaving one empty snapshot that the
+      // master's periodic sweep removes.
+      if (!discarded && manager.isMasterProxy()) {
+        server.getRedis().getQueueService().upsertQueue(this);
+      }
+    });
   }
 }

@@ -97,6 +97,15 @@ public class VelocityQueueManager implements QueueManager {
   private int actionBarTick = 0;
 
   /**
+   * How many backend-ping passes between two sweeps of the persisted snapshots (a pass runs every
+   * {@code backend-ping-interval} seconds).
+   */
+  private static final int SNAPSHOT_SWEEP_EVERY_PASSES = 30;
+
+  /** Backend-ping passes made so far; only the scheduler thread touches it. */
+  private int pingPasses = 0;
+
+  /**
    * Constructs a new {@link VelocityQueueManager} and starts periodic tasks.
    *
    * <p>The constructor calls {@link #preInitialize()} before filling in server queues
@@ -129,6 +138,14 @@ public class VelocityQueueManager implements QueueManager {
    * Called at the start of the constructor, before the server queue fill-gap loop.
    */
   protected void preInitialize() {
+    // no-op
+  }
+
+  /**
+   * Removes persisted queue snapshots that nothing will ever load or prune again. Called now and
+   * then on the master, from the scheduler thread; nothing to do without a persisted state.
+   */
+  protected void sweepOrphanSnapshots() {
     // no-op
   }
 
@@ -431,6 +448,10 @@ public class VelocityQueueManager implements QueueManager {
 
     pruneStaleQueues(queues, name -> server.getServer(name).isPresent())
         .forEach(lastTurnedOnlineTime::remove);
+
+    if (++pingPasses % SNAPSHOT_SWEEP_EVERY_PASSES == 0) {
+      sweepOrphanSnapshots();
+    }
 
     final List<CompletableFuture<?>> pingFutures = new ArrayList<>();
 

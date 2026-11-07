@@ -19,8 +19,6 @@ package com.btcvelocity.proxy.queue.redis.depot;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
@@ -30,6 +28,7 @@ import com.btcvelocity.api.queue.QueueState;
 import com.btcvelocity.api.queue.ServerStatus;
 import com.btcvelocity.proxy.queue.RedisVelocityQueue;
 import com.btcvelocity.proxy.redis.VelocityRedis;
+import com.btcvelocity.proxy.redis.depot.Depot;
 import com.btcvelocity.proxy.redis.packet.PacketSerializer;
 import com.btcvelocity.proxy.redis.provider.LettuceProvider;
 import com.velocitypowered.api.scheduler.Scheduler;
@@ -43,12 +42,12 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
- * Two proxies' queue depot services against one real Redis: a proxy removes only the queue
- * snapshots it wrote.
+ * The queue depot against one real Redis: a snapshot is removed only when it is empty, whoever
+ * wrote it.
  *
- * <p>Opt-in, against the container the player depot test uses: {@code -PredisIntegration
- * -PredisContainer=name -PredisPort=56391 [-PredisImage=valkey/valkey:8.1.1-alpine]}, with the
- * server started by {@code docker run --rm -d --name name -p 127.0.0.1:56391:6379 image}.</p>
+ * <p>Opt-in: {@code -PredisIntegration -PredisContainer=name -PredisPort=56391
+ * [-PredisImage=valkey/valkey:8.1.1-alpine]}, with the server started by {@code docker run --rm -d
+ * --name name -p 127.0.0.1:56391:6379 image}.</p>
  */
 @Tag("redis-integration")
 class VelocityQueueDepotServiceRedisIntegrationTest {
@@ -57,67 +56,90 @@ class VelocityQueueDepotServiceRedisIntegrationTest {
   private static final String HASH = "velocityqueuedepotentry";
   private static final String SERVER_NAME = "Dungeon-7";
 
-  private final LettuceProvider providerA = provider();
-  private final LettuceProvider providerB = provider();
-  private VelocityQueueDepotService serviceA;
-  private VelocityQueueDepotService serviceB;
+  private final LettuceProvider provider = provider();
+  private Depot<String, VelocityQueueDepotEntry> depot;
+  private VelocityQueueDepotService service;
 
   @BeforeEach
   void setUp() {
-    providerA.deleteKey(HASH);
-    serviceA = service(providerA, "proxy-a");
-    serviceB = service(providerB, "proxy-b");
+    provider.deleteKey(HASH);
+    depot = provider.createDepot(VelocityQueueDepotEntry.class);
+    final VelocityRedis redis = mock(VelocityRedis.class);
+    when(redis.getProvider()).thenReturn(provider);
+    service = new VelocityQueueDepotService(redis);
   }
 
   @AfterEach
   void tearDown() {
     try {
-      providerA.deleteKey(HASH);
+      provider.deleteKey(HASH);
     } finally {
-      providerA.disconnect();
-      providerB.disconnect();
+      provider.disconnect();
     }
   }
 
   @Test
-  void aProxyRemovesTheSnapshotItWrote() {
-    serviceA.upsertQueue(emptyQueue());
+  void anEmptySnapshotIsRemoved() {
+    service.upsertQueue(emptyQueue());
 
-    assertTrue(serviceA.removeQueueIfOwner(SERVER_NAME));
+    assertTrue(service.removeQueueIfEmpty(SERVER_NAME));
 
-    assertNull(serviceA.getQueueEntry(SERVER_NAME));
+    assertFalse(depot.contains(SERVER_NAME));
   }
 
   @Test
-  void aProxyLeavesTheSnapshotOfAnotherProxy() {
-    serviceA.upsertQueue(emptyQueue());
+  void anEmptySnapshotIsRemovedWhateverProxyWroteIt() {
+    // Written by a master that has since gone, and by an older build with an owner field.
+    raw("{\"uniqueId\":\"" + SERVER_NAME + "\",\"entries\":[],\"serverStatus\":\"OFFLINE\","
+        + "\"state\":\"ACTIVE\",\"proxyId\":\"proxy-gone\"}");
 
-    assertFalse(serviceB.removeQueueIfOwner(SERVER_NAME));
+    assertTrue(service.removeQueueIfEmpty(SERVER_NAME));
 
-    assertNotNull(serviceA.getQueueEntry(SERVER_NAME), "proxy-a's snapshot must survive proxy-b");
+    assertFalse(depot.contains(SERVER_NAME));
   }
 
   @Test
-  void aSnapshotThatPredatesTheOwnerFieldBelongsToNobody() {
-    // The JSON an earlier build wrote: no proxyId.
-    final String legacy = "{\"uniqueId\":\"" + SERVER_NAME + "\",\"entries\":[],"
-        + "\"serverStatus\":\"OFFLINE\",\"state\":\"ACTIVE\"}";
+  void aSnapshotWithPlayersSurvives() {
+    // Witness for the removals above: emptiness is the whole guard.
+    raw("{\"uniqueId\":\"" + SERVER_NAME + "\",\"entries\":[{\"username\":\"alice\"}],"
+        + "\"serverStatus\":\"ONLINE\",\"state\":\"ACTIVE\"}");
+
+    assertFalse(service.removeQueueIfEmpty(SERVER_NAME));
+
+    assertTrue(depot.contains(SERVER_NAME));
+  }
+
+  @Test
+  void aSnapshotWithNoListOrUnreadableSurvives() {
+    raw("{\"uniqueId\":\"" + SERVER_NAME + "\",\"entries\":null}");
+    assertFalse(service.removeQueueIfEmpty(SERVER_NAME));
+    assertTrue(depot.contains(SERVER_NAME));
+
+    raw("not json at all");
+    assertFalse(service.removeQueueIfEmpty(SERVER_NAME));
+    assertTrue(depot.contains(SERVER_NAME));
+  }
+
+  @Test
+  void anAbsentKeyRemovesNothing() {
+    assertFalse(service.removeQueueIfEmpty(SERVER_NAME));
+    assertEquals(List.of(), List.copyOf(service.getQueueKeys()));
+  }
+
+  @Test
+  void theKeysAreTheServerNamesThatHaveASnapshot() {
+    service.upsertQueue(emptyQueue());
+
+    assertEquals(List.of(SERVER_NAME), List.copyOf(service.getQueueKeys()));
+  }
+
+  private static void raw(final String json) {
     final RedisClient client = RedisClient.create("redis://127.0.0.1:" + PORT);
-    try (StatefulRedisConnection<String, String> raw = client.connect()) {
-      raw.sync().hset(HASH, SERVER_NAME, legacy);
+    try (StatefulRedisConnection<String, String> connection = client.connect()) {
+      connection.sync().hset(HASH, SERVER_NAME, json);
     } finally {
       client.shutdown();
     }
-
-    assertFalse(serviceA.removeQueueIfOwner(SERVER_NAME));
-
-    assertNotNull(serviceA.getQueueEntry(SERVER_NAME), "an entry nobody owns is never removed");
-  }
-
-  @Test
-  void removingAnAbsentSnapshotIsHarmless() {
-    assertFalse(serviceA.removeQueueIfOwner(SERVER_NAME));
-    assertEquals(List.of(), serviceA.getAll());
   }
 
   private static RedisVelocityQueue emptyQueue() {
@@ -140,12 +162,5 @@ class VelocityQueueDepotServiceRedisIntegrationTest {
         mock(Scheduler.class, RETURNS_DEEP_STUBS), new PacketSerializer());
     provider.restart();
     return provider;
-  }
-
-  private static VelocityQueueDepotService service(final LettuceProvider provider, final String proxyId) {
-    final VelocityRedis redis = mock(VelocityRedis.class);
-    when(redis.getProvider()).thenReturn(provider);
-    when(redis.getProxyId()).thenReturn(proxyId);
-    return new VelocityQueueDepotService(redis);
   }
 }

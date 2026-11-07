@@ -107,6 +107,17 @@ public interface Depot<K, V extends DepotEntry<K, V>> {
   }
 
   /**
+   * Atomically removes the entry for {@code key} if its {@code entries} list is empty. A missing
+   * entry, a null list or an unreadable entry is kept.
+   *
+   * @param key the key to remove
+   * @return {@code true} if it was removed
+   */
+  default boolean removeIfEmpty(final @NotNull K key) {
+    throw new UnsupportedOperationException("removeIfEmpty");
+  }
+
+  /**
    * Atomically removes every entry {@code proxyId} owns, in one round trip.
    *
    * @param proxyId the owning proxy

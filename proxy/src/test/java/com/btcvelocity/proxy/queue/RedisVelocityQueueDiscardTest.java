@@ -17,6 +17,8 @@
 
 package com.btcvelocity.proxy.queue;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
@@ -30,16 +32,18 @@ import com.btcvelocity.proxy.queue.redis.depot.VelocityQueueDepotService;
 import com.btcvelocity.proxy.redis.VelocityRedis;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.server.VelocityRegisteredServer;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/** A dropped queue takes its Redis snapshot with it, and never writes it back. */
+/** A dropped queue takes its empty Redis snapshot with it, and never writes it back. */
 class RedisVelocityQueueDiscardTest {
 
   private static final String SERVER_NAME = "Dungeon-7";
   private static final long ABSENCE_WINDOW_MS = 300;
 
   private final VelocityQueueDepotService depot = mock(VelocityQueueDepotService.class);
+  private final VelocityQueueManager manager = mock(VelocityQueueManager.class);
   private RedisVelocityQueue queue;
 
   @BeforeEach
@@ -48,7 +52,6 @@ class RedisVelocityQueueDiscardTest {
     final VelocityRedis redis = mock(VelocityRedis.class);
     when(server.getRedis()).thenReturn(redis);
     when(redis.getQueueService()).thenReturn(depot);
-    final VelocityQueueManager manager = mock(VelocityQueueManager.class);
     when(manager.isMasterProxy()).thenReturn(true);
     final VelocityRegisteredServer backend = mock(VelocityRegisteredServer.class, RETURNS_DEEP_STUBS);
     when(backend.getServerInfo().getName()).thenReturn(SERVER_NAME);
@@ -59,7 +62,7 @@ class RedisVelocityQueueDiscardTest {
   void discardingRemovesTheSnapshotOfThatServer() {
     queue.discard();
 
-    verify(depot, timeout(2_000)).removeQueueIfOwner(SERVER_NAME);
+    verify(depot, timeout(2_000)).removeQueueIfEmpty(SERVER_NAME);
   }
 
   @Test
@@ -72,12 +75,38 @@ class RedisVelocityQueueDiscardTest {
   }
 
   @Test
+  void aProxyThatIsNotTheMasterRemovesNothing() {
+    when(manager.isMasterProxy()).thenReturn(false);
+
+    queue.discard();
+
+    verify(depot, after(ABSENCE_WINDOW_MS).never()).removeQueueIfEmpty(SERVER_NAME);
+  }
+
+  @Test
+  void theMasterCheckNeverRunsOnTheCallingThread() {
+    // isMasterProxy reads Redis; the caller can be a Netty event loop.
+    final Thread caller = Thread.currentThread();
+    final AtomicReference<Thread> checkedOn = new AtomicReference<>();
+    when(manager.isMasterProxy()).thenAnswer(invocation -> {
+      checkedOn.compareAndSet(null, Thread.currentThread());
+      return true;
+    });
+
+    queue.setState(QueueState.PAUSED);
+
+    verify(depot, timeout(2_000)).upsertQueue(queue);
+    assertNotNull(checkedOn.get(), "the check ran");
+    assertNotSame(caller, checkedOn.get());
+  }
+
+  @Test
   void aTornDownQueueStillPersistsItself() {
     // Witness: teardown (proxy shutdown) keeps its final snapshot, or the guard above would pass
     // for a queue that never persists at all.
     queue.teardown();
 
     verify(depot, timeout(2_000)).upsertQueue(queue);
-    verify(depot, never()).removeQueueIfOwner(SERVER_NAME);
+    verify(depot, never()).removeQueueIfEmpty(SERVER_NAME);
   }
 }
