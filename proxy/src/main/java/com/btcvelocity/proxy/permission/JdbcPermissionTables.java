@@ -54,7 +54,8 @@ final class JdbcPermissionTables implements PermissionTables {
         }
         final NativePermissionSnapshot snapshot =
             GSON.fromJson(result.getString("payload"), NativePermissionSnapshot.class);
-        snapshot.revision = Math.max(snapshot.revision, result.getLong("revision"));
+        // The column is the revision the extension compares and publishes; the payload copy can lag.
+        snapshot.revision = result.getLong("revision");
         return snapshot;
       }
     }

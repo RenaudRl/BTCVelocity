@@ -22,6 +22,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import io.lettuce.core.RedisURI;
+import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
 import java.util.function.UnaryOperator;
@@ -35,6 +36,8 @@ final class NativePermissionConfig {
   /** Same syntax as the Permissions extension: the whole value, nothing around it. */
   private static final Pattern ENV_PLACEHOLDER = Pattern.compile("\\$\\{env:([A-Za-z_][A-Za-z0-9_]*)}");
   private static final Pattern TABLE_PREFIX_PATTERN = Pattern.compile("[A-Za-z0-9_]{1,64}");
+  /** Driver settings the pool owns (see {@link NativePermissionService#hikariConfig}). */
+  private static final List<String> POOL_OWNED_PARAMETERS = List.of("readOnlyMode", "options", "socketTimeout");
 
   private NativePermissionConfig() {
   }
@@ -91,10 +94,12 @@ final class NativePermissionConfig {
       throw new IllegalArgumentException(
           "Native permissions jdbc-url must not carry a password; use the password setting");
     }
-    // pgjdbc lets the URL override the readOnlyMode=always the pool sets, which would let writes in.
-    if (lowerUrl.contains("readonlymode=")) {
-      throw new IllegalArgumentException(
-          "Native permissions jdbc-url must not set readOnlyMode; the proxy forces it to always");
+    // pgjdbc lets the URL override what the pool sets: write protection and the query bounds.
+    for (final String parameter : POOL_OWNED_PARAMETERS) {
+      if (lowerUrl.contains(parameter.toLowerCase(Locale.ROOT) + "=")) {
+        throw new IllegalArgumentException(
+            "Native permissions jdbc-url must not set " + parameter + "; the proxy sets it");
+      }
     }
     validateValkeyUri(valkeyUri);
 

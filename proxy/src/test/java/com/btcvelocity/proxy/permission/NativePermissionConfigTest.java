@@ -131,14 +131,19 @@ class NativePermissionConfigTest {
   }
 
   @Test
-  void aJdbcUrlOverridingTheReadOnlyModeIsRefused() throws IOException {
-    for (final String parameter : new String[] {"readOnlyMode=ignore", "readonlymode=transaction"}) {
-      final Path file = write(JDBC_URL + "?" + parameter, "", VALKEY_URI);
+  void aJdbcUrlOverridingWhatThePoolSetsIsRefused() throws IOException {
+    final Map<String, String> overrides = Map.of(
+        "readOnlyMode=ignore", "readOnlyMode",
+        "readonlymode=transaction", "readOnlyMode",
+        "options=-c%20statement_timeout=0", "options",
+        "socketTimeout=0", "socketTimeout");
+    for (final Map.Entry<String, String> override : overrides.entrySet()) {
+      final Path file = write(JDBC_URL + "?" + override.getKey(), "", VALKEY_URI);
 
       final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
           () -> NativePermissionConfig.load(file, name -> null));
 
-      assertTrue(error.getMessage().contains("readOnlyMode"), error.getMessage());
+      assertTrue(error.getMessage().contains(override.getValue()), error.getMessage());
     }
   }
 
