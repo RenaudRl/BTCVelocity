@@ -478,6 +478,32 @@ class PlayerDepotServiceRedisIntegrationTest {
         survivor.provider.get(LEASE_KEY)));
   }
 
+  /** The drain mark lives next to the heartbeat: peers leave a drained proxy out of the targets. */
+  @Test
+  void aDrainedProxyIsLeftOutOfTheTransferTargetsUntilTheDrainIsCancelled() throws Exception {
+    final Node a = liveNode("drain-a");
+    final Node b = liveNode("drain-b");
+    awaitTrue("both proxies beat", () -> b.proxies.isTransferTarget("drain-a")
+        && a.proxies.isTransferTarget("drain-b"));
+
+    a.proxies.setDraining(true);
+    assertFalse(b.proxies.isTransferTarget("drain-a"), "a drained proxy was a target");
+    assertTrue(b.proxies.isAlive("drain-a"), "a drained proxy must keep beating");
+    assertTrue(a.proxies.isTransferTarget("drain-b"));
+
+    // The heartbeat renews the mark: still there after more than the TTL of the mark itself.
+    Thread.sleep(ProxyDepotService.HEARTBEAT_TTL.toMillis() + 1_000);
+    assertFalse(b.proxies.isTransferTarget("drain-a"), "the mark expired while draining");
+
+    a.proxies.setDraining(false);
+    assertTrue(b.proxies.isTransferTarget("drain-a"), "the mark outlived the cancel");
+
+    // A drained proxy that dies leaves no mark behind: it expires with the heartbeat.
+    a.proxies.setDraining(true);
+    a.shutdown = true;
+    awaitTrue("the dead proxy's mark expired", () -> !a.provider.existsKey("draining:drain-a"));
+  }
+
   private void awaitTrue(final String what, final BooleanSupplier condition)
       throws InterruptedException {
     final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CONVERGE_DEADLINE_MS);

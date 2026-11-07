@@ -89,6 +89,7 @@ import org.apache.logging.log4j.Logger;
  *
  * <p>This command provides access to administrative utilities such as:</p>
  * <ul>
+ *   <li>{@code /velocity drain [start|cancel|status]} - Drains this proxy before a restart</li>
  *   <li>{@code /velocity dump} - Creates a diagnostic dump</li>
  *   <li>{@code /velocity heap} - Triggers a heap dump</li>
  *   <li>{@code /velocity info} - Displays version and environment info</li>
@@ -184,8 +185,20 @@ public class VelocityCommand implements BuiltinCommand {
             .executes(new ConfigCheck(server))
             .build();
 
+    // A bare "drain" only reports: starting one takes the explicit "start".
+    LiteralCommandNode<CommandSource> drain = BrigadierCommand.literalArgumentBuilder("drain")
+            .requires(source -> source.getPermissionValue("velocity.command.drain") == Tristate.TRUE)
+            .executes(new DrainCommand(server, DrainCommand.Action.STATUS))
+            .then(BrigadierCommand.literalArgumentBuilder("start")
+                    .executes(new DrainCommand(server, DrainCommand.Action.START)))
+            .then(BrigadierCommand.literalArgumentBuilder("cancel")
+                    .executes(new DrainCommand(server, DrainCommand.Action.CANCEL)))
+            .then(BrigadierCommand.literalArgumentBuilder("status")
+                    .executes(new DrainCommand(server, DrainCommand.Action.STATUS)))
+            .build();
+
     List<LiteralCommandNode<CommandSource>> commands = List
-            .of(dump, heap, info, plugins, reload.build(), sudo, uptime.build(), configcheck);
+            .of(dump, heap, info, plugins, reload.build(), sudo, uptime.build(), configcheck, drain);
     return new BrigadierCommand(
             commands.stream()
                     .reduce(

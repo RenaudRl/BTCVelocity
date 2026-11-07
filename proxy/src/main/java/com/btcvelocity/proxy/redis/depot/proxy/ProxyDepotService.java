@@ -73,6 +73,12 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   private static final String HEARTBEAT_KEY_PREFIX = "heartbeat:";
 
   /**
+   * Redis key prefix of the drain mark, {@code draining:<proxyId>}. The mark lives as long as the
+   * heartbeat does: the heartbeat renews it, so a drained proxy that dies leaves no mark behind.
+   */
+  static final String DRAIN_KEY_PREFIX = "draining:";
+
+  /**
    * The Redis manager used to interact with proxy-related data stored in Redis.
    */
   private final VelocityRedis redis;
@@ -99,6 +105,12 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
    * Set by {@link #stopHeartbeat()}. Guarded by {@code this}, like the heartbeat itself.
    */
   private boolean heartbeatStopped;
+
+  /**
+   * Whether this proxy is drained: its heartbeat renews the drain mark while it is. Guarded by
+   * {@code this}, like the heartbeat itself.
+   */
+  private boolean draining;
 
   /**
    * Throttle and outage flag of the failures of {@link #publishHeartbeat()}.
@@ -254,6 +266,34 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
   }
 
   /**
+   * Whether a proxy may be handed players: it beats and is not drained. Blocking Redis reads.
+   *
+   * @param proxyId the proxy to check
+   * @return {@code true} if it is alive and carries no drain mark
+   */
+  public boolean isTransferTarget(final @NotNull String proxyId) {
+    return isAlive(proxyId) && !this.redis.getProvider().existsKey(DRAIN_KEY_PREFIX + proxyId);
+  }
+
+  /**
+   * Marks this proxy as drained, or clears the mark. The mark expires with the heartbeat unless
+   * renewed, and the heartbeat renews it while this proxy is drained. Blocking Redis write.
+   *
+   * @param draining {@code true} to publish the mark, {@code false} to remove it
+   * @throws RuntimeException if Redis does not answer; the state is kept, so the next heartbeat
+   *         publishes the mark (or lets it expire) all the same
+   */
+  public synchronized void setDraining(final boolean draining) {
+    this.draining = draining;
+    final String key = DRAIN_KEY_PREFIX + this.redis.getProxyId();
+    if (draining) {
+      this.redis.getProvider().setWithExpiry(key, "1", HEARTBEAT_TTL.toSeconds());
+    } else {
+      this.redis.getProvider().deleteKey(key);
+    }
+  }
+
+  /**
    * Publishes this proxy's heartbeat key to Redis with a TTL of {@link #HEARTBEAT_TTL}.
    * Called every {@link #HEARTBEAT_INTERVAL} by the scheduler. The shutdown flag is set before
    * {@link #teardown()}, which takes the same lock, so no beat can follow the teardown.
@@ -269,6 +309,13 @@ public final class ProxyDepotService extends AbstractDepotService<String, ProxyE
               "1",
               HEARTBEAT_TTL.toSeconds()
       );
+      if (this.draining) {
+        this.redis.getProvider().setWithExpiry(
+                DRAIN_KEY_PREFIX + this.redis.getProxyId(),
+                "1",
+                HEARTBEAT_TTL.toSeconds()
+        );
+      }
 
       // A lapse longer than the TTL (pause, Redis hiccup) lets a peer reap this live proxy.
       if (!this.depot.contains(this.redis.getProxyId())) {

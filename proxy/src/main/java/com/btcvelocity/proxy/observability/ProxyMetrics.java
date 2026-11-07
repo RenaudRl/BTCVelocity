@@ -50,6 +50,7 @@ public final class ProxyMetrics {
    * @param duplicateForcedCloses duplicate sessions whose connection had to be closed by force (0
    *                              when Redis is off)
    * @param admission pre-handshake admission counters, by outcome
+   * @param draining whether this proxy refuses new logins and hands its players over
    * @param loops event loop readings (empty when the watchdog is off)
    * @return the exposition text
    */
@@ -59,6 +60,7 @@ public final class ProxyMetrics {
                               final long statusCacheHits, final long statusCacheMisses,
                               final long duplicateSessions, final long duplicateForcedCloses,
                               final Map<AdmissionStats.Result, Long> admission,
+                              final boolean draining,
                               final List<LoopWatchdog.Reading> loops) {
     final StringBuilder out = new StringBuilder(2048);
 
@@ -102,6 +104,10 @@ public final class ProxyMetrics {
         .sorted(Map.Entry.comparingByKey())
         .forEach(entry -> sample(out, "btc_proxy_admission_total", "result",
             entry.getKey().name().toLowerCase(Locale.ROOT), String.valueOf(entry.getValue())));
+
+    header(out, "btc_proxy_draining", "gauge",
+        "1 while this proxy is drained (new logins refused, players handed over), else 0.");
+    out.append("btc_proxy_draining ").append(draining ? 1 : 0).append('\n');
 
     header(out, "btc_proxy_eventloop_lag_seconds", "gauge",
         "How late the last task marker ran on each Netty event loop.");

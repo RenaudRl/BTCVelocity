@@ -27,6 +27,7 @@ import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
 import com.btcvelocity.proxy.bridge.VelocityBridgeChannel;
 import com.btcvelocity.proxy.network.TrackedListener;
+import com.btcvelocity.proxy.cluster.ProxyDrain;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayerService;
 import com.btcvelocity.proxy.cluster.VelocityClusterProxyService;
 import com.btcvelocity.proxy.cluster.local.LocalClusterPlayerService;
@@ -297,6 +298,11 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    * The cluster proxy service for proxy discovery.
    */
   private @MonotonicNonNull VelocityClusterProxyService clusterProxyService;
+
+  /**
+   * Drains this proxy on request: refuses new logins and hands the players over to a peer.
+   */
+  private @MonotonicNonNull ProxyDrain proxyDrain;
 
   /**
    * The PostgreSQL connection pool, initialized when PostgreSQL storage
@@ -612,6 +618,7 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         queueManager = new VelocityQueueManager(this);
       }
     }
+    proxyDrain = createProxyDrain();
 
     // Initialize PostgreSQL storage if enabled
     if (configuration.getPostgres() != null && configuration.getPostgres().isEnabled()) {
@@ -1334,8 +1341,45 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
     return chooseTransferTarget(getConfiguration().getProxyAddresses(), getProxyId(),
         getConfiguration().getDynamicProxyFilter(),
-        proxyId -> redis.getProxyService().isAlive(proxyId),
+        proxyId -> redis.getProxyService().isTransferTarget(proxyId),
         proxyId -> redis.getPlayerService().getPlayerEntriesOnProxy(proxyId).size());
+  }
+
+  /**
+   * Builds the drain of this proxy. Without Redis it only refuses logins: there is no peer to
+   * hand players to, and nobody to tell.
+   */
+  private ProxyDrain createProxyDrain() {
+    final ProxyDrain.Cluster cluster = new ProxyDrain.Cluster() {
+      @Override
+      public void publishMark(final boolean draining) {
+        if (redis != null) {
+          redis.getProxyService().setDraining(draining);
+        }
+      }
+
+      @Override
+      public @Nullable InetSocketAddress pickTarget() {
+        // Same rule as the shutdown: the cluster must accept transfers, or the peers refuse them.
+        final ProxyAddress chosen = getConfiguration().isAcceptTransfers()
+            ? getProxyAddressToUse() : null;
+        return chosen == null ? null : new InetSocketAddress(chosen.ip(), chosen.port());
+      }
+    };
+    return new ProxyDrain(cluster, () -> List.copyOf(connectionsByUuid.values()), task -> {
+      final ScheduledTask scheduled = scheduler.buildTask(VelocityVirtualPlugin.INSTANCE, task)
+          .repeat(ProxyDrain.BATCH_INTERVAL).schedule();
+      return scheduled::cancel;
+    });
+  }
+
+  /**
+   * The drain of this proxy.
+   *
+   * @return the drain, idle until a command starts it
+   */
+  public ProxyDrain getProxyDrain() {
+    return proxyDrain;
   }
 
   /**
