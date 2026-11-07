@@ -147,8 +147,9 @@ class NativePermissionLoginLoadTest {
     assertNull(service.load(SUBJECT).get(BOUND_SECONDS, TimeUnit.SECONDS));
     assertNull(service.load(SUBJECT).get(BOUND_SECONDS, TimeUnit.SECONDS));
 
-    assertEquals(2, tables.playerReads.get(),
+    assertNull(service.snapshot(SUBJECT),
         "an unreadable catalog looks empty: caching the player as grade-less would outlive the outage");
+    assertEquals(0, tables.playerReads.get(), "no row is read while no catalog can be merged into it");
   }
 
   @Test

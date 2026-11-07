@@ -45,10 +45,15 @@ final class FakePermissionTables implements PermissionTables {
   final Map<UUID, Set<String>> grants = new ConcurrentHashMap<>();
   /** Groups a player is directly in, by player. */
   final Map<UUID, Set<String>> memberships = new ConcurrentHashMap<>();
+  /** Revision of a player's row; 1 when absent. */
+  final Map<UUID, Long> revisions = new ConcurrentHashMap<>();
   volatile Map<String, NativePermissionSnapshot.Group> groups = Map.of();
   volatile boolean playerReadsFail;
   volatile boolean groupReadsFail;
-  /** A player read waits here once the gate is closed. */
+  /**
+   * A player read waits here once the gate is closed, after its row was taken: the query has run
+   * and its result is in transit, so a write made while the gate is shut is not in that result.
+   */
   volatile CountDownLatch gate = new CountDownLatch(0);
   /** Counted down each time a player read has started, before it waits on the gate. */
   volatile CountDownLatch readStarted = new CountDownLatch(0);
@@ -57,6 +62,8 @@ final class FakePermissionTables implements PermissionTables {
   public NativePermissionSnapshot readPlayer(final UUID subject) throws SQLException {
     playerReads.incrementAndGet();
     readers.add(Thread.currentThread());
+    final boolean fails = playerReadsFail;
+    final NativePermissionSnapshot row = currentRow(subject);
     readStarted.countDown();
     try {
       if (!gate.await(GATE_LIMIT_SECONDS, TimeUnit.SECONDS)) {
@@ -66,15 +73,22 @@ final class FakePermissionTables implements PermissionTables {
       Thread.currentThread().interrupt();
       throw new SQLException("interrupted");
     }
-    if (playerReadsFail) {
+    if (fails) {
       throw new SQLException("simulated read failure");
     }
+    return row;
+  }
+
+  private NativePermissionSnapshot currentRow(final UUID subject) {
     final Set<String> nodes = grants.get(subject);
     final Set<String> groupNames = memberships.get(subject);
     if (nodes == null && groupNames == null) {
       return null;
     }
-    return row(nodes == null ? Set.of() : nodes, groupNames == null ? Set.of() : groupNames);
+    final NativePermissionSnapshot row =
+        row(nodes == null ? Set.of() : nodes, groupNames == null ? Set.of() : groupNames);
+    row.revision = revisions.getOrDefault(subject, 1L);
+    return row;
   }
 
   @Override

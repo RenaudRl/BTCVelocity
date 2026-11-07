@@ -43,6 +43,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -64,17 +66,31 @@ final class NativePermissionService implements AutoCloseable {
    * invalidations one grade edit publishes.
    */
   static final Duration GROUP_REFRESH_WINDOW = Duration.ofMillis(250);
+  /**
+   * Least time between two attempts to read a catalog that could not be read: an outage costs one
+   * query per second, not one per permission test.
+   */
+  static final Duration CATALOG_RETRY_BACKOFF = Duration.ofSeconds(1);
   private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
   private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
-  /** Runs a task after {@link #GROUP_REFRESH_WINDOW}, on {@link #ioExecutor}; a manual one in tests. */
-  private final Executor groupRefreshDelay;
+  /** Runs a task after the given delay, on {@link #ioExecutor}; a manual executor in tests. */
+  private final Function<Duration, Executor> delays;
   private final ConcurrentHashMap<UUID, NativePermissionSnapshot> snapshots = new ConcurrentHashMap<>();
   /**
-   * Players whose snapshot may be cached: asked for since their last eviction. Without it a read
-   * still in flight when a player disconnects would put the snapshot back, with no one left to evict it.
+   * Players whose snapshot may be cached, each with a token of the period it is tracked for: asked
+   * for since their last eviction. A read caches only under the token it started with, so a read
+   * still in flight when a player disconnects never puts a snapshot back, even after they return.
    */
-  private final Set<UUID> tracked = ConcurrentHashMap.newKeySet();
+  private final ConcurrentHashMap<UUID, Object> tracked = new ConcurrentHashMap<>();
+  /**
+   * Lowest row revision still cacheable, by tracked player: raised by each invalidation naming
+   * them, so a read that began before it can no longer install the state it revoked.
+   */
+  private final ConcurrentHashMap<UUID, Long> revisionFloor = new ConcurrentHashMap<>();
+  /** Bumped after each catalog read, failed or not: a read that merged an older catalog is not cached. */
+  private final AtomicLong catalogEpoch = new AtomicLong();
+  private final AtomicLong nextCatalogRetryNanos = new AtomicLong(System.nanoTime());
   private final Set<String> pendingGroups = ConcurrentHashMap.newKeySet();
   private final AtomicBoolean groupRefreshScheduled = new AtomicBoolean();
   private final ConcurrentHashMap<UUID, CompletableFuture<NativePermissionSnapshot>> inFlight = new ConcurrentHashMap<>();
@@ -92,25 +108,24 @@ final class NativePermissionService implements AutoCloseable {
   private volatile long groupCatalogStaleSince;
 
   NativePermissionService() {
-    this.groupRefreshDelay = CompletableFuture.delayedExecutor(
-        GROUP_REFRESH_WINDOW.toMillis(), TimeUnit.MILLISECONDS, ioExecutor);
+    this.delays = delay -> CompletableFuture.delayedExecutor(delay.toMillis(), TimeUnit.MILLISECONDS, ioExecutor);
   }
 
   /**
    * A service already wired to {@code tables}, with no pool and no bus: the seam the cache-lifecycle
-   * tests use, with {@code groupRefreshDelay} standing for the refresh window so a test decides when
-   * it ends. The catalog is read here, on the calling thread, exactly as initialization reads it.
+   * tests use, with {@code delay} standing for every delay (refresh window, retries) so a test
+   * decides when each ends. The catalog is read here, on the calling thread, as initialization does.
    */
   NativePermissionService(
       final PermissionTables tables,
       final NativePermissionConfig.Config config,
-      final Executor groupRefreshDelay
+      final Executor delay
   ) {
-    this.groupRefreshDelay = groupRefreshDelay;
+    this.delays = ignored -> delay;
     this.tables = tables;
     this.config = config;
     this.initialization = CompletableFuture.completedFuture(null);
-    loadCatalogOrMarkStale();
+    refreshCatalogBlocking();
   }
 
   /**
@@ -138,7 +153,7 @@ final class NativePermissionService implements AutoCloseable {
   }
 
   CompletableFuture<NativePermissionSnapshot> load(final UUID subject) {
-    tracked.add(subject);
+    final Object session = tracked.computeIfAbsent(subject, key -> new Object());
     final NativePermissionSnapshot cached = snapshots.get(subject);
     if (cached != null) {
       return CompletableFuture.completedFuture(cached);
@@ -150,7 +165,7 @@ final class NativePermissionService implements AutoCloseable {
           }
           return null;
         })
-        .thenComposeAsync(ignored -> readSnapshot(key), ioExecutor)
+        .thenComposeAsync(ignored -> readSnapshot(key, session), ioExecutor)
         .whenComplete((ignored, error) -> inFlight.remove(key)));
   }
 
@@ -164,9 +179,12 @@ final class NativePermissionService implements AutoCloseable {
    * it again.
    */
   void evict(final UUID subject) {
-    // Untrack first: a read finishing between the two lines then finds the subject untracked.
+    // Untrack first: a read finishing meanwhile then finds its token gone. Dropping the in-flight
+    // read lets a returning player start a fresh one instead of joining a read that cannot cache.
     tracked.remove(subject);
+    inFlight.remove(subject);
     snapshots.remove(subject);
+    revisionFloor.remove(subject);
   }
 
   /**
@@ -196,13 +214,7 @@ final class NativePermissionService implements AutoCloseable {
     final Set<UUID> reloaded = new HashSet<>();
     for (final UUID subject : List.copyOf(snapshots.keySet())) {
       try {
-        final NativePermissionSnapshot fresh = fetch(source, subject);
-        if (fresh == null) {
-          snapshots.remove(subject);
-        } else {
-          // computeIfPresent: a player who left meanwhile is not brought back.
-          snapshots.computeIfPresent(subject, (key, old) -> fresh);
-        }
+        reloadCached(source, subject);
         reloaded.add(subject);
       } catch (SQLException | RuntimeException error) {
         LOGGER.warn("Native BTC permissions reconnect reload failed; dropping the snapshots not yet reloaded.", error);
@@ -211,6 +223,17 @@ final class NativePermissionService implements AutoCloseable {
         snapshots.keySet().removeIf(key -> !reloaded.contains(key));
         return;
       }
+    }
+  }
+
+  /** Replaces the cached snapshot of {@code subject} by a fresh read, or drops it if that cannot be cached. */
+  private void reloadCached(final PermissionTables source, final UUID subject) throws SQLException {
+    final NativePermissionSnapshot old = snapshots.get(subject);
+    final Object session = tracked.get(subject);
+    final Read read = session == null ? null : read(source, subject, session);
+    if (read == null || install(subject, read) != read.snapshot()) {
+      // Only the unverified snapshot goes; one a concurrent load installed meanwhile stays.
+      snapshots.remove(subject, old);
     }
   }
 
@@ -255,16 +278,40 @@ final class NativePermissionService implements AutoCloseable {
     return CompletableFuture.supplyAsync(this::refreshCatalogBlocking, ioExecutor);
   }
 
+  /**
+   * Reads the catalog. The epoch moves after the outcome is written, never before: a read that saw
+   * the old epoch is then rejected at install, and one that saw the new epoch also sees the outcome.
+   */
   private boolean refreshCatalogBlocking() {
     try {
       groupCatalog = readGroups();
       markGroupCatalogFresh();
       return true;
     } catch (SQLException | RuntimeException error) {
-      LOGGER.warn("Native BTC permissions group refresh failed; keeping the last valid catalog.", error);
+      if (groupCatalogStale) {
+        // Same incident, already logged with its trace: one line per retry, not one trace.
+        LOGGER.debug("Native BTC permissions group catalog still unreadable: {}", describeFailure(error));
+      } else {
+        LOGGER.warn("Native BTC permissions group refresh failed; the catalog is stale and grants nothing.", error);
+      }
       markGroupCatalogStale(error);
       return false;
+    } finally {
+      catalogEpoch.incrementAndGet();
     }
+  }
+
+  /** Whether the held catalog may be merged: a stale one is read again first, at most once per backoff. */
+  private boolean catalogUsable() {
+    if (!groupCatalogStale) {
+      return true;
+    }
+    final long due = nextCatalogRetryNanos.get();
+    final long now = System.nanoTime();
+    if (now - due < 0 || !nextCatalogRetryNanos.compareAndSet(due, now + CATALOG_RETRY_BACKOFF.toNanos())) {
+      return false;
+    }
+    return refreshCatalogBlocking();
   }
 
   private void markGroupCatalogFresh() {
@@ -336,7 +383,7 @@ final class NativePermissionService implements AutoCloseable {
       config = loaded;
       dataSource = new HikariDataSource(hikariConfig(loaded));
       tables = new JdbcPermissionTables(dataSource, loaded.tablePrefix());
-      loadCatalogOrMarkStale();
+      refreshCatalogBlocking();
 
       if (!loaded.valkeyUri().isBlank()) {
         startRedis(loaded);
@@ -360,16 +407,6 @@ final class NativePermissionService implements AutoCloseable {
       }
       throw new IllegalStateException(
           "Native BTC permissions initialization failed (" + error.getClass().getSimpleName() + ")");
-    }
-  }
-
-  private void loadCatalogOrMarkStale() {
-    try {
-      groupCatalog = readGroups();
-      markGroupCatalogFresh();
-    } catch (Throwable error) {
-      LOGGER.warn("Native BTC permissions group catalog is not available yet; retrying on demand.", error);
-      markGroupCatalogStale(error);
     }
   }
 
@@ -420,24 +457,15 @@ final class NativePermissionService implements AutoCloseable {
     };
   }
 
-  private CompletableFuture<NativePermissionSnapshot> readSnapshot(final UUID subject) {
+  private CompletableFuture<NativePermissionSnapshot> readSnapshot(final UUID subject, final Object session) {
     return CompletableFuture.supplyAsync(() -> {
       final PermissionTables source = tables;
       if (source == null || closed.get()) {
         return null;
       }
       try {
-        final NativePermissionSnapshot fetched = fetch(source, subject);
-        if (fetched == null) {
-          return null;
-        }
-        return snapshots.compute(subject, (key, previous) -> {
-          if (!tracked.contains(key)) {
-            return previous;
-          }
-          // The revision guard keeps a concurrent load that already holds a newer row.
-          return previous == null || fetched.revision >= previous.revision ? fetched : previous;
-        });
+        final Read read = read(source, subject, session);
+        return read == null ? null : install(subject, read);
       } catch (SQLException | RuntimeException error) {
         LOGGER.warn("Native BTC permissions snapshot load failed for subject {}; will retry asynchronously.", subject, error);
         lastFailureReason = describeFailure(error);
@@ -447,21 +475,54 @@ final class NativePermissionService implements AutoCloseable {
   }
 
   /**
-   * Reads {@code subject} from the tables and merges the held catalog into it, without caching.
+   * Reads {@code subject} from the tables and merges the held catalog into it, without caching; or
+   * {@code null}, leaving the player refused, while the catalog is stale.
    *
-   * <p>A subject with no row gets the empty snapshot, which the caller caches so a player the
-   * database never saw costs one read, not one per permission test. That is only sound while the
-   * catalog is fresh: an unreadable catalog looks empty, and a subject cached as grade-less would
-   * outlive the outage. A stale catalog therefore leaves the answer {@code null} (unknown).
+   * <p>A stale catalog grants nothing (H1): a row merged with it would keep the nodes a grade lost,
+   * or, when it could never be read, the copies each row embeds. A subject with no row gets the
+   * empty snapshot, cached so a player the database never saw costs one read.
+   *
+   * <p>The epoch is taken before the catalog and the catalog before the row, so whatever happens to
+   * the catalog during the row read shows as a newer epoch at {@link #install}.
    */
-  private NativePermissionSnapshot fetch(final PermissionTables source, final UUID subject) throws SQLException {
-    final NativePermissionSnapshot stored = source.readPlayer(subject);
+  private Read read(final PermissionTables source, final UUID subject, final Object session) throws SQLException {
+    if (!catalogUsable()) {
+      return null;
+    }
+    final long epoch = catalogEpoch.get();
+    // A failure marks the catalog stale before it moves the epoch: seeing that epoch means seeing it.
+    if (groupCatalogStale) {
+      return null;
+    }
     final Map<String, NativePermissionSnapshot.Group> catalog = groupCatalog;
+    final NativePermissionSnapshot stored = source.readPlayer(subject);
     if (stored == null) {
-      return groupCatalogStale ? null : neverSeen(subject, catalog);
+      return new Read(neverSeen(subject, catalog), session, epoch);
     }
     normalize(stored, subject, catalog);
-    return stored;
+    return new Read(stored, session, epoch);
+  }
+
+  /**
+   * Caches {@code read} unless something it could not see happened since it began: its player left,
+   * the catalog it merged was read again, or an invalidation named a newer revision (H2). Returns
+   * what is cached afterwards. The revision guard keeps a concurrent load that holds a newer row.
+   */
+  private NativePermissionSnapshot install(final UUID subject, final Read read) {
+    final NativePermissionSnapshot fetched = read.snapshot();
+    return snapshots.compute(subject, (key, previous) -> {
+      final boolean outdated = tracked.get(key) != read.session()
+          || catalogEpoch.get() != read.catalogEpoch()
+          || fetched.revision < revisionFloor.getOrDefault(key, Long.MIN_VALUE);
+      if (outdated) {
+        return previous;
+      }
+      return previous == null || fetched.revision >= previous.revision ? fetched : previous;
+    });
+  }
+
+  /** A row merged with the catalog of {@code catalogEpoch}, read for the tracking period {@code session}. */
+  private record Read(NativePermissionSnapshot snapshot, Object session, long catalogEpoch) {
   }
 
   private Map<String, NativePermissionSnapshot.Group> readGroups() throws SQLException {
@@ -531,8 +592,7 @@ final class NativePermissionService implements AutoCloseable {
         return;
       }
       if (invalidation.subject != null) {
-        snapshots.computeIfPresent(invalidation.subject, (key, existing) ->
-            invalidation.revision > existing.revision ? null : existing);
+        invalidateSubject(invalidation.subject, invalidation.revision);
       } else {
         requestGroupRefresh(invalidation.group.toLowerCase());
       }
@@ -542,13 +602,30 @@ final class NativePermissionService implements AutoCloseable {
   }
 
   /**
+   * Drops what is cached for {@code subject} below {@code revision}, and refuses it to the reads
+   * still in flight even when nothing is cached: the floor is raised before the eviction, so a read
+   * installing in between is evicted, and one installing after is refused. Untracked players get no
+   * floor: any read of theirs starts after this message, so after the change it announces.
+   */
+  private void invalidateSubject(final UUID subject, final long revision) {
+    if (tracked.containsKey(subject)) {
+      revisionFloor.merge(subject, revision, Math::max);
+    }
+    snapshots.computeIfPresent(subject, (key, existing) -> revision > existing.revision ? null : existing);
+  }
+
+  /**
    * Queues {@code group} for the next catalog read. The first request of a burst schedules that read
    * {@link #GROUP_REFRESH_WINDOW} later; the others only join it, so a burst costs one read.
    */
   private void requestGroupRefresh(final String group) {
-    pendingGroups.add(group);
+    scheduleGroupRefresh(Set.of(group), GROUP_REFRESH_WINDOW);
+  }
+
+  private void scheduleGroupRefresh(final Set<String> groups, final Duration delay) {
+    pendingGroups.addAll(groups);
     if (groupRefreshScheduled.compareAndSet(false, true)) {
-      groupRefreshDelay.execute(this::refreshQueuedGroups);
+      delays.apply(delay).execute(this::refreshQueuedGroups);
     }
   }
 
@@ -561,15 +638,23 @@ final class NativePermissionService implements AutoCloseable {
         groups.add(group);
       }
     }
-    // L'éviction n'a lieu que si le catalogue a réellement été rafraîchi : évincer les snapshots
-    // après un rafraîchissement échoué les ferait recharger contre le catalogue périmé.
-    if (groups.isEmpty() || closed.get() || !refreshCatalogBlocking()) {
+    if (groups.isEmpty() || closed.get()) {
+      return;
+    }
+    if (!refreshCatalogBlocking()) {
+      // What changed is unknown, so the members lose what the outdated catalog gave them (reloads
+      // stay refused while it is stale) and the change is retried, never dropped.
+      snapshots.entrySet().removeIf(entry -> usesAny(entry.getValue(), groups));
+      scheduleGroupRefresh(groups, CATALOG_RETRY_BACKOFF);
       return;
     }
     // A group that just became the base grade is in no cached snapshot yet, yet applies to all.
     final boolean becameDefault = groups.stream().anyMatch(group -> isDefaultGroup(groupCatalog.get(group)));
-    snapshots.entrySet().removeIf(entry -> becameDefault
-        || groups.stream().anyMatch(group -> NativePermissionEvaluator.usesGroup(entry.getValue(), group)));
+    snapshots.entrySet().removeIf(entry -> becameDefault || usesAny(entry.getValue(), groups));
+  }
+
+  private static boolean usesAny(final NativePermissionSnapshot snapshot, final Set<String> groups) {
+    return groups.stream().anyMatch(group -> NativePermissionEvaluator.usesGroup(snapshot, group));
   }
 
   @Override

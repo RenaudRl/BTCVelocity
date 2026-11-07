@@ -18,6 +18,7 @@
 package com.btcvelocity.proxy.permission;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -161,6 +162,7 @@ class NativePermissionCacheLifecycleTest {
 
     assertNull(service.snapshot(ALICE));
     assertNull(service.snapshot(BOB));
+    assertNull(load(ALICE), "a reload against the catalog that could not be read grants nothing");
   }
 
   @Test
@@ -236,24 +238,110 @@ class NativePermissionCacheLifecycleTest {
   }
 
   @Test
-  void aFailedCatalogReadEvictsNothing() {
+  void aFailedCatalogReadEvictsTheMembersKeepsThemRefusedAndRetries() throws Exception {
+    tables.groups = Map.of("staff", staff());
     tables.groupReadsFail = true;
 
     service.handleInvalidation(groupInvalidation("staff"));
     refreshWindow.runAll();
 
-    assertNotNull(service.snapshot(ALICE), "evicting would reload against the stale catalog");
-    assertNotNull(service.snapshot(BOB));
+    assertNull(service.snapshot(BOB), "a member keeps no right merged from a catalog known to be outdated");
+    assertNull(load(BOB), "and a reload does not merge that catalog either");
+    assertEquals(1, refreshWindow.pending(), "the group change is retried, not forgotten");
+
+    tables.groupReadsFail = false;
+    refreshWindow.runAll();
+    load(BOB);
+
+    assertEquals(Tristate.UNDEFINED, decision(BOB, STAFF_NODE), "the node the grade lost stays refused");
+  }
+
+  // --- stale catalog -------------------------------------------------------------------------
+
+  @Test
+  void aCatalogUnreadableAtStartGrantsNothing() throws Exception {
+    restartWithUnreadableCatalog();
+
+    assertNull(load(ALICE), "her own row merged with an empty, stale catalog would be cached as is");
+    assertEquals(Tristate.FALSE, decision(ALICE, OWN_NODE));
+  }
+
+  @Test
+  void aCatalogUnreadableAtStartIsReadAgainByTheNextLoad() throws Exception {
+    restartWithUnreadableCatalog();
+    tables.groupReadsFail = false;
+
+    load(BOB);
+
+    assertEquals(Tristate.TRUE, decision(BOB, STAFF_NODE), "no invalidation is needed to recover");
+  }
+
+  // --- reads in flight across an invalidation ------------------------------------------------
+
+  @Test
+  void aReadStartedBeforeARevocationDoesNotPutTheRevokedRightBack() throws Exception {
+    final CompletableFuture<NativePermissionSnapshot> reading = readInTransit(ALICE);
+
+    // The revocation commits and is published while that read is in transit.
+    tables.grants.put(ALICE, Set.of());
+    tables.revisions.put(ALICE, 3L);
+    service.handleInvalidation(subjectInvalidation(ALICE, 3));
+    tables.gate.countDown();
+    reading.get(BOUND_SECONDS, TimeUnit.SECONDS);
+
+    assertNull(service.snapshot(ALICE), "revision 2 predates the revocation");
+    load(ALICE);
+    assertEquals(Tristate.UNDEFINED, decision(ALICE, OWN_NODE));
+  }
+
+  @Test
+  void aReadThatMergedTheOldCatalogIsNotCachedOnceTheGradeChanged() throws Exception {
+    final CompletableFuture<NativePermissionSnapshot> reading = readInTransit(BOB);
+
+    tables.groups = Map.of("staff", staff());
+    service.handleInvalidation(groupInvalidation("staff"));
+    refreshWindow.runAll();
+    tables.gate.countDown();
+    reading.get(BOUND_SECONDS, TimeUnit.SECONDS);
+
+    assertNotEquals(Tristate.TRUE, decision(BOB, STAFF_NODE), "the grade lost that node before the read ended");
   }
 
   // --- helpers -------------------------------------------------------------------------------
 
-  private void load(final UUID subject) throws Exception {
-    service.load(subject).get(BOUND_SECONDS, TimeUnit.SECONDS);
+  private NativePermissionSnapshot load(final UUID subject) throws Exception {
+    return service.load(subject).get(BOUND_SECONDS, TimeUnit.SECONDS);
   }
 
+  /** A connected player out of the cache whose revision-2 row is read and held at the gate. */
+  private CompletableFuture<NativePermissionSnapshot> readInTransit(final UUID subject) throws Exception {
+    tables.revisions.put(subject, 2L);
+    service.handleInvalidation(subjectInvalidation(subject, 2));
+    assertNull(service.snapshot(subject));
+    tables.gate = new CountDownLatch(1);
+    tables.readStarted = new CountDownLatch(1);
+    final CompletableFuture<NativePermissionSnapshot> reading = service.load(subject);
+    assertTrue(tables.readStarted.await(BOUND_SECONDS, TimeUnit.SECONDS));
+    return reading;
+  }
+
+  private void restartWithUnreadableCatalog() {
+    service.close();
+    tables.groupReadsFail = true;
+    service = new NativePermissionService(tables, CONFIG, refreshWindow);
+  }
+
+  /** What the resolver answers for a node the snapshot covers; no snapshot refuses everything. */
   private Tristate decision(final UUID subject, final String node) {
-    return NativePermissionEvaluator.evaluate(service.snapshot(subject), node, service.context(), 0L);
+    final NativePermissionSnapshot snapshot = service.snapshot(subject);
+    return snapshot == null
+        ? Tristate.FALSE
+        : NativePermissionEvaluator.evaluate(snapshot, node, service.context(), 0L);
+  }
+
+  private static String subjectInvalidation(final UUID subject, final long revision) {
+    return "{\"version\":1,\"networkId\":\"btc\",\"serverId\":\"backend-1\",\"subject\":\""
+        + subject + "\",\"revision\":" + revision + "}";
   }
 
   /** A message a backend would publish; {@code proxy-1} is this proxy, so the sender is another. */

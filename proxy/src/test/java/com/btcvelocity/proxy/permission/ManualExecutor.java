@@ -35,10 +35,10 @@ final class ManualExecutor implements Executor {
     return queued.size();
   }
 
+  /** Runs the tasks queued now; a task they queue in turn waits for the next call, as a retry would. */
   void runAll() {
-    Runnable task;
-    while ((task = queued.poll()) != null) {
-      task.run();
+    for (int remaining = queued.size(); remaining > 0; remaining--) {
+      queued.remove().run();
     }
   }
 }
