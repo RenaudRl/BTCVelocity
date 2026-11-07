@@ -44,13 +44,13 @@ Required by GPLv3 §5(a). A summary; the authoritative record is the git history
 | Area | Modification |
 |---|---|
 | Protocol | Minecraft 26.3 (protocol 777, from upstream 4.3.0); clients older than 26.3 refused. |
-| Permissions | LuckPerms integration removed; replaced by a native BTC permission resolver with an immutable UUID snapshot model and PostgreSQL/Valkey storage. |
+| Permissions | LuckPerms integration removed; replaced by a native BTC permission resolver with an immutable UUID snapshot model and PostgreSQL/Valkey storage. Since 0.4 (11/2026): read-only reading of the Typewriter PermissionsExtension tables, catalog-wins merge, constant `server=proxy` context, bounded login preload, revocation-safe cache (revision floor, catalog epoch, confirmed resubscription), fail-closed configuration with `${env:}` secrets. |
 | `btc:bridge` protocol | Versioned typed message protocol between proxy and backends (v2: envelope carrying version, message id and source backend; `Ack`/`Nack`; sealed hierarchy with an explicit `permits` list). |
 | MOTD | Inline `<left>`/`<center>`/`<right>` alignment with pixel-accurate glyph widths, configurable width, and a config migration from the old alignment keys. |
 | Storage | Native PostgreSQL backend (HikariCP); Redis / Valkey / Dragonfly selectable through one option. |
 | Cluster | Multi-proxy player tracking over Redis pub/sub, per-server connection queues with dynamic prioritisation. |
 | Security | Anti-decompression-bomb: compression ratio monitoring with a ratio-check floor, oversized packet detection. |
-| Distribution | Static Maven repository under `repo/`, published at <https://borntocraftstudio.net/repo/>. |
+| Distribution | Maven repository published at <https://borntocraftstudio.net/repo/> (source of truth: a separate private repository). |
 
 ## 4. What the GPL does and does not allow
 

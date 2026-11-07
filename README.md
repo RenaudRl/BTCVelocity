@@ -17,7 +17,7 @@ These parts ship in the jar but are **not finished**. Do not rely on them as com
 | Area | Status |
 |---|---|
 | **Sentinel admission shield** (anti-bot, anti-proxy/VPN, datacenter/Tor lists, ASN, per-network rate limits) | In progress: filters are in place, tuning and false-positive review on a test network are ongoing. |
-| **CloudNet integration** (service registry, arrival routing, resource-pack deduplication) | In progress: proxy plugins built against Adventure 4 (craft-engine-proxy, CloudNet bridge) must be recompiled and re-validated for this release. |
+| **CloudNet integration** (service registry, arrival routing, on-demand wake, resource-pack deduplication) | Running on the BTC test network under CloudNet, with real Java and Bedrock (Geyser 2.12) clients; the two-proxy drain hand-over is not yet proven with real clients. |
 
 ## 🚀 Architecture
 
@@ -52,8 +52,29 @@ jar it embedded in the shadow JAR are gone.
 | Piece | What it does |
 |---|---|
 | `NativePermissionEvaluator` | Wildcard resolution and inheritance, evaluated against an immutable snapshot — safe to read from any Netty thread. |
-| `NativePermissionService` / `NativePermissionSnapshot` | Loads and swaps the UUID snapshot from PostgreSQL; Valkey invalidates the local cache. |
+| `NativePermissionService` / `NativePermissionSnapshot` | Reads the Typewriter PermissionsExtension tables (`btc_permissions_players`, `btc_permissions_groups`) from PostgreSQL, read-only; Valkey invalidations (`btc:permissions:<network>`) evict the local cache. |
 | `NativePermissionResolverProvider` | Discovered through `META-INF/services`. The shadow JAR now calls `mergeServiceFiles()` — without it the last service file wins and the resolver is never found. |
+
+**Behaviour** (since proxy 0.4, validated with a real client on the BTC test network):
+
+- **Off by default.** Enabled with `-Dbtc.permissions.enabled=true`, configured by `btc-permissions.properties`
+  next to the jar (`jdbc-url`, `username`, `password`, `network-id`, `server-id`, `table-prefix`, `valkey-uri`).
+  `password` and `valkey-uri` accept `${env:NAME}`; an unset or empty variable is an error, never an empty secret.
+  A `jdbc-url` carrying `password=`, `readOnlyMode=`, `options=` or `socketTimeout=` is refused.
+- **Same decisions as the extension.** The group catalog wins over the copy embedded in the player's row;
+  shared test vectors (`permission-ranking-vectors.json`) are played by both the proxy and the extension.
+- **Constant context** `network=<id>`, `server=proxy`: a node scoped to `server=lobby` never applies on the proxy,
+  even while the player is on the lobby.
+- **Login never refused.** The snapshot is preloaded at authentication; the login waits at most 3 s, without blocking
+  a Netty thread. Past that the player enters with no rights and the snapshot applies on arrival.
+- **A revocation is never lost.** Per-player revision floor and catalog epoch (a stale read cannot reinstall a
+  revoked right); a stale catalog grants nothing; after a Valkey reconnection the cache is reloaded once the
+  server confirms the resubscription, and a deaf bus is retried every 5 s while the cache is reloaded.
+- **Fails closed.** With the flag set, an invalid configuration denies everything and logs an ERROR — the proxy never
+  falls back to Velocity's defaults, which answer `UNDEFINED` (treated as allowed by `/server`).
+- **Uncovered nodes stay `UNDEFINED`**, so commands with no permission set behave exactly as in Velocity.
+- **Least privilege.** Run it with a dedicated PostgreSQL role (`SELECT` on the two tables only) and a Valkey user
+  limited to `SUBSCRIBE` on the one channel — never the extension's writer account, which any proxy plugin could read.
 
 ### MOTD
 
@@ -180,7 +201,7 @@ export JAVA_HOME=/path/to/java-25
 ```
 
 The production-ready shadow JAR will be at:
-`proxy/build/libs/velocity-proxy-0.3-all.jar`
+`proxy/build/libs/velocity-proxy-0.4-all.jar`
 
 ### Recommended Startup Flags
 ```bash
