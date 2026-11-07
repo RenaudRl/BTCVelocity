@@ -180,13 +180,18 @@ public final class LoopWatchdog implements AutoCloseable {
     if (probe.reported && now - probe.lastReportNanos < reportWindowNanos) {
       return;
     }
+    // No marker has run yet (the loop's thread is still starting): nothing to sample, and a report
+    // without a stack would use up the window that the real stall needs. isResponsive() and
+    // readings() still show the lag.
+    final Thread thread = probe.thread;
+    if (thread == null) {
+      return;
+    }
     probe.reported = true;
     probe.lastReportNanos = now;
-    final Thread thread = probe.thread;
     try {
-      sink.accept(new Stall(probe.name, thread == null ? "unknown" : thread.getName(),
-          TimeUnit.NANOSECONDS.toMillis(now - probe.sentAtNanos),
-          thread == null ? new StackTraceElement[0] : thread.getStackTrace()));
+      sink.accept(new Stall(probe.name, thread.getName(),
+          TimeUnit.NANOSECONDS.toMillis(now - probe.sentAtNanos), thread.getStackTrace()));
     } catch (final RuntimeException e) {
       LOGGER.error("Event loop stall sink failed", e);
     }

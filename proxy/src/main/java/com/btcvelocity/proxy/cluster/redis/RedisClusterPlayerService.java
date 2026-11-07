@@ -28,8 +28,10 @@ import com.velocitypowered.api.proxy.player.PlayerSettings;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import net.kyori.adventure.text.Component;
@@ -140,11 +142,19 @@ public final class RedisClusterPlayerService implements VelocityClusterPlayerSer
     playerService().onPlayerSettingsChange(player, settings);
   }
 
+  /**
+   * Never reads Redis: command completion calls this on Netty loops. This proxy's players are
+   * listed live, the other proxies' come from the snapshot (none once it is too old).
+   */
   @Override
   public Collection<String> getPlayerNames() {
-    return playerService().getAll().stream()
+    final Set<String> names = new LinkedHashSet<>(this.local.getPlayerNames());
+    final String ownProxyId = this.redis.getProxyId();
+    playerService().getCachedEntries().ifPresent(entries -> entries.stream()
+        .filter(entry -> !entry.getProxyId().equalsIgnoreCase(ownProxyId))
         .map(PlayerEntry::getUsername)
-        .toList();
+        .forEach(names::add));
+    return List.copyOf(names);
   }
 
   @Override
