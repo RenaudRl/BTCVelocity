@@ -179,6 +179,12 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   private final AtomicLong duplicateSessionsClosed = new AtomicLong();
 
   /**
+   * Duplicate sessions whose polite disconnect did not end them and whose connection was closed
+   * by force, since startup. Each one is also counted in {@link #duplicateSessionsClosed}.
+   */
+  private final AtomicLong duplicateForcedCloses = new AtomicLong();
+
+  /**
    * Local players found held by another live proxy, with the number of consecutive repairs that
    * found it. Only the repair touches it.
    */
@@ -627,6 +633,16 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   }
 
   /**
+   * Gets how many duplicate sessions had to be closed by force because they outlived their
+   * disconnect.
+   *
+   * @return the count since startup
+   */
+  public long getDuplicateForcedCloses() {
+    return this.duplicateForcedCloses.get();
+  }
+
+  /**
    * Redis ownership decides: a local player whose entry belongs to another proxy with a fresh
    * heartbeat is a duplicate, and its local session is closed once
    * {@link #DUPLICATE_CONFIRMATIONS} repairs in a row found it. An entry whose owner stopped
@@ -714,6 +730,7 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
           + "connection ({} similar closures not logged)", player.getUsername(), quiet);
     }
     player.getConnection().close();
+    this.duplicateForcedCloses.incrementAndGet();
     return true;
   }
 

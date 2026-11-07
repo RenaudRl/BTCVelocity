@@ -46,6 +46,8 @@ public final class ProxyMetrics {
    * @param statusCacheMisses status pings the status cache had to build
    * @param duplicateSessions local sessions closed because another proxy held the player (0 when
    *                          Redis is off)
+   * @param duplicateForcedCloses duplicate sessions whose connection had to be closed by force (0
+   *                              when Redis is off)
    * @param loops event loop readings (empty when the watchdog is off)
    * @return the exposition text
    */
@@ -53,7 +55,7 @@ public final class ProxyMetrics {
                               final Map<String, Integer> queueLengths,
                               final Map<BridgeMetrics.Event, Long> bridge,
                               final long statusCacheHits, final long statusCacheMisses,
-                              final long duplicateSessions,
+                              final long duplicateSessions, final long duplicateForcedCloses,
                               final List<LoopWatchdog.Reading> loops) {
     final StringBuilder out = new StringBuilder(2048);
 
@@ -84,6 +86,11 @@ public final class ProxyMetrics {
     header(out, "btc_proxy_cluster_duplicate_sessions_total", "counter",
         "Local sessions closed because another proxy of the cluster holds the player.");
     out.append("btc_proxy_cluster_duplicate_sessions_total ").append(duplicateSessions).append('\n');
+
+    header(out, "btc_proxy_cluster_duplicate_forced_closes_total", "counter",
+        "Duplicate sessions that outlived their disconnect and had their connection closed by force.");
+    out.append("btc_proxy_cluster_duplicate_forced_closes_total ")
+        .append(duplicateForcedCloses).append('\n');
 
     header(out, "btc_proxy_eventloop_lag_seconds", "gauge",
         "How late the last task marker ran on each Netty event loop.");
