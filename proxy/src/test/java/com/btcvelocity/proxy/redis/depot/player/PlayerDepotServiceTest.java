@@ -19,6 +19,7 @@ package com.btcvelocity.proxy.redis.depot.player;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -568,6 +569,113 @@ class PlayerDepotServiceTest {
   }
 
   @Test
+  void aPlayerHandedOverIsFreedAndNotWrittenBackWhileTheHoldLasts() throws Exception {
+    final ConnectedPlayer alice = join("alice");
+    final UUID aliceId = alice.getUniqueId();
+    depot.put(entry(aliceId, "alice", SELF, "lobby"));
+    final UUID remote = UUID.randomUUID();
+    depot.put(entry(remote, "remote", OTHER, "lobby"));
+
+    assertTrue(service.releaseForTransfer(List.of(aliceId, remote)));
+
+    assertNull(depot.map.get(aliceId), "the target cannot claim a player still owned here");
+    assertNotNull(depot.map.get(remote), "an entry of another proxy is never removed");
+    repair();
+    repair();
+    assertNull(depot.map.get(aliceId), "the repair wrote the handed-over player back");
+
+    // An update that finds an entry (the removal failed halfway) leaves it as it is.
+    depot.put(entry(aliceId, "alice", SELF, "lobby"));
+    service.onPlayerSwitchServer(alice, "survival");
+    awaitWorker();
+    assertEquals("lobby", depot.map.get(aliceId).getServerName());
+  }
+
+  @Test
+  void aPlayerStillHereAfterTheHoldGetsItsEntryBackFromTheRepair() {
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    service.releaseForTransfer(List.of(alice.getUniqueId()));
+
+    advance(PlayerDepotService.HANDOVER_HOLD.minusSeconds(1));
+    service.refreshNow();
+    assertNull(depot.map.get(alice.getUniqueId()), "still held");
+
+    advance(Duration.ofSeconds(1));
+    service.refreshNow();
+    assertNotNull(depot.map.get(alice.getUniqueId()), "the transfer never happened: repaired");
+  }
+
+  @Test
+  void cancellingTheDrainLiftsTheHoldAtOnce() {
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    service.releaseForTransfer(List.of(alice.getUniqueId()));
+
+    service.keepPlayers(List.of(alice.getUniqueId()));
+    repair();
+
+    assertNotNull(depot.map.get(alice.getUniqueId()));
+  }
+
+  @Test
+  void liftingTheHoldOfOnePlayerLeavesThePlayersAlreadySentHeld() {
+    final ConnectedPlayer alice = join("alice");
+    final ConnectedPlayer bob = join("bob");
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    depot.put(entry(bob.getUniqueId(), "bob", SELF, "lobby"));
+    service.releaseForTransfer(List.of(alice.getUniqueId(), bob.getUniqueId()));
+
+    service.keepPlayers(List.of(alice.getUniqueId())); // bob was sent: its hold runs out alone
+    repair();
+
+    assertNotNull(depot.map.get(alice.getUniqueId()), "the player that stays is repaired");
+    assertNull(depot.map.get(bob.getUniqueId()), "a recreated entry would be refused as duplicate");
+  }
+
+  @Test
+  void aRefusedPlayerGetsItsEntryBackAtTheNextRepairWithoutWaitingForTheHold() {
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    service.releaseForTransfer(List.of(alice.getUniqueId()));
+    advance(Duration.ofSeconds(1)); // far less than HANDOVER_HOLD
+    service.refreshNow();
+    assertNull(depot.map.get(alice.getUniqueId()), "still held");
+
+    service.keepPlayers(List.of(alice.getUniqueId())); // the target refused her
+    service.refreshNow();
+
+    assertNotNull(depot.map.get(alice.getUniqueId()));
+  }
+
+  @Test
+  void aSlowWorkerFailsTheReleaseInsteadOfHoldingThePassForever() throws Exception {
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", SELF, "lobby"));
+    depot.hang = new CountDownLatch(1); // Redis is slow: the worker waits in front of the removal
+    service.onPlayerSwitchServer(alice, "survival");
+    assertTrue(depot.getEntered.await(5, TimeUnit.SECONDS), "the worker must be busy first");
+
+    final long start = System.nanoTime();
+    assertFalse(service.releaseForTransfer(List.of(alice.getUniqueId())));
+
+    assertTrue(millisSince(start) < 5_000, "the barrier must be bounded");
+    depot.hang.countDown();
+    awaitWorker(); // the queued removal now runs, and finds the hold gone
+    assertNotNull(depot.map.get(alice.getUniqueId()), "a player that was not sent lost its entry");
+    repair();
+    assertNotNull(depot.map.get(alice.getUniqueId()), "and the repair no longer holds it back");
+  }
+
+  @Test
+  void releasingAfterReleaseAllHasNothingLeftToDo() {
+    final ConnectedPlayer alice = join("alice");
+    service.releaseAll();
+
+    assertTrue(service.releaseForTransfer(List.of(alice.getUniqueId())));
+  }
+
+  @Test
   void aSettingsFloodFromOnePlayerNeverPushesOutAnotherPlayersDisconnect() throws Exception {
     final PlayerSettings listed = mock(PlayerSettings.class);
     when(listed.isClientListingAllowed()).thenReturn(true);
@@ -701,6 +809,7 @@ class PlayerDepotServiceTest {
     volatile RuntimeException claimFailure;
     volatile CountDownLatch valuesHang;
     final CountDownLatch valuesEntered = new CountDownLatch(1);
+    final CountDownLatch getEntered = new CountDownLatch(1);
 
     void put(final PlayerEntry entry) {
       map.put(entry.getUniqueId(), entry);
@@ -736,6 +845,7 @@ class PlayerDepotServiceTest {
 
     @Override
     public PlayerEntry get(final UUID key) {
+      getEntered.countDown();
       await(hang);
       return map.get(key);
     }

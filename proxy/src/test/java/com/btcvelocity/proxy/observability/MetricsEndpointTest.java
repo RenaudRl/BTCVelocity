@@ -49,7 +49,7 @@ class MetricsEndpointTest {
     final String body = ProxyMetrics.render(7, Map.of("lobby", 3L, "sur\"vival", 4L),
         Map.of("survival", 2),
         bridge.snapshot(), 9, 2, 3, 1,
-        Map.of(AdmissionStats.Result.HOST_OBSERVED, 5L),
+        Map.of(AdmissionStats.Result.HOST_OBSERVED, 5L), true,
         List.of(new LoopWatchdog.Reading("worker-0", 1_500_000, 4)));
 
     try (MetricsEndpoint endpoint = new MetricsEndpoint(
@@ -69,6 +69,7 @@ class MetricsEndpointTest {
       assertTrue(text.contains("btc_proxy_status_cache_total{result=\"miss\"} 2\n"), text);
       assertTrue(text.contains("btc_proxy_admission_total{result=\"host_observed\"} 5\n"), text);
       assertTrue(text.contains("# TYPE btc_proxy_admission_total counter\n"), text);
+      assertTrue(text.contains("btc_proxy_draining 1\n"), text);
       assertTrue(text.contains("btc_proxy_cluster_duplicate_sessions_total 3\n"), text);
       assertTrue(text.contains("# TYPE btc_proxy_cluster_duplicate_sessions_total counter\n"), text);
       assertTrue(text.contains("btc_proxy_cluster_duplicate_forced_closes_total 1\n"), text);

@@ -21,6 +21,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.btcvelocity.api.connection.ListenerOrigin;
 import com.btcvelocity.api.event.connection.ConnectionEstablishEvent;
+import com.btcvelocity.proxy.security.AdmissionStats;
 import com.btcvelocity.proxy.security.HandshakeHosts;
 import com.velocitypowered.api.event.connection.ConnectionHandshakeEvent;
 import com.velocitypowered.api.network.HandshakeIntent;
@@ -202,6 +203,14 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
       ic.disconnectQuietly(Component.text("This server requires Minecraft 26.3 to connect.", NamedTextColor.RED)
           .append(Component.newline())
           .append(Component.text("Please update your client to the latest version.", NamedTextColor.GRAY)));
+      return;
+    }
+
+    // Before the attempt limiter: a refusal here must not use up the player's login attempts.
+    if (server.getProxyDrain().isDraining()) {
+      server.getAdmissionStats().record(AdmissionStats.Result.DRAINING);
+      connection.setState(StateRegistry.LOGIN);
+      ic.disconnectQuietly(Component.translatable("velocity.error.proxy-draining"));
       return;
     }
 

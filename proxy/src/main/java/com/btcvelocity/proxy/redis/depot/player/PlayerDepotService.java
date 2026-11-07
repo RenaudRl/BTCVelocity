@@ -116,9 +116,16 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   static final String DUPLICATE_SESSION_KEY = "velocity.error.duplicate-session";
 
   /**
-   * How long {@link #releaseAll()} waits for the worker before removing the entries directly.
+   * How long {@link #releaseAll()} and {@link #releaseForTransfer(Collection)} wait for the worker.
    */
   private static final Duration RELEASE_BARRIER_TIMEOUT = Duration.ofSeconds(3);
+
+  /**
+   * How long a player handed to another proxy is left out of the repair. Long enough for the
+   * client to reach the target and claim; past it, a player still connected here was not
+   * transferred and gets its entry back.
+   */
+  static final Duration HANDOVER_HOLD = Duration.ofSeconds(10);
 
   /**
    * How long shutdown waits for queued player writes before dropping them.
@@ -191,6 +198,12 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
   private final Map<UUID, Suspect> suspects = new ConcurrentHashMap<>();
 
   /**
+   * Players handed to another proxy by {@link #releaseForTransfer(Collection)}, with the
+   * {@link #nanoClock} reading of the handover. The repair and the entry updates skip them.
+   */
+  private final Map<UUID, Long> handedOver = new ConcurrentHashMap<>();
+
+  /**
    * The last cluster view read from Redis, or {@code null} before the first successful read.
    */
   private volatile @Nullable Snapshot snapshot;
@@ -245,29 +258,89 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     this.released = true;
     // Through the worker: the write in flight there (a repair that read the hash before the flag)
     // lands first, so it cannot claim a released player again after the removal.
-    final CompletableFuture<Void> removed = new CompletableFuture<>();
-    final boolean queued = this.worker.execute(() -> {
-      try {
-        this.depot.removeAllOwnedBy(this.redis.getProxyId());
-        removed.complete(null);
-      } catch (RuntimeException e) {
-        removed.completeExceptionally(e);
-      }
-    });
-    try {
-      if (queued) {
-        removed.get(RELEASE_BARRIER_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-        return;
-      }
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    } catch (ExecutionException | TimeoutException e) {
-      LOGGER.warn("Releasing this proxy's players through the Redis worker failed ({}); "
-          + "removing them directly", e.toString());
+    if (runOnWorkerAndWait(() -> this.depot.removeAllOwnedBy(this.redis.getProxyId()))) {
+      return;
     }
     // A stuck or full worker must not hold the shutdown: remove directly, the guards in the
     // repair and the updates keep a late write from claiming the players again.
     this.depot.removeAllOwnedBy(this.redis.getProxyId());
+  }
+
+  /**
+   * Removes the entries of players about to be transferred to another proxy and keeps the repair
+   * from writing them back, so the target's claim finds them free (a claim that finds this proxy
+   * as owner is refused as a duplicate). Blocks until the removal has run on the worker, for at
+   * most {@link #RELEASE_BARRIER_TIMEOUT}: call it from the scheduler, never from a Netty loop.
+   *
+   * <p>The players are held out of {@link #refreshNow()} and the entry updates for
+   * {@link #HANDOVER_HOLD}. One that is still connected here after that was not transferred, and
+   * the repair claims it again. {@link #keepPlayers(Collection)} lifts the hold at once.</p>
+   *
+   * @param uniqueIds the players to hand over
+   * @return {@code false} if the removal did not finish in time: nothing is held back any more and
+   *         the players must not be transferred yet
+   */
+  public boolean releaseForTransfer(final @NotNull Collection<UUID> uniqueIds) {
+    if (uniqueIds.isEmpty() || !isWriting()) {
+      return true; // after releaseAll() or shutdown, this proxy has no entries left to release
+    }
+    final long now = this.nanoClock.getAsLong();
+    // Before the removal is queued: a repair running ahead of it in the worker sees the hold, and
+    // one that does not has finished before the removal runs.
+    uniqueIds.forEach(uniqueId -> this.handedOver.put(uniqueId, now));
+    final boolean released = runOnWorkerAndWait(() -> {
+      for (UUID uniqueId : uniqueIds) {
+        // A hold lifted meanwhile (drain cancelled) means the player stays: leave the entry.
+        if (isWriting() && this.handedOver.containsKey(uniqueId)) {
+          this.depot.removeIfOwner(uniqueId, this.redis.getProxyId());
+        }
+      }
+    });
+    if (!released) {
+      this.handedOver.keySet().removeAll(uniqueIds);
+    }
+    return released;
+  }
+
+  /**
+   * Lifts the hold of {@link #releaseForTransfer(Collection)} for these players only: the repair
+   * writes them back within a refresh interval. The others stay held (they were sent, and the
+   * hold expires on its own). Called when a drain is cancelled or a transfer is refused.
+   *
+   * @param uniqueIds the players that stay on this proxy
+   */
+  public void keepPlayers(final @NotNull Collection<UUID> uniqueIds) {
+    this.handedOver.keySet().removeAll(uniqueIds);
+  }
+
+  /**
+   * Queues work on the worker and waits for it.
+   *
+   * @return {@code true} if it ran to the end, {@code false} if it could not be queued, failed or
+   *         did not finish within {@link #RELEASE_BARRIER_TIMEOUT}
+   */
+  private boolean runOnWorkerAndWait(final Runnable work) {
+    final CompletableFuture<Void> done = new CompletableFuture<>();
+    final boolean queued = this.worker.execute(() -> {
+      try {
+        work.run();
+        done.complete(null);
+      } catch (RuntimeException e) {
+        done.completeExceptionally(e);
+      }
+    });
+    if (!queued) {
+      return false;
+    }
+    try {
+      done.get(RELEASE_BARRIER_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+      return true;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (ExecutionException | TimeoutException e) {
+      LOGGER.warn("Releasing players through the Redis worker failed ({})", e.toString());
+    }
+    return false;
   }
 
   /**
@@ -401,7 +474,8 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
    * Runs on the worker: changes this session's entry, never another proxy's.
    */
   private void updateOwnEntry(final ConnectedPlayer player, final Consumer<PlayerEntry> change) {
-    if (!isWriting() || !isCurrentSession(player)) {
+    if (!isWriting() || !isCurrentSession(player)
+        || this.handedOver.containsKey(player.getUniqueId())) {
       return;
     }
     final PlayerEntry entry = this.depot.get(player.getUniqueId());
@@ -594,6 +668,9 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
       return;
     }
 
+    final long now = this.nanoClock.getAsLong();
+    this.handedOver.values().removeIf(since -> now - since >= HANDOVER_HOLD.toNanos());
+
     final Collection<PlayerEntry> entries = this.depot.values();
     final String proxyId = this.redis.getProxyId();
     final Map<UUID, PlayerEntry> byId = new HashMap<>();
@@ -605,8 +682,10 @@ public final class PlayerDepotService extends AbstractDepotService<UUID, PlayerE
     // overwritten nor removed.
     for (ConnectedPlayer player : this.server.getAllPlayers()) {
       final PlayerEntry entry = byId.get(player.getUniqueId());
-      // isWriting() again before each claim: a releaseAll() during the read must win.
-      if (isWriting() && (entry == null || (ownedHere(entry)
+      // isWriting() again before each claim: a releaseAll() during the read must win. A player
+      // handed to another proxy is not written back, whatever the read says.
+      if (isWriting() && !this.handedOver.containsKey(player.getUniqueId())
+          && (entry == null || (ownedHere(entry)
           && !Objects.equals(entry.getServerName(), currentServerName(player))))) {
         this.depot.claim(newEntry(player), proxyId, false).join();
       }

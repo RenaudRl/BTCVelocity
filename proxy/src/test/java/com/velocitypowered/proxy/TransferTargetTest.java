@@ -19,12 +19,17 @@ package com.velocitypowered.proxy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import com.btcvelocity.proxy.redis.depot.player.PlayerEntry;
 import com.velocitypowered.proxy.config.DynamicProxyFilterMode;
 import com.velocitypowered.proxy.config.ProxyAddress;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -45,6 +50,50 @@ class TransferTargetTest {
         DynamicProxyFilterMode.MOST_EMPTY)) {
       assertEquals(LIVE, choose(mode, Set.of("a", "c")), mode.name());
     }
+  }
+
+  @Test
+  void aDrainedPeerThatStillBeatsIsNeverChosen() {
+    // What VelocityServer passes as liveness: the peer beats and carries no drain mark.
+    final Set<String> beating = Set.of("a", "b", "c");
+    final Set<String> drained = Set.of("c");
+    for (DynamicProxyFilterMode mode : List.of(DynamicProxyFilterMode.FIRST_FOUND,
+        DynamicProxyFilterMode.MOST_EMPTY, DynamicProxyFilterMode.LEAST_EMPTY)) {
+      assertEquals(DEAD, VelocityServer.chooseTransferTarget(CONFIGURED, SELF.proxyId(), mode,
+          id -> beating.contains(id) && !drained.contains(id), PLAYERS::get), mode.name());
+    }
+    assertNull(VelocityServer.chooseTransferTarget(CONFIGURED, SELF.proxyId(),
+        DynamicProxyFilterMode.FIRST_FOUND, id -> false, PLAYERS::get));
+  }
+
+  @Test
+  void theSnapshotCountsEveryCandidateWithoutAReadInRedis() {
+    final Optional<List<PlayerEntry>> snapshot = Optional.of(List.of(
+        entryOn("B"), entryOn("c"), entryOn("c"), entryOn("a")));
+    final ToIntFunction<String> counts = VelocityServer.playersPerProxy(snapshot, id -> {
+      throw new AssertionError("a usable snapshot must not read Redis");
+    });
+
+    assertEquals(1, counts.applyAsInt("b"), "proxy ids compare without case");
+    assertEquals(2, counts.applyAsInt("c"));
+    assertEquals(0, counts.applyAsInt("unknown"));
+    assertEquals(DEAD, VelocityServer.chooseTransferTarget(CONFIGURED, SELF.proxyId(),
+        DynamicProxyFilterMode.MOST_EMPTY, Set.of("a", "b", "c")::contains, counts),
+        "b holds 1 player, c holds 2: b is the emptiest");
+  }
+
+  @Test
+  void withoutAUsableSnapshotTheCountsComeFromRedis() {
+    final ToIntFunction<String> counts =
+        VelocityServer.playersPerProxy(Optional.empty(), id -> 42);
+
+    assertEquals(42, counts.applyAsInt("b"));
+  }
+
+  private static PlayerEntry entryOn(final String proxyId) {
+    final PlayerEntry entry = mock(PlayerEntry.class);
+    when(entry.getProxyId()).thenReturn(proxyId);
+    return entry;
   }
 
   @Test

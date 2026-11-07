@@ -1463,20 +1463,35 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
 
   @Override
   public void transferToHost(final @NotNull InetSocketAddress address) {
+    requestTransfer(address);
+  }
+
+  /**
+   * Same as {@link #transferToHost(InetSocketAddress)}, for callers that must know whether the
+   * transfer went out (the drain counts only the players it really sent).
+   *
+   * @param address where to transfer the player
+   * @return a future completed with {@code true} once the transfer packet was queued on the
+   *         connection (not once it was flushed: a write that fails later is not reported), or
+   *         {@code false} if a {@link PreTransferEvent} handler denied the transfer
+   */
+  public CompletableFuture<Boolean> requestTransfer(final @NotNull InetSocketAddress address) {
     Preconditions.checkNotNull(address);
     Preconditions.checkArgument(
         this.getProtocolVersion().compareTo(ProtocolVersion.MINECRAFT_1_20_5) >= 0,
         "Player version must be 1.20.5 to be able to transfer to another host");
 
-    server.getEventManager().fire(new PreTransferEvent(this, address)).thenAccept((event) -> {
-      if (event.getResult().isAllowed()) {
-        InetSocketAddress resultedAddress = event.getResult().address();
-        if (resultedAddress == null) {
-          resultedAddress = address;
-        }
-
-        connection.write(new TransferPacket(resultedAddress.getHostName(), resultedAddress.getPort()));
+    return server.getEventManager().fire(new PreTransferEvent(this, address)).thenApply(event -> {
+      if (!event.getResult().isAllowed()) {
+        return false;
       }
+      InetSocketAddress resultedAddress = event.getResult().address();
+      if (resultedAddress == null) {
+        resultedAddress = address;
+      }
+
+      connection.write(new TransferPacket(resultedAddress.getHostName(), resultedAddress.getPort()));
+      return true;
     });
   }
 
