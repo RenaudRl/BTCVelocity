@@ -347,16 +347,12 @@ final class NativePermissionService implements AutoCloseable {
     if (snapshot.groups == null) {
       snapshot.groups = new HashMap<>();
     }
-    final Map<String, NativePermissionSnapshot.Group> merged = new HashMap<>(catalog);
+    // Same merge as the Paper extension (`loaded.groups + groupCatalog`): the catalog wins over the
+    // copy each stored row embeds, so a node removed from a grade is removed here too. An embedded
+    // copy of a group the catalog does not hold is kept, exactly as the extension keeps it.
+    final Map<String, NativePermissionSnapshot.Group> merged = new HashMap<>();
     snapshot.groups.forEach((key, value) -> merged.put(key.toLowerCase(), value));
-    // A copy embedded in a stored row predates the flag or a later change of it: the catalog alone
-    // says which group is the base grade, as on the Paper side.
-    catalog.forEach((key, current) -> {
-      final NativePermissionSnapshot.Group embedded = merged.get(key);
-      if (embedded != null && embedded != current) {
-        embedded.isDefault = current.isDefault;
-      }
-    });
+    merged.putAll(catalog);
     snapshot.groups = merged;
   }
 

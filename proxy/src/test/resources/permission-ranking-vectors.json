@@ -237,5 +237,136 @@
         ]
       }
     }
+  ],
+  "mergeNote": "Vecteurs de fusion : 'row' est la ligne joueur telle que stockee (avec sa copie embarquee des groupes), 'catalog' le catalogue de groupes. La ligne est fusionnee comme l'extension le fait (groups de la ligne + catalogue : le catalogue gagne, une copie embarquee d'un groupe absent du catalogue est conservee), puis evaluee dans 'context'.",
+  "mergeVectors": [
+    {
+      "name": "un node retire du groupe dans le catalogue n est plus accorde malgre la copie embarquee",
+      "query": "btc.proxy.kick",
+      "context": {},
+      "now": 1000,
+      "expected": "UNDEFINED",
+      "row": {
+        "groups": {
+          "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.kick", "value": true, "priority": 0, "sourceId": "staff" } ] }
+        },
+        "directGroups": [ "staff" ]
+      },
+      "catalog": {
+        "staff": { "name": "staff", "weight": 10 }
+      }
+    },
+    {
+      "name": "un node ajoute au groupe dans le catalogue est accorde malgre la copie embarquee perimee",
+      "query": "btc.proxy.kick",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "row": {
+        "groups": {
+          "staff": { "name": "staff", "weight": 10 }
+        },
+        "directGroups": [ "staff" ]
+      },
+      "catalog": {
+        "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.kick", "value": true, "priority": 0, "sourceId": "staff" } ] }
+      }
+    },
+    {
+      "name": "un deny du catalogue remplace l allow de la copie embarquee",
+      "query": "btc.proxy.kick",
+      "context": {},
+      "now": 1000,
+      "expected": "DENY",
+      "row": {
+        "groups": {
+          "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.kick", "value": true, "priority": 0, "sourceId": "staff" } ] }
+        },
+        "directGroups": [ "staff" ]
+      },
+      "catalog": {
+        "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.kick", "value": false, "priority": 0, "sourceId": "staff" } ] }
+      }
+    },
+    {
+      "name": "la copie embarquee d un groupe absent du catalogue est conservee",
+      "query": "btc.ancien.droit",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "row": {
+        "groups": {
+          "ancien": { "name": "ancien", "weight": 5, "permissions": [ { "node": "btc.ancien.droit", "value": true, "priority": 0, "sourceId": "ancien" } ] }
+        },
+        "directGroups": [ "ancien" ]
+      },
+      "catalog": {
+        "staff": { "name": "staff", "weight": 10 }
+      }
+    },
+    {
+      "name": "un catalogue vide laisse la copie embarquee decider",
+      "query": "btc.proxy.kick",
+      "context": {},
+      "now": 1000,
+      "expected": "ALLOW",
+      "row": {
+        "groups": {
+          "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.kick", "value": true, "priority": 0, "sourceId": "staff" } ] }
+        },
+        "directGroups": [ "staff" ]
+      },
+      "catalog": {}
+    },
+    {
+      "name": "l heritage retire dans le catalogue n apporte plus les nodes du parent",
+      "query": "btc.herite",
+      "context": {},
+      "now": 1000,
+      "expected": "UNDEFINED",
+      "row": {
+        "groups": {
+          "base": { "name": "base", "weight": 5, "permissions": [ { "node": "btc.herite", "value": true, "priority": 0, "sourceId": "base" } ] },
+          "chef": { "name": "chef", "weight": 50, "inherits": [ "base" ] }
+        },
+        "directGroups": [ "chef" ]
+      },
+      "catalog": {
+        "base": { "name": "base", "weight": 5, "permissions": [ { "node": "btc.herite", "value": true, "priority": 0, "sourceId": "base" } ] },
+        "chef": { "name": "chef", "weight": 50 }
+      }
+    },
+    {
+      "name": "le contexte du node dans le catalogue remplace celui de la copie embarquee",
+      "query": "btc.proxy.info",
+      "context": { "server": "proxy" },
+      "now": 1000,
+      "expected": "UNDEFINED",
+      "row": {
+        "groups": {
+          "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.info", "value": true, "priority": 0, "contexts": { "server": "proxy" }, "sourceId": "staff" } ] }
+        },
+        "directGroups": [ "staff" ]
+      },
+      "catalog": {
+        "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.info", "value": true, "priority": 0, "contexts": { "server": "lobby" }, "sourceId": "staff" } ] }
+      }
+    },
+    {
+      "name": "un node du catalogue limite au serveur interroge est accorde malgre une copie embarquee limitee a un autre",
+      "query": "btc.proxy.info",
+      "context": { "server": "proxy" },
+      "now": 1000,
+      "expected": "ALLOW",
+      "row": {
+        "groups": {
+          "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.info", "value": true, "priority": 0, "contexts": { "server": "lobby" }, "sourceId": "staff" } ] }
+        },
+        "directGroups": [ "staff" ]
+      },
+      "catalog": {
+        "staff": { "name": "staff", "weight": 10, "permissions": [ { "node": "btc.proxy.info", "value": true, "priority": 0, "contexts": { "server": "proxy" }, "sourceId": "staff" } ] }
+      }
+    }
   ]
 }

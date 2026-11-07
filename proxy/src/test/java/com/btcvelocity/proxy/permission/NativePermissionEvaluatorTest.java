@@ -243,6 +243,22 @@ class NativePermissionEvaluatorTest {
     assertEquals(Tristate.TRUE, NativePermissionEvaluator.evaluate(stored, WITNESS_PLAYER, Map.of(), 0L));
   }
 
+  /**
+   * A node removed from a grade must stop applying even though every stored row still embeds the
+   * old copy of that grade: the catalog wins over the embedded copy, as in the extension.
+   */
+  @Test
+  void aNodeRemovedFromAGradeIsRefusedDespiteTheEmbeddedCopy() {
+    final String node = "velocity.command.server";
+    final NativePermissionSnapshot stored = new NativePermissionSnapshot();
+    stored.groups = new java.util.HashMap<>(Map.of("staff", group("staff", 10, node(node, true, 0, Map.of()))));
+    stored.directGroups = Set.of("staff");
+
+    NativePermissionService.normalize(stored, UUID.randomUUID(), Map.of("staff", group("staff", 10)));
+
+    assertEquals(Tristate.UNDEFINED, NativePermissionEvaluator.evaluate(stored, node, Map.of(), 0L));
+  }
+
   /** Contract with the Paper writer: the group payload spells the flag `isDefault`; older ones omit it. */
   @Test
   void groupPayloadReadsTheDefaultFlagAndToleratesItsAbsence() {
