@@ -92,6 +92,42 @@ class LoopWatchdogTest {
   }
 
   @Test
+  void aLoopThatHasNotStartedItsThreadYetDoesNotUseUpTheReportWindow() throws Exception {
+    // The thread starts 200 ms late, so the first marker waits past the 50 ms threshold with no
+    // thread to sample: that report would carry no stack and hide the real stall that follows.
+    final ThreadFactory late = runnable -> new Thread(() -> {
+      try {
+        Thread.sleep(200);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      runnable.run();
+    }, "test-slow-start-loop");
+    final DefaultEventLoop slowStart = new DefaultEventLoop(null, late);
+    final CountDownLatch release = new CountDownLatch(1);
+    try {
+      watchdog = new LoopWatchdog(Map.of("slow", slowStart), 50, 10, LONG_WINDOW_MILLIS,
+          stalls::add);
+      slowStart.execute(() -> {
+        try {
+          release.await();
+        } catch (final InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      });
+      awaitStall();
+      Thread.sleep(300);
+    } finally {
+      release.countDown();
+      slowStart.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+    }
+
+    assertEquals(1, stalls.size());
+    assertEquals("test-slow-start-loop", stalls.get(0).threadName());
+    assertTrue(stalls.get(0).stack().length > 0);
+  }
+
+  @Test
   void aHealthyLoopIsNeverReported() throws Exception {
     // Threshold far above any scheduling noise: only a real stall could trip it.
     watchdog = new LoopWatchdog(Map.of("healthy", healthyLoop),
