@@ -17,7 +17,6 @@ These parts ship in the jar but are **not finished**. Do not rely on them as com
 | Area | Status |
 |---|---|
 | **Sentinel admission shield** (anti-bot, anti-proxy/VPN, datacenter/Tor lists, ASN, per-network rate limits) | In progress: filters are in place, tuning and false-positive review on a test network are ongoing. |
-| **`btc:bridge` v2 control plane** | In progress: envelope, HMAC signature, ACK/NACK and deduplication work; per-target authorisation, private transport (mTLS/tunnel), categorised errors and the full malformed/replay test suite are still being completed. |
 | **CloudNet integration** (service registry, arrival routing, resource-pack deduplication) | In progress: proxy plugins built against Adventure 4 (craft-engine-proxy, CloudNet bridge) must be recompiled and re-validated for this release. |
 
 ## 🚀 Architecture
@@ -41,7 +40,7 @@ modifications required by GPLv3 §5(a) are in [NOTICE.md](NOTICE.md).
 | Feature | Origin | What it does |
 |---|---|---|
 | Minecraft 26.3 | Velocity | Protocol 777 support from upstream 4.3.0; clients older than 26.3 are refused (BTC). |
-| `btc:bridge` protocol **v2** | BTC | Typed, versioned messages between proxy and backends. Every message carries an envelope (version, message id, source backend); `Ack`/`Nack` let the sender tell a lost request from a slow one. The sealed hierarchy has an explicit `permits` list, so a message added outside it fails to compile instead of silently decoding as unknown. |
+| `btc:bridge` protocol **v2** | BTC | Typed, versioned messages between proxy and backends. Every message carries an envelope (version, message id, source backend); `Ack`/`Nack` let the sender tell a lost request from a slow one. The sealed hierarchy has an explicit `permits` list, so a message added outside it fails to compile instead of silently decoding as unknown. Frames are HMAC-sealed and bound to the backend connection that carried them; client-originated, oversized, replayed or unsigned messages are refused, and player-scoped messages carry an origin platform checked against the live session. Validated end to end with BTC-CORE, CloudNet and a real Bedrock player. |
 | Modern forwarding | Velocity | Velocity-native forwarding plus BungeeGuard. |
 | Anti-decompression bomb | BTC | Compression-ratio monitoring with a ratio-check floor, and oversized packet detection. |
 
