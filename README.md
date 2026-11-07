@@ -147,6 +147,23 @@ jdbc-url = "jdbc:postgresql://127.0.0.1:5432/btcvelocity?ssl=false&application_n
 | `/server <name>` | — | Switch servers |
 | `/transfer` | `velocity.command.transfer` | Move players between proxies |
 | `/velocity uptime` | `velocity.command.uptime` | View proxy statistics |
+| `/velocity drain [start\|cancel\|status]` | `velocity.command.drain` | Empty this proxy before a restart, without kicking anyone |
+
+### Draining a proxy
+
+`/velocity drain start` refuses new logins at the handshake and hands connected players to a live
+peer proxy with a Transfer packet (batches of 25 per second). Redis marks the proxy `draining:<id>`
+so peers stop sending players to it.
+
+- **Update the whole fleet first.** Every proxy that can receive players must run a build that knows
+  the drain marker and the hand-over hold; an older peer can claim a player twice or route new
+  arrivals to the draining proxy.
+- Peers must set `accepts-transfers = true`. The draining proxy releases the player's Redis entry
+  before the Transfer, so the peer does not see a duplicate login even with
+  `kick-existing-players = false` (not yet proven with real clients).
+- Players who cannot follow a Transfer stay on the proxy until it stops: clients older than 1.20.5,
+  and Bedrock players. Bedrock players are only recognised when they arrive through the dedicated
+  Geyser listener; Bedrock traffic routed through the Java listener is treated as Java.
 
 ---
 
