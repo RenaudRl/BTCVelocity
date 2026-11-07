@@ -21,13 +21,9 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import io.lettuce.core.RedisChannelHandler;
 import io.lettuce.core.RedisClient;
-import io.lettuce.core.RedisConnectionStateListener;
 import io.lettuce.core.RedisURI;
-import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
-import java.net.SocketAddress;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.HashMap;
@@ -188,8 +184,8 @@ final class NativePermissionService implements AutoCloseable {
   }
 
   /**
-   * The bus is connected again: invalidations published during the outage are lost, so nothing cached
-   * can be trusted. The catalog is read again and every cached snapshot is replaced by a fresh read.
+   * The bus confirmed its resubscription (see {@link NativePermissionBus}): invalidations published
+   * during the outage are lost, so nothing cached can be trusted. The catalog is read again and every cached snapshot is replaced by a fresh read.
    *
    * <p>Each player keeps the old snapshot until its new one arrives, so a connected player never
    * falls to "everything refused" for the length of the reload. What cannot be verified is dropped
@@ -429,29 +425,18 @@ final class NativePermissionService implements AutoCloseable {
     final RedisURI valkeyUri = RedisURI.create(loaded.valkeyUri());
     final RedisClient client = RedisClient.create(valkeyUri);
     final StatefulRedisPubSubConnection<String, String> connection = client.connectPubSub();
-    connection.addListener(new RedisPubSubAdapter<>() {
-      @Override
-      public void message(final String channel, final String message) {
-        if (loaded.redisChannel().equals(channel)) {
-          handleInvalidation(message);
-        }
-      }
-    });
-    connection.sync().subscribe(loaded.redisChannel());
-    // After the first connection on purpose: only a reconnection has anything to reconcile.
-    client.addListener(onReconnect(this::reconcileAfterReconnect));
+    bus(loaded.redisChannel()).attach(client, connection);
     redisClient = client;
     redisConnection = connection;
   }
 
-  /** Lettuce reconnects and resubscribes by itself; this is the one place the proxy learns of it. */
-  static RedisConnectionStateListener onReconnect(final Runnable reconcile) {
-    return new RedisConnectionStateListener() {
-      @Override
-      public void onRedisConnected(final RedisChannelHandler<?, ?> connection, final SocketAddress address) {
-        reconcile.run();
-      }
-    };
+  /**
+   * The bus wired to this service: messages are invalidations, a confirmed resubscription reloads
+   * the cache, and a reconnection left unconfirmed empties it.
+   */
+  NativePermissionBus bus(final String channel) {
+    return new NativePermissionBus(channel, this::handleInvalidation, this::reconcileAfterReconnect,
+        snapshots::clear, delays.apply(NativePermissionBus.RESUBSCRIBE_GRACE));
   }
 
   private CompletableFuture<NativePermissionSnapshot> readSnapshot(final UUID subject, final Object session) {

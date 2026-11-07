@@ -23,8 +23,16 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.velocitypowered.api.permission.Tristate;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisConnectionStateListener;
+import io.lettuce.core.pubsub.RedisPubSubListener;
+import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
+import io.lettuce.core.pubsub.api.sync.RedisPubSubCommands;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,10 +40,10 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 /**
  * How long a snapshot lives in the proxy's cache: until its player leaves, until the bus has been
@@ -49,6 +57,7 @@ class NativePermissionCacheLifecycleTest {
   private static final String OWN_NODE = "velocity.command.server";
   private static final String STAFF_NODE = "velocity.command.info";
   private static final long BOUND_SECONDS = 10;
+  private static final String CHANNEL = "btc:permissions:btc";
   private static final NativePermissionConfig.Config CONFIG = new NativePermissionConfig.Config(
       "jdbc:postgresql://db.invalid:5432/btc", "reader", "", "btc", "proxy-1", "btc_permissions_", "");
 
@@ -178,15 +187,45 @@ class NativePermissionCacheLifecycleTest {
   }
 
   @Test
-  void everyReconnectionOfTheClientTriggersAReconciliation() {
-    final AtomicInteger reconciliations = new AtomicInteger();
+  void theBusIsSubscribedAndItsMessagesAreInvalidations() {
+    final Bus bus = attachBus();
 
-    final var listener = NativePermissionService.onReconnect(reconciliations::incrementAndGet);
-    listener.onRedisConnected(null, null);
-    listener.onRedisConnected(null, null);
-    listener.onRedisDisconnected(null);
+    bus.messages().message("btc:permissions:elsewhere", subjectInvalidation(ALICE, 5));
+    assertNotNull(service.snapshot(ALICE), "another network's channel is not ours");
+    bus.messages().message(CHANNEL, subjectInvalidation(ALICE, 5));
 
-    assertEquals(2, reconciliations.get());
+    assertNull(service.snapshot(ALICE));
+  }
+
+  @Test
+  void aConfirmedResubscriptionReloadsTheCacheAndTheFirstSubscriptionDoesNot() throws Exception {
+    final Bus bus = attachBus();
+    bus.messages().subscribed(CHANNEL, 1);
+    final int catalogReads = tables.groupReads.get();
+    tables.readStarted = new CountDownLatch(2);
+
+    bus.state().onRedisDisconnected(null);
+    bus.state().onRedisConnected(null, null);
+    assertEquals(catalogReads, tables.groupReads.get(), "the connection event alone reads nothing: SUBSCRIBE is not live yet");
+    bus.messages().subscribed(CHANNEL, 1);
+
+    assertTrue(tables.readStarted.await(BOUND_SECONDS, TimeUnit.SECONDS), "both cached rows are read again");
+    refreshWindow.runAll();
+    assertNotNull(service.snapshot(BOB), "a confirmed resubscription does not empty the cache");
+  }
+
+  @Test
+  void aReconnectionNeverConfirmedEmptiesTheCache() {
+    final Bus bus = attachBus();
+    bus.messages().subscribed(CHANNEL, 1);
+
+    bus.state().onRedisDisconnected(null);
+    bus.state().onRedisConnected(null, null);
+    assertEquals(1, refreshWindow.pending(), "the grace delay is running");
+    refreshWindow.runAll();
+
+    assertNull(service.snapshot(ALICE));
+    assertNull(service.snapshot(BOB));
   }
 
   // --- group invalidation bursts -------------------------------------------------------------
@@ -308,6 +347,28 @@ class NativePermissionCacheLifecycleTest {
   }
 
   // --- helpers -------------------------------------------------------------------------------
+
+  /** The listeners the bus registers, taken from the Lettuce boundary it is attached to. */
+  private record Bus(RedisPubSubListener<String, String> messages, RedisConnectionStateListener state) {
+  }
+
+  @SuppressWarnings("unchecked")
+  private Bus attachBus() {
+    final RedisClient client = mock(RedisClient.class);
+    final StatefulRedisPubSubConnection<String, String> connection = mock(StatefulRedisPubSubConnection.class);
+    final RedisPubSubCommands<String, String> commands = mock(RedisPubSubCommands.class);
+    when(connection.sync()).thenReturn(commands);
+
+    service.bus(CHANNEL).attach(client, connection);
+
+    final ArgumentCaptor<RedisPubSubListener<String, String>> messages =
+        ArgumentCaptor.forClass((Class<RedisPubSubListener<String, String>>) (Class<?>) RedisPubSubListener.class);
+    final ArgumentCaptor<RedisConnectionStateListener> state = ArgumentCaptor.forClass(RedisConnectionStateListener.class);
+    verify(connection).addListener(messages.capture());
+    verify(commands).subscribe(CHANNEL);
+    verify(client).addListener(state.capture());
+    return new Bus(messages.getValue(), state.getValue());
+  }
 
   private NativePermissionSnapshot load(final UUID subject) throws Exception {
     return service.load(subject).get(BOUND_SECONDS, TimeUnit.SECONDS);
