@@ -115,7 +115,7 @@ public final class ConnectionAdmission {
     if (this.rateWarned.compareAndSet(false, true)) {
       LOGGER.warn("Connection rate limit reached by {}: closing its connections until the window "
           + "ends (connection-rate-limit; further ones are logged at debug)", LogAddress.mask(source));
-    } else {
+    } else if (LOGGER.isDebugEnabled()) {
       LOGGER.debug("Connection rate limit reached by {}", LogAddress.mask(source));
     }
     return false;

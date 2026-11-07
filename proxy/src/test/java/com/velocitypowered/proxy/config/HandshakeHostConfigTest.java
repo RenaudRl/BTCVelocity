@@ -146,6 +146,7 @@ class HandshakeHostConfigTest {
     assertFalse(VelocityConfiguration.neverMatches("2001:db8::1"));
     // still warned about: a port, a wildcard, a network
     assertTrue(VelocityConfiguration.neverMatches("play.borntocraft.net:25565"));
+    assertTrue(VelocityConfiguration.neverMatches("[2001:db8::1]"));
     assertTrue(VelocityConfiguration.neverMatches("*.borntocraft.net"));
     assertTrue(VelocityConfiguration.neverMatches("10.0.0.0/8"));
   }

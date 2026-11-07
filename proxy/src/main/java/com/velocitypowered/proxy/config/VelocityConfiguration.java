@@ -1748,6 +1748,9 @@ public final class VelocityConfiguration implements ProxyConfig {
    * @return {@code true} if the entry must be warned about
    */
   static boolean neverMatches(final String entry) {
+    if (entry.startsWith("[")) {
+      return true; // the handshake carries an IPv6 host without its brackets
+    }
     if (!(entry.contains(":") || entry.contains("*") || entry.contains("/"))) {
       return false;
     }
