@@ -275,17 +275,22 @@ public interface ProxyServer extends Audience {
    * Registers a hook that is called for every new client channel, to add Netty handlers to its
    * pipeline. See {@link ClientChannelHook} for when and how it is called.
    *
+   * @param plugin the instance of the plugin that owns the hook, named when it fails
    * @param hook the hook; registering the same instance twice calls it twice
+   * @throws IllegalArgumentException if {@code plugin} is not the instance of a loaded plugin
    */
-  void addClientChannelHook(ClientChannelHook hook);
+  void addClientChannelHook(Object plugin, ClientChannelHook hook);
 
   /**
-   * Unregisters a hook added with {@link #addClientChannelHook}. Does nothing if it is not
-   * registered. Channels already passed to the hook keep what it installed.
+   * Unregisters a hook the same plugin added with {@link #addClientChannelHook}. Does nothing if it
+   * is not registered. Channels already passed to the hook keep what it installed, and a channel
+   * being set up on another event loop may still call it once.
    *
+   * @param plugin the instance of the plugin that registered the hook
    * @param hook the hook to remove
+   * @throws IllegalArgumentException if {@code plugin} is not the instance of a loaded plugin
    */
-  void removeClientChannelHook(ClientChannelHook hook);
+  void removeClientChannelHook(Object plugin, ClientChannelHook hook);
 
   /**
    * Gets the {@link StorageService} used to persist player data and proxy state.

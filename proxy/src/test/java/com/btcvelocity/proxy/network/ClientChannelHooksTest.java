@@ -18,9 +18,11 @@
 package com.btcvelocity.proxy.network;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.btcvelocity.api.connection.ClientChannelHook;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,17 +38,20 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Plugins hook the pipeline of every client channel: they run in registration order, and a plugin
- * that fails must neither stop the others nor refuse the connection.
+ * that fails must neither stop the others, nor refuse the connection, nor flood the log.
  */
 class ClientChannelHooksTest {
+
+  private static final String OWNER = "someplugin";
+  private static final String SENTINEL = "end of test";
 
   @Test
   void hooksRunInRegistrationOrderOnTheChannel() {
     final ClientChannelHooks hooks = new ClientChannelHooks();
     final List<String> calls = new ArrayList<>();
     final EmbeddedChannel channel = new EmbeddedChannel();
-    hooks.add(seen -> calls.add("first:" + (seen == channel)));
-    hooks.add(seen -> calls.add("second"));
+    hooks.add(OWNER, seen -> calls.add("first:" + (seen == channel)));
+    hooks.add(OWNER, seen -> calls.add("second"));
 
     hooks.run(channel);
 
@@ -58,19 +63,99 @@ class ClientChannelHooksTest {
     final ClientChannelHooks hooks = new ClientChannelHooks();
     final List<String> calls = new ArrayList<>();
     final ClientChannelHook removed = seen -> calls.add("removed");
-    hooks.add(removed);
-    hooks.add(seen -> calls.add("kept"));
-    hooks.remove(removed);
+    hooks.add(OWNER, removed);
+    hooks.add(OWNER, seen -> calls.add("kept"));
+    hooks.remove("otherplugin", removed); // not its owner: stays
+    hooks.run(new EmbeddedChannel());
+    hooks.remove(OWNER, removed);
 
     hooks.run(new EmbeddedChannel());
 
-    assertEquals(List.of("kept"), calls);
+    assertEquals(List.of("removed", "kept", "kept"), calls);
   }
 
   @Test
-  void aFailingHookIsLoggedAndTheOthersStillRun() throws InterruptedException {
+  void theHandlersOfAFailingHookAreRemovedAndTheOthersKept() {
+    final ClientChannelHooks hooks = new ClientChannelHooks();
+    hooks.add(OWNER, channel -> channel.pipeline().addLast("kept", new ChannelInboundHandlerAdapter()));
+    hooks.add(OWNER, channel -> {
+      channel.pipeline().addFirst("half-a", new ChannelInboundHandlerAdapter());
+      channel.pipeline().addLast("half-b", new ChannelInboundHandlerAdapter());
+      throw new IllegalStateException("plugin bug after two handlers");
+    });
+    final EmbeddedChannel channel = new EmbeddedChannel();
+
+    withWarnings(events -> hooks.run(channel));
+
+    assertNull(channel.pipeline().get("half-a"));
+    assertNull(channel.pipeline().get("half-b"));
+    assertTrue(channel.pipeline().get("kept") != null, "a hook that worked keeps its handlers");
+    assertTrue(channel.isOpen());
+  }
+
+  @Test
+  void aFailingHookIsLoggedAndTheOthersStillRun() {
+    final List<String> calls = new ArrayList<>();
+    final EmbeddedChannel channel = new EmbeddedChannel();
+    final List<LogEvent> events = withWarnings(captured -> {
+      final ClientChannelHooks hooks = new ClientChannelHooks();
+      hooks.add(OWNER, seen -> {
+        throw new IllegalStateException("plugin bug");
+      });
+      hooks.add(OWNER, seen -> {
+        throw new NoSuchMethodError("built for another api");
+      });
+      hooks.add(OWNER, seen -> calls.add("after"));
+      hooks.run(channel);
+    });
+
+    assertEquals(List.of("after"), calls);
+    assertTrue(channel.isOpen(), "a failing plugin must not close the connection");
+    assertEquals(2, events.size());
+    assertEquals(Level.WARN, events.get(0).getLevel());
+    assertEquals("plugin bug", events.get(0).getThrown().getMessage());
+    assertTrue(events.get(0).getMessage().getFormattedMessage().contains(OWNER),
+        "the log names the plugin");
+    assertEquals(NoSuchMethodError.class, events.get(1).getThrown().getClass());
+  }
+
+  @Test
+  void aHookThatFailsOnEveryChannelLogsItsStackOnceThenStaysQuiet() {
+    final List<LogEvent> events = withWarnings(captured -> {
+      final ClientChannelHooks hooks = new ClientChannelHooks();
+      hooks.add(OWNER, seen -> {
+        throw new IllegalStateException("broken on every join");
+      });
+      for (int i = 0; i < 50; i++) {
+        hooks.run(new EmbeddedChannel());
+      }
+    });
+
+    assertEquals(1, events.size(), "one line per interval, the first with its stack");
+    assertEquals("broken on every join", events.get(0).getThrown().getMessage());
+  }
+
+  @Test
+  void aSlowHookIsReported() {
+    final List<LogEvent> events = withWarnings(captured -> {
+      final ClientChannelHooks hooks = new ClientChannelHooks();
+      hooks.add(OWNER, seen -> Thread.sleep(TimeUnit.NANOSECONDS.toMillis(
+          ClientChannelHooks.SLOW_HOOK_NANOS) + 5));
+      hooks.run(new EmbeddedChannel());
+      hooks.run(new EmbeddedChannel());
+    });
+
+    assertEquals(1, events.size(), "a slow hook is reported once per interval");
+    assertTrue(events.get(0).getMessage().getFormattedMessage().contains("must not block"));
+  }
+
+  /**
+   * Runs an action with the hooks' warnings captured, and returns them once the async loggers
+   * delivered them all (a sentinel logged after the action closes the list).
+   */
+  private static List<LogEvent> withWarnings(final ThrowingConsumer<List<LogEvent>> action) {
     final List<LogEvent> events = new CopyOnWriteArrayList<>();
-    final AbstractAppender appender = new AbstractAppender("hook-failures", null, null, true,
+    final AbstractAppender appender = new AbstractAppender("hook-warnings", null, null, true,
         Property.EMPTY_ARRAY) {
       @Override
       public void append(final LogEvent event) {
@@ -78,38 +163,37 @@ class ClientChannelHooksTest {
       }
     };
     appender.start();
-    Configurator.setLevel(ClientChannelHooks.class.getName(), Level.WARN);
+    final String name = ClientChannelHooks.class.getName();
     final org.apache.logging.log4j.core.Logger logger =
         (org.apache.logging.log4j.core.Logger) LogManager.getLogger(ClientChannelHooks.class);
+    final Level previous = logger.getLevel();
+    Configurator.setLevel(name, Level.WARN);
     logger.addAppender(appender);
     try {
-      final ClientChannelHooks hooks = new ClientChannelHooks();
-      final List<String> calls = new ArrayList<>();
-      hooks.add(seen -> {
-        throw new IllegalStateException("plugin bug");
-      });
-      hooks.add(seen -> {
-        throw new NoSuchMethodError("built for another api");
-      });
-      hooks.add(seen -> calls.add("after"));
-      final EmbeddedChannel channel = new EmbeddedChannel();
-
-      hooks.run(channel);
-
-      assertEquals(List.of("after"), calls);
-      assertTrue(channel.isOpen(), "a failing plugin must not close the connection");
-      // the proxy logs through async loggers: wait, bounded, for the events to be delivered
+      action.accept(events);
+      logger.warn(SENTINEL);
       final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-      while (events.size() < 2 && System.nanoTime() < deadline) {
+      while (events.stream().noneMatch(ClientChannelHooksTest::isSentinel)
+          && System.nanoTime() < deadline) {
         Thread.sleep(20);
       }
-      assertEquals(2, events.size());
-      assertEquals(Level.WARN, events.get(0).getLevel());
-      assertEquals("plugin bug", events.get(0).getThrown().getMessage());
-      assertEquals(NoSuchMethodError.class, events.get(1).getThrown().getClass());
+      assertTrue(events.stream().anyMatch(ClientChannelHooksTest::isSentinel), "log delivered");
+    } catch (final Exception e) {
+      throw new AssertionError(e);
     } finally {
       logger.removeAppender(appender);
       appender.stop();
+      Configurator.setLevel(name, previous);
     }
+    return events.stream().filter(event -> !isSentinel(event)).toList();
+  }
+
+  private static boolean isSentinel(final LogEvent event) {
+    return SENTINEL.equals(event.getMessage().getFormattedMessage());
+  }
+
+  @FunctionalInterface
+  private interface ThrowingConsumer<T> {
+    void accept(T value) throws Exception;
   }
 }

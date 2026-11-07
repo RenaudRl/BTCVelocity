@@ -474,13 +474,19 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
   }
 
   @Override
-  public void addClientChannelHook(final ClientChannelHook hook) {
-    clientChannelHooks.add(hook);
+  public void addClientChannelHook(final Object plugin, final ClientChannelHook hook) {
+    clientChannelHooks.add(pluginId(plugin), hook);
   }
 
   @Override
-  public void removeClientChannelHook(final ClientChannelHook hook) {
-    clientChannelHooks.remove(hook);
+  public void removeClientChannelHook(final Object plugin, final ClientChannelHook hook) {
+    clientChannelHooks.remove(pluginId(plugin), hook);
+  }
+
+  // the same check as the event manager: only a loaded plugin instance may own a hook
+  private String pluginId(final Object plugin) {
+    return pluginManager.ensurePluginContainer(Objects.requireNonNull(plugin, "plugin"))
+        .getDescription().getId();
   }
 
   @Override

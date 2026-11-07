@@ -22,16 +22,24 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.btcvelocity.api.connection.ClientChannelHook;
+import com.btcvelocity.api.connection.CompressionState;
 import com.btcvelocity.proxy.network.ClientChannelHooks;
 import com.btcvelocity.proxy.security.GeyserListenerAddress;
 import com.btcvelocity.proxy.security.TrustedProxies;
+import com.velocitypowered.api.plugin.PluginContainer;
+import com.velocitypowered.api.plugin.PluginDescription;
 import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
+import com.velocitypowered.proxy.plugin.VelocityPluginManager;
 import io.netty.handler.codec.haproxy.HAProxyCommand;
 import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
@@ -39,11 +47,16 @@ import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.handler.codec.haproxy.HAProxyProxiedProtocol;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.ChannelOutboundHandlerAdapter;
+import io.netty.channel.ChannelPipeline;
+import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -54,6 +67,7 @@ import org.junit.jupiter.api.Test;
 class ServerChannelInitializerTest {
 
   private static final String PEER = "127.0.0.1";
+  private static final String OWNER = "someplugin";
 
   private static PeerChannel open(final String listener, final boolean mainFlag) {
     return open(listener, mainFlag, new ClientChannelHooks());
@@ -62,12 +76,9 @@ class ServerChannelInitializerTest {
   private static PeerChannel open(final String listener, final boolean mainFlag,
       final ClientChannelHooks hooks) {
     final VelocityServer server = mock(VelocityServer.class);
-    final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
+    final VelocityConfiguration configuration = configuration(mainFlag);
     when(server.getConfiguration()).thenReturn(configuration);
     when(server.getConnectionAdmission()).thenReturn(NoAdmission.checks());
-    when(configuration.isProxyProtocol()).thenReturn(mainFlag);
-    when(configuration.getPacketLimiterConfig())
-        .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);
     final PeerChannel channel = new PeerChannel(PEER);
     if (listener != null) {
       channel.attr(Connections.LISTENER).set(listener);
@@ -77,6 +88,17 @@ class ServerChannelInitializerTest {
         .set(ServerChannelInitializer.expectsProxyProtocol(listener, mainFlag));
     new ServerChannelInitializer(server, hooks).initChannel(channel);
     return channel;
+  }
+
+  private static VelocityConfiguration configuration(final boolean mainFlag) {
+    final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
+    when(configuration.isProxyProtocol()).thenReturn(mainFlag);
+    when(configuration.getPacketLimiterConfig())
+        .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);
+    // what turning compression on reads
+    when(configuration.getCompressionLevel()).thenReturn(-1);
+    when(configuration.getSecurity()).thenReturn(mock(VelocityConfiguration.Security.class));
+    return configuration;
   }
 
   @Test
@@ -158,8 +180,8 @@ class ServerChannelInitializerTest {
   void aHookIsCalledOncePerChannelOnceTheWholePipelineIsBuilt() {
     final ClientChannelHooks hooks = new ClientChannelHooks();
     final List<String> seen = new ArrayList<>();
-    hooks.add(channel -> seen.add("first:" + codecAndConnectionAreThere(channel)));
-    hooks.add(channel -> seen.add("second:" + codecAndConnectionAreThere(channel)));
+    hooks.add(OWNER, channel -> seen.add("first:" + codecAndConnectionAreThere(channel)));
+    hooks.add(OWNER, channel -> seen.add("second:" + codecAndConnectionAreThere(channel)));
 
     open("geyser", false, hooks);
     open(null, true, hooks);
@@ -172,7 +194,7 @@ class ServerChannelInitializerTest {
     final ClientChannelHooks hooks = new ClientChannelHooks();
     final ChannelHandler tap = new ChannelInboundHandlerAdapter();
     // the names ClientChannelHook documents: a plugin hardcodes them
-    hooks.add(channel -> channel.pipeline().addBefore("minecraft-decoder", "tap", tap));
+    hooks.add(OWNER, channel -> channel.pipeline().addBefore("minecraft-decoder", "tap", tap));
 
     final PeerChannel channel = open(null, false, hooks);
 
@@ -184,16 +206,138 @@ class ServerChannelInitializerTest {
   void aFailingHookNeitherClosesTheChannelNorStopsTheNextHook() {
     final ClientChannelHooks hooks = new ClientChannelHooks();
     final List<String> seen = new ArrayList<>();
-    hooks.add(channel -> {
+    hooks.add(OWNER, channel -> {
       throw new IllegalStateException("plugin bug");
     });
-    hooks.add(channel -> seen.add("next"));
+    hooks.add(OWNER, channel -> seen.add("next"));
 
     final PeerChannel channel = open(null, false, hooks);
 
     assertEquals(List.of("next"), seen);
     assertTrue(channel.isOpen());
     assertNotNull(channel.pipeline().get(MinecraftConnection.class));
+  }
+
+  @Test
+  void aHandlerFollowingTheJavadocRecipeStaysOnTheUncompressedSide() {
+    final List<CompressionState> states = new ArrayList<>();
+    final ChannelHandler encoderTap = new EncoderTap();
+    final ChannelHandler decoderTap = new RecipeTap(states);
+    final ClientChannelHooks hooks = new ClientChannelHooks();
+    hooks.add(OWNER, channel -> channel.pipeline()
+        .addBefore(ClientChannelHook.MINECRAFT_DECODER, "tap-decoder", decoderTap)
+        .addBefore(ClientChannelHook.MINECRAFT_ENCODER, "tap-encoder", encoderTap));
+    final PeerChannel channel = open(null, false, hooks);
+    final MinecraftConnection connection = channel.pipeline().get(MinecraftConnection.class);
+
+    connection.setCompressionThreshold(256);
+
+    List<String> names = channel.pipeline().names();
+    assertEquals(names.indexOf(Connections.MINECRAFT_DECODER) - 1, names.indexOf("tap-decoder"));
+    assertEquals(names.indexOf(Connections.MINECRAFT_ENCODER) - 1, names.indexOf("tap-encoder"));
+    assertTrue(names.indexOf(Connections.COMPRESSION_DECODER) < names.indexOf("tap-decoder"),
+        "the decompressor runs before the tap");
+    assertTrue(names.indexOf(Connections.COMPRESSION_ENCODER) < names.indexOf("tap-encoder"),
+        "the compressor runs after the tap on the way out");
+
+    connection.setCompressionThreshold(-1);
+
+    names = channel.pipeline().names();
+    assertFalse(names.contains(Connections.COMPRESSION_DECODER));
+    assertEquals(names.indexOf(Connections.MINECRAFT_ENCODER) - 1, names.indexOf("tap-encoder"));
+    assertTrue(names.indexOf("tap-decoder") < names.indexOf(Connections.MINECRAFT_DECODER));
+    // the moved tap is further down the path of the event, so it sees ENABLED a second time
+    assertEquals(List.of(CompressionState.ENABLED, CompressionState.ENABLED,
+        CompressionState.DISABLED), states);
+  }
+
+  @Test
+  void aHookAddedThroughTheServerReachesTheChannelInitializer() throws ReflectiveOperationException {
+    final Object plugin = new Object();
+    final VelocityServer server = serverWithPlugin(plugin);
+    final List<String> seen = new ArrayList<>();
+    final ClientChannelHook hook = channel -> seen.add("hooked");
+    server.addClientChannelHook(plugin, hook);
+    final PeerChannel channel = new PeerChannel(PEER);
+
+    // what ConnectionManager builds
+    new ServerChannelInitializer(server, server.getClientChannelHooks()).initChannel(channel);
+    server.removeClientChannelHook(plugin, hook);
+    new ServerChannelInitializer(server, server.getClientChannelHooks())
+        .initChannel(new PeerChannel(PEER));
+
+    assertEquals(List.of("hooked"), seen);
+  }
+
+  @Test
+  void onlyALoadedPluginCanOwnAHook() throws ReflectiveOperationException {
+    final VelocityServer server = serverWithPlugin(new Object());
+    final ClientChannelHook hook = channel -> { };
+
+    assertThrows(IllegalArgumentException.class,
+        () -> server.addClientChannelHook(new Object(), hook));
+    assertThrows(IllegalArgumentException.class,
+        () -> server.removeClientChannelHook(new Object(), hook));
+    assertThrows(NullPointerException.class, () -> server.addClientChannelHook(null, hook));
+  }
+
+  // a server that knows one plugin instance, with only what the initializer reads
+  private static VelocityServer serverWithPlugin(final Object plugin)
+      throws ReflectiveOperationException {
+    final PluginDescription description = mock(PluginDescription.class);
+    when(description.getId()).thenReturn(OWNER);
+    final PluginContainer container = mock(PluginContainer.class);
+    when(container.getDescription()).thenReturn(description);
+    final VelocityPluginManager plugins = mock(VelocityPluginManager.class);
+    when(plugins.fromInstance(any())).thenReturn(Optional.empty());
+    when(plugins.fromInstance(plugin)).thenReturn(Optional.of(container));
+    when(plugins.ensurePluginContainer(any())).thenCallRealMethod();
+    final VelocityServer server = mock(VelocityServer.class, CALLS_REAL_METHODS);
+    set(server, "pluginManager", plugins);
+    set(server, "clientChannelHooks", new ClientChannelHooks());
+    set(server, "configuration", configuration(false));
+    set(server, "connectionAdmission", NoAdmission.checks());
+    return server;
+  }
+
+  private static void set(final VelocityServer server, final String name, final Object value)
+      throws ReflectiveOperationException {
+    final Field field = VelocityServer.class.getDeclaredField(name);
+    field.setAccessible(true);
+    field.set(server, value);
+  }
+
+  private static void moveBefore(final ChannelPipeline pipeline, final String target,
+      final String name) {
+    final ChannelHandler handler = pipeline.remove(name);
+    pipeline.addBefore(target, name, handler);
+  }
+
+  /** The recipe of ClientChannelHook: on ENABLED, move both handlers back before the codec. */
+  @ChannelHandler.Sharable // Netty re-adds only a sharable instance
+  private static final class RecipeTap extends ChannelInboundHandlerAdapter {
+
+    private final List<CompressionState> states;
+
+    private RecipeTap(final List<CompressionState> states) {
+      this.states = states;
+    }
+
+    @Override
+    public void userEventTriggered(final ChannelHandlerContext ctx, final Object event) {
+      if (event instanceof CompressionState state) {
+        this.states.add(state);
+        if (state == CompressionState.ENABLED) {
+          moveBefore(ctx.pipeline(), ClientChannelHook.MINECRAFT_DECODER, "tap-decoder");
+          moveBefore(ctx.pipeline(), ClientChannelHook.MINECRAFT_ENCODER, "tap-encoder");
+        }
+      }
+      ctx.fireUserEventTriggered(event);
+    }
+  }
+
+  @ChannelHandler.Sharable
+  private static final class EncoderTap extends ChannelOutboundHandlerAdapter {
   }
 
   private static boolean codecAndConnectionAreThere(final Channel channel) {

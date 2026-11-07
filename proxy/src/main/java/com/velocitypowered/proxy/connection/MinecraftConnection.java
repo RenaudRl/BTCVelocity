@@ -26,6 +26,7 @@ import static com.velocitypowered.proxy.network.Connections.FRAME_ENCODER;
 import static com.velocitypowered.proxy.network.Connections.MINECRAFT_DECODER;
 import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 
+import com.btcvelocity.api.connection.CompressionState;
 import com.btcvelocity.proxy.security.DecompressionGuard;
 import com.btcvelocity.proxy.security.PacketLimitExceededException;
 import com.google.common.base.Preconditions;
@@ -722,6 +723,7 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
         channel.pipeline().addBefore(MINECRAFT_DECODER, FRAME_ENCODER,
             MinecraftVarintLengthEncoder.INSTANCE);
         channel.pipeline().fireUserEventTriggered(VelocityConnectionEvent.COMPRESSION_DISABLED);
+        channel.pipeline().fireUserEventTriggered(CompressionState.DISABLED);
       }
     } else {
       MinecraftCompressDecoder decoder = (MinecraftCompressDecoder) channel.pipeline()
@@ -760,6 +762,8 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
         }
 
         channel.pipeline().fireUserEventTriggered(VelocityConnectionEvent.COMPRESSION_ENABLED);
+        // the public twin, for plugin handlers (ClientChannelHook): the internal enum is not API
+        channel.pipeline().fireUserEventTriggered(CompressionState.ENABLED);
       }
     }
   }

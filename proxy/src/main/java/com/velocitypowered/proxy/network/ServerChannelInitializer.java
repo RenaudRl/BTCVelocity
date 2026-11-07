@@ -159,7 +159,8 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
       ch.pipeline().addFirst(new HAProxyMessageDecoder());
     }
 
-    // Last, so that a hook sees the whole pipeline; no byte is read before initChannel returns.
+    // Last, so that a hook sees the proxy's whole pipeline; no byte is read before initChannel
+    // returns. A plugin that wraps this initializer (Floodgate) adds its handlers after the hooks.
     this.clientChannelHooks.run(ch);
   }
 }
