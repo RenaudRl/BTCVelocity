@@ -66,13 +66,13 @@ import org.jetbrains.annotations.Unmodifiable;
  * boundary rather than an inconsistency: operator rights are local to the server granting them, and
  * carrying them across the proxy would silently grant them network-wide.
  *
- * <p>The context sent to the evaluator is {@code network} plus the player's current {@code server},
- * so a node scoped to one backend does not leak into decisions taken while the player sits elsewhere.
+ * <p>The context sent to the evaluator is constant ({@link NativePermissionService#proxyContext}):
+ * {@code network} plus {@code server=proxy}, whichever backend the player sits on, so a node scoped
+ * to a backend never applies to a decision the proxy takes.
  */
 final class NativePermissionResolver implements PermissionResolver {
 
   private final UUID subject;
-  private final Player player;
   private final PermissionFunction delegate;
   private final NativePermissionService service;
 
@@ -81,7 +81,6 @@ final class NativePermissionResolver implements PermissionResolver {
       final PermissionFunction delegate,
       final NativePermissionService service
   ) {
-    this.player = player;
     this.subject = player.getUniqueId();
     this.delegate = delegate;
     this.service = service;
@@ -97,7 +96,7 @@ final class NativePermissionResolver implements PermissionResolver {
       return Tristate.FALSE;
     }
     final Tristate resolved = NativePermissionEvaluator.evaluate(
-        snapshot, permission, service.context(player), System.currentTimeMillis());
+        snapshot, permission, service.context(), System.currentTimeMillis());
     return resolved == Tristate.UNDEFINED ? fallback(permission) : resolved;
   }
 
@@ -110,7 +109,7 @@ final class NativePermissionResolver implements PermissionResolver {
       return Map.of();
     }
     return NativePermissionEvaluator.permissionMap(
-        snapshot, service.context(player), System.currentTimeMillis());
+        snapshot, service.context(), System.currentTimeMillis());
   }
 
   private Tristate fallback(final String permission) {

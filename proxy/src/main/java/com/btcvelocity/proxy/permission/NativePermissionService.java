@@ -39,13 +39,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import com.velocitypowered.api.proxy.Player;
 
 /** Async PostgreSQL/Valkey read-only backend for proxy-side native permissions. */
 final class NativePermissionService implements AutoCloseable {
 
   private static final Logger LOGGER = LogManager.getLogger(NativePermissionService.class);
-  private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+  /** Value of the {@code server} context at the proxy; see {@link #proxyContext(String)}. */
+  static final String PROXY_SERVER_CONTEXT = "proxy";
+  private static final Gson GSON =new GsonBuilder().disableHtmlEscaping().create();
 
   private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
   private final ConcurrentHashMap<UUID, NativePermissionSnapshot> snapshots = new ConcurrentHashMap<>();
@@ -82,21 +83,24 @@ final class NativePermissionService implements AutoCloseable {
     return snapshots.get(subject);
   }
 
+  /** Evaluation context of every proxy-side decision; empty while the backend has no configuration. */
   Map<String, String> context() {
-    return context(null);
+    final NativePermissionConfig.Config current = config;
+    return current == null ? Map.of() : proxyContext(current.networkId());
   }
 
-  Map<String, String> context(final Player player) {
-    final NativePermissionConfig.Config current = config;
-    if (current == null) {
-      return Map.of();
-    }
-    final String serverId = player == null
-        ? current.serverId()
-        : player.getCurrentServer()
-            .map(connection -> connection.getServerInfo().getName())
-            .orElse(current.serverId());
-    return Map.of("network", current.networkId(), "server", serverId);
+  /**
+   * Context of a proxy decision: {@code network=<networkId>} and {@code server=proxy}, never a world
+   * or a dimension, wherever the player currently is.
+   *
+   * <p>{@code server=proxy} is a convention written into the grade data: a grade scopes a node to the
+   * proxy with that exact value, so changing {@link #PROXY_SERVER_CONTEXT} later means rewriting
+   * those grades. It is deliberately not the player's current backend: the CloudNet service name
+   * ({@code Lobby-1}) differs from the task name backends evaluate ({@code lobby}), and a node scoped
+   * to a backend must never apply to a command the proxy runs.
+   */
+  static Map<String, String> proxyContext(final String networkId) {
+    return Map.of("network", networkId, "server", PROXY_SERVER_CONTEXT);
   }
 
   /** État observable du backend : voir {@link NativePermissionHealth} pour le pourquoi. */

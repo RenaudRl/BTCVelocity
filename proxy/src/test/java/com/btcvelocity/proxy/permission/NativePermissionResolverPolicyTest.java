@@ -79,7 +79,7 @@ class NativePermissionResolverPolicyTest {
     service = mock(NativePermissionService.class);
     player = mock(Player.class);
     when(player.getUniqueId()).thenReturn(SUBJECT);
-    when(service.context(player)).thenReturn(CONTEXT);
+    when(service.context()).thenReturn(CONTEXT);
     when(service.load(any(UUID.class))).thenReturn(new CompletableFuture<>());
   }
 
@@ -181,7 +181,6 @@ class NativePermissionResolverPolicyTest {
   void aUuidOutsideTheMojangSpaceIsResolvedLikeAnyOther() {
     final Player bedrockPlayer = mock(Player.class);
     when(bedrockPlayer.getUniqueId()).thenReturn(BEDROCK_SUBJECT);
-    when(service.context(bedrockPlayer)).thenReturn(CONTEXT);
     when(service.snapshot(BEDROCK_SUBJECT))
         .thenReturn(snapshotFor(BEDROCK_SUBJECT, node("btc.proxy.join", true)));
     final NativePermissionResolver resolver =
