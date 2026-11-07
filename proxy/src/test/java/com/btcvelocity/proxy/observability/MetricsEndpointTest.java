@@ -47,7 +47,7 @@ class MetricsEndpointTest {
     bridge.record(BridgeMetrics.Event.RECEIVED);
     final String body = ProxyMetrics.render(7, Map.of("lobby", 3L, "sur\"vival", 4L),
         Map.of("survival", 2),
-        bridge.snapshot(), 9, 2, 3,
+        bridge.snapshot(), 9, 2, 3, 1,
         List.of(new LoopWatchdog.Reading("worker-0", 1_500_000, 4)));
 
     try (MetricsEndpoint endpoint = new MetricsEndpoint(
@@ -67,6 +67,9 @@ class MetricsEndpointTest {
       assertTrue(text.contains("btc_proxy_status_cache_total{result=\"miss\"} 2\n"), text);
       assertTrue(text.contains("btc_proxy_cluster_duplicate_sessions_total 3\n"), text);
       assertTrue(text.contains("# TYPE btc_proxy_cluster_duplicate_sessions_total counter\n"), text);
+      assertTrue(text.contains("btc_proxy_cluster_duplicate_forced_closes_total 1\n"), text);
+      assertTrue(text.contains("# TYPE btc_proxy_cluster_duplicate_forced_closes_total counter\n"),
+          text);
       assertTrue(text.contains("btc_proxy_eventloop_lag_seconds{loop=\"worker-0\"} 0.001500000\n"),
           text);
       assertTrue(text.contains("btc_proxy_eventloop_pending_tasks{loop=\"worker-0\"} 4\n"), text);

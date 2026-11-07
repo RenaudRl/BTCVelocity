@@ -314,6 +314,25 @@ class PlayerDepotServiceTest {
     verify(alice.getConnection(), times(1)).close();
     verify(alice, times(1)).disconnect(any(Component.class));
     assertEquals(1, service.getDuplicateSessionsClosed());
+    assertEquals(1, service.getDuplicateForcedCloses());
+  }
+
+  @Test
+  void aNormalClosureAndAForceThatClosedNothingAreNotCountedAsForced() {
+    final ConnectedPlayer alice = join("alice");
+    depot.put(entry(alice.getUniqueId(), "alice", OTHER, "lobby"));
+    when(proxies.isAlive(OTHER)).thenReturn(true, true, true, true, false, true);
+    repair();
+    repair();
+    assertEquals(1, service.getDuplicateSessionsClosed());
+    assertEquals(0, service.getDuplicateForcedCloses());
+
+    repair(); // the holder is unreadable: nothing is closed, so nothing is forced
+    assertEquals(0, service.getDuplicateForcedCloses());
+
+    online.remove(alice); // the polite disconnect worked in the end
+    repair();
+    assertEquals(0, service.getDuplicateForcedCloses());
   }
 
   @Test
