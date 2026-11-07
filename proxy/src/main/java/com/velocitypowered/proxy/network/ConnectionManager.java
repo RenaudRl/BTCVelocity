@@ -89,7 +89,8 @@ public final class ConnectionManager {
     this.transportType = TransportType.bestType();
     this.bossGroup = this.transportType.createEventLoopGroup(TransportType.Type.BOSS);
     this.workerGroup = this.transportType.createEventLoopGroup(TransportType.Type.WORKER);
-    this.serverChannelInitializer = new ServerChannelInitializerHolder(new ServerChannelInitializer(this.server));
+    this.serverChannelInitializer = new ServerChannelInitializerHolder(
+        new ServerChannelInitializer(this.server, this.server.getClientChannelHooks()));
     this.backendChannelInitializer = new BackendChannelInitializerHolder(new BackendChannelInitializer(this.server));
     this.resolver = new SeparatePoolInetNameResolver(GlobalEventExecutor.INSTANCE);
   }

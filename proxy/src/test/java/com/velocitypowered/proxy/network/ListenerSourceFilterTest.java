@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.btcvelocity.proxy.network.ClientChannelHooks;
 import com.btcvelocity.proxy.security.GeyserListenerAddress;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
@@ -120,7 +121,7 @@ class ListenerSourceFilterTest {
 
     assertTrue(filter.admits(child), "flag off: admitted without a PROXY header");
     when(configuration.isProxyProtocol()).thenReturn(true); // reload between filter and worker
-    new ServerChannelInitializer(server).initChannel(child);
+    new ServerChannelInitializer(server, new ClientChannelHooks()).initChannel(child);
 
     assertNull(child.pipeline().get(HAProxyMessageDecoder.class),
         "a connection admitted under the old value must not get a PROXY decoder");

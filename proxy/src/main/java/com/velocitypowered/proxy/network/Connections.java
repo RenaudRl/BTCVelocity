@@ -17,10 +17,12 @@
 
 package com.velocitypowered.proxy.network;
 
+import com.btcvelocity.api.connection.ClientChannelHook;
 import io.netty.util.AttributeKey;
 
 /**
- * Constants used for the pipeline.
+ * Constants used for the pipeline. The names a plugin may rely on come from the API
+ * ({@link ClientChannelHook}), so that both cannot drift apart.
  */
 public final class Connections {
 
@@ -38,9 +40,9 @@ public final class Connections {
 
   public static final String CIPHER_ENCODER = "cipher-encoder";
 
-  public static final String COMPRESSION_DECODER = "compression-decoder";
+  public static final String COMPRESSION_DECODER = ClientChannelHook.COMPRESSION_DECODER;
 
-  public static final String COMPRESSION_ENCODER = "compression-encoder";
+  public static final String COMPRESSION_ENCODER = ClientChannelHook.COMPRESSION_ENCODER;
 
   public static final String FLOW_HANDLER = "flow-handler";
 
@@ -54,9 +56,9 @@ public final class Connections {
 
   public static final String LEGACY_PING_ENCODER = "legacy-ping-encoder";
 
-  public static final String MINECRAFT_DECODER = "minecraft-decoder";
+  public static final String MINECRAFT_DECODER = ClientChannelHook.MINECRAFT_DECODER;
 
-  public static final String MINECRAFT_ENCODER = "minecraft-encoder";
+  public static final String MINECRAFT_ENCODER = ClientChannelHook.MINECRAFT_ENCODER;
 
   public static final String READ_TIMEOUT = "read-timeout";
 

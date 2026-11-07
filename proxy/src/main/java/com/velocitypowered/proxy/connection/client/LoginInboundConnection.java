@@ -17,6 +17,7 @@
 
 package com.velocitypowered.proxy.connection.client;
 
+import com.btcvelocity.api.connection.ConnectionChannel;
 import com.btcvelocity.api.connection.ListenerOrigin;
 import com.velocitypowered.api.network.HandshakeIntent;
 import com.velocitypowered.api.network.ProtocolState;
@@ -30,6 +31,7 @@ import com.velocitypowered.proxy.protocol.packet.LoginPluginMessagePacket;
 import com.velocitypowered.proxy.protocol.packet.LoginPluginResponsePacket;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import java.net.InetSocketAddress;
 import java.util.Optional;
@@ -44,7 +46,8 @@ import space.vectrix.flare.fastutil.Int2ObjectSyncMap;
 /**
  * Handles the actual login stage of a player logging in.
  */
-public class LoginInboundConnection implements LoginPhaseConnection, KeyIdentifiable, ListenerOrigin {
+public class LoginInboundConnection
+    implements LoginPhaseConnection, KeyIdentifiable, ListenerOrigin, ConnectionChannel {
 
   private static final AtomicIntegerFieldUpdater<LoginInboundConnection> SEQUENCE_UPDATER =
       AtomicIntegerFieldUpdater.newUpdater(LoginInboundConnection.class, "sequenceCounter");
@@ -77,6 +80,11 @@ public class LoginInboundConnection implements LoginPhaseConnection, KeyIdentifi
   @Override
   public Optional<String> getListenerName() {
     return delegate.getListenerName();
+  }
+
+  @Override
+  public Channel getChannel() {
+    return delegate.getChannel();
   }
 
   @Override

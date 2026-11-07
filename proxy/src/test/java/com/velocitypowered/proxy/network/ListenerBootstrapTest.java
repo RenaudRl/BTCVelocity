@@ -31,6 +31,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.btcvelocity.api.connection.ListenerOrigin;
+import com.btcvelocity.proxy.network.ClientChannelHooks;
 import com.btcvelocity.proxy.security.GeyserListenerAddress;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.api.event.proxy.ListenerBoundEvent;
@@ -95,7 +96,7 @@ class ListenerBootstrapTest {
 
     this.manager = new ConnectionManager(server);
     // As a plugin wrapping the initializer would: the real one runs, and every call is recorded
-    final ServerChannelInitializer real = new ServerChannelInitializer(server);
+    final ServerChannelInitializer real = new ServerChannelInitializer(server, new ClientChannelHooks());
     this.manager.serverChannelInitializer.set(new ChannelInitializer<Channel>() {
       @Override
       protected void initChannel(final Channel ch) {
