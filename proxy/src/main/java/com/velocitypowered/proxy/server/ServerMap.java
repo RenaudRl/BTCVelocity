@@ -21,8 +21,11 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.velocitypowered.api.event.proxy.server.ServerRegisteredEvent;
 import com.velocitypowered.api.event.proxy.server.ServerUnregisteredEvent;
+import com.velocitypowered.api.proxy.config.BackendServerConfig;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.proxy.VelocityServer;
+import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+import com.velocitypowered.proxy.util.AddressUtil;
 import java.util.Collection;
 import java.util.Locale;
 import java.util.Map;
@@ -93,6 +96,56 @@ public class ServerMap {
       return rs;
     } else {
       return existing;
+    }
+  }
+
+  /**
+   * Brings the servers that come from {@code velocity.toml} in line with a reloaded configuration.
+   *
+   * <p>Only servers named in {@code previous} (the configuration being replaced) can be removed:
+   * a server registered through the plugin API, such as the ones of btc-cloudnet-registry, is not
+   * ours to drop. A toml server that shares its name with an API server replaces it, as upstream
+   * Velocity does.</p>
+   *
+   * @param previous the backend servers of the configuration being replaced
+   * @param next the backend servers of the new configuration
+   * @return the players of removed or replaced servers, who must be moved elsewhere
+   */
+  public Collection<ConnectedPlayer> applyConfiguredServers(
+      final Map<String, BackendServerConfig> previous,
+      final Map<String, BackendServerConfig> next) {
+    ImmutableList.Builder<ConnectedPlayer> evacuate = ImmutableList.builder();
+    removeDroppedServers(previous, next, evacuate);
+    registerOrReplaceServers(next, evacuate);
+    return evacuate.build();
+  }
+
+  private void removeDroppedServers(final Map<String, BackendServerConfig> previous,
+      final Map<String, BackendServerConfig> next, final ImmutableList.Builder<ConnectedPlayer> evacuate) {
+    for (String oldName : previous.keySet()) {
+      if (next.keySet().stream().anyMatch(name -> name.equalsIgnoreCase(oldName))) {
+        continue;
+      }
+      getServer(oldName).ifPresent(removed -> {
+        evacuate.addAll(removed.getPlayersConnected());
+        unregister(removed.getServerInfo());
+      });
+    }
+  }
+
+  private void registerOrReplaceServers(final Map<String, BackendServerConfig> next,
+      final ImmutableList.Builder<ConnectedPlayer> evacuate) {
+    for (Map.Entry<String, BackendServerConfig> entry : next.entrySet()) {
+      ServerInfo info = new ServerInfo(entry.getKey(),
+          AddressUtil.parseAddress(entry.getValue().address()), entry.getValue().forwardingMode());
+      Optional<VelocityRegisteredServer> existing = getServer(entry.getKey());
+      if (existing.isEmpty()) {
+        register(info);
+      } else if (!existing.get().getServerInfo().equals(info)) {
+        evacuate.addAll(existing.get().getPlayersConnected());
+        unregister(existing.get().getServerInfo());
+        register(info);
+      }
     }
   }
 
