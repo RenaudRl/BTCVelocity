@@ -42,6 +42,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.translation.Argument;
@@ -102,8 +103,8 @@ public class VelocityQueueManager implements QueueManager {
    */
   private static final int SNAPSHOT_SWEEP_EVERY_PASSES = 30;
 
-  /** Backend-ping passes made so far; only the scheduler thread touches it. */
-  private int pingPasses = 0;
+  /** Backend-ping passes made so far; passes run on a pool and may overlap. */
+  private final AtomicInteger pingPasses = new AtomicInteger();
 
   /**
    * Constructs a new {@link VelocityQueueManager} and starts periodic tasks.
@@ -449,7 +450,7 @@ public class VelocityQueueManager implements QueueManager {
     pruneStaleQueues(queues, name -> server.getServer(name).isPresent())
         .forEach(lastTurnedOnlineTime::remove);
 
-    if (++pingPasses % SNAPSHOT_SWEEP_EVERY_PASSES == 0) {
+    if (pingPasses.incrementAndGet() % SNAPSHOT_SWEEP_EVERY_PASSES == 0) {
       sweepOrphanSnapshots();
     }
 
