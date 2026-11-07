@@ -10,6 +10,7 @@ package com.velocitypowered.api.proxy;
 import com.btcvelocity.api.bridge.BridgeChannel;
 import com.btcvelocity.api.cluster.ClusterPlayerService;
 import com.btcvelocity.api.cluster.ClusterProxyService;
+import com.btcvelocity.api.connection.ClientChannelHook;
 import com.btcvelocity.api.queue.QueueManager;
 import com.btcvelocity.api.storage.StorageService;
 
@@ -269,6 +270,22 @@ public interface ProxyServer extends Audience {
   default boolean isBackendHalfOpen(String serverName) {
     return false;
   }
+
+  /**
+   * Registers a hook that is called for every new client channel, to add Netty handlers to its
+   * pipeline. See {@link ClientChannelHook} for when and how it is called.
+   *
+   * @param hook the hook; registering the same instance twice calls it twice
+   */
+  void addClientChannelHook(ClientChannelHook hook);
+
+  /**
+   * Unregisters a hook added with {@link #addClientChannelHook}. Does nothing if it is not
+   * registered. Channels already passed to the hook keep what it installed.
+   *
+   * @param hook the hook to remove
+   */
+  void removeClientChannelHook(ClientChannelHook hook);
 
   /**
    * Gets the {@link StorageService} used to persist player data and proxy state.

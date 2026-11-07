@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.btcvelocity.proxy.network.ClientChannelHooks;
 import com.btcvelocity.proxy.security.AdmissionStats;
 import com.btcvelocity.proxy.security.ConnectionAdmission;
 import com.btcvelocity.proxy.security.HandshakeHosts;
@@ -70,7 +71,7 @@ class ConnectionAdmissionPipelineTest {
       final boolean proxyProtocol) {
     final PeerChannel channel = new PeerChannel(peer);
     channel.attr(Connections.PROXY_PROTOCOL).set(proxyProtocol);
-    new ServerChannelInitializer(server).initChannel(channel);
+    new ServerChannelInitializer(server, new ClientChannelHooks()).initChannel(channel);
     return channel;
   }
 
@@ -110,7 +111,7 @@ class ConnectionAdmissionPipelineTest {
   @Test
   void aPluginThatWrapsTheInitializerNeverSeesAChannelOverTheLimit() {
     final VelocityServer server = server(1, List.of(), 0);
-    final ServerChannelInitializer real = new ServerChannelInitializer(server);
+    final ServerChannelInitializer real = new ServerChannelInitializer(server, new ClientChannelHooks());
     final EmbeddedChannel serverChannel = new EmbeddedChannel(new ListenerSourceFilter(server, null));
 
     for (int i = 0; i < 20; i++) {

@@ -26,6 +26,8 @@ import com.btcvelocity.api.connection.ListenerOrigin;
 import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.btcvelocity.proxy.bridge.BackendHealthRegistry;
 import com.btcvelocity.proxy.bridge.VelocityBridgeChannel;
+import com.btcvelocity.api.connection.ClientChannelHook;
+import com.btcvelocity.proxy.network.ClientChannelHooks;
 import com.btcvelocity.proxy.network.TrackedListener;
 import com.btcvelocity.proxy.cluster.ProxyDrain;
 import com.btcvelocity.proxy.cluster.VelocityClusterPlayerService;
@@ -254,6 +256,8 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
 
   private final AdmissionStats admissionStats = new AdmissionStats();
 
+  private final ClientChannelHooks clientChannelHooks = new ClientChannelHooks();
+
   private volatile @MonotonicNonNull ConnectionAdmission connectionAdmission;
 
   private @MonotonicNonNull Ratelimiter<UUID> commandRateLimiter;
@@ -458,6 +462,25 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
    */
   public BackendHealthRegistry getBackendHealthRegistry() {
     return backendHealthRegistry;
+  }
+
+  /**
+   * Returns the hooks run on every new client channel.
+   *
+   * @return the client channel hooks
+   */
+  public ClientChannelHooks getClientChannelHooks() {
+    return clientChannelHooks;
+  }
+
+  @Override
+  public void addClientChannelHook(final ClientChannelHook hook) {
+    clientChannelHooks.add(hook);
+  }
+
+  @Override
+  public void removeClientChannelHook(final ClientChannelHook hook) {
+    clientChannelHooks.remove(hook);
   }
 
   @Override

@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.btcvelocity.proxy.network.ClientChannelHooks;
 import com.btcvelocity.proxy.security.GeyserListenerAddress;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
@@ -36,8 +37,13 @@ import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
 import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
 import io.netty.handler.codec.haproxy.HAProxyProxiedProtocol;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -50,6 +56,11 @@ class ServerChannelInitializerTest {
   private static final String PEER = "127.0.0.1";
 
   private static PeerChannel open(final String listener, final boolean mainFlag) {
+    return open(listener, mainFlag, new ClientChannelHooks());
+  }
+
+  private static PeerChannel open(final String listener, final boolean mainFlag,
+      final ClientChannelHooks hooks) {
     final VelocityServer server = mock(VelocityServer.class);
     final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
     when(server.getConfiguration()).thenReturn(configuration);
@@ -64,7 +75,7 @@ class ServerChannelInitializerTest {
     // what the source filter records when it admits the child
     channel.attr(Connections.PROXY_PROTOCOL)
         .set(ServerChannelInitializer.expectsProxyProtocol(listener, mainFlag));
-    new ServerChannelInitializer(server).initChannel(channel);
+    new ServerChannelInitializer(server, hooks).initChannel(channel);
     return channel;
   }
 
@@ -80,7 +91,7 @@ class ServerChannelInitializerTest {
     final PeerChannel channel = new PeerChannel(PEER);
     channel.attr(Connections.LISTENER).set("geyser");
 
-    new ServerChannelInitializer(server).initChannel(channel);
+    new ServerChannelInitializer(server, new ClientChannelHooks()).initChannel(channel);
 
     assertNull(channel.pipeline().get(HAProxyMessageDecoder.class));
   }
@@ -141,6 +152,54 @@ class ServerChannelInitializerTest {
         tcp.pipeline().get(MinecraftConnection.class).getRemoteAddress());
     assertTrue(tcp.isOpen());
     assertFalse(unix.isOpen(), "a header that is not TCP over IPv4 or IPv6 must close the connection");
+  }
+
+  @Test
+  void aHookIsCalledOncePerChannelOnceTheWholePipelineIsBuilt() {
+    final ClientChannelHooks hooks = new ClientChannelHooks();
+    final List<String> seen = new ArrayList<>();
+    hooks.add(channel -> seen.add("first:" + codecAndConnectionAreThere(channel)));
+    hooks.add(channel -> seen.add("second:" + codecAndConnectionAreThere(channel)));
+
+    open("geyser", false, hooks);
+    open(null, true, hooks);
+
+    assertEquals(List.of("first:true", "second:true", "first:true", "second:true"), seen);
+  }
+
+  @Test
+  void aHookCanPutAHandlerAheadOfTheMinecraftCodec() {
+    final ClientChannelHooks hooks = new ClientChannelHooks();
+    final ChannelHandler tap = new ChannelInboundHandlerAdapter();
+    // the names ClientChannelHook documents: a plugin hardcodes them
+    hooks.add(channel -> channel.pipeline().addBefore("minecraft-decoder", "tap", tap));
+
+    final PeerChannel channel = open(null, false, hooks);
+
+    final List<String> names = channel.pipeline().names();
+    assertEquals(names.indexOf(Connections.MINECRAFT_DECODER) - 1, names.indexOf("tap"));
+  }
+
+  @Test
+  void aFailingHookNeitherClosesTheChannelNorStopsTheNextHook() {
+    final ClientChannelHooks hooks = new ClientChannelHooks();
+    final List<String> seen = new ArrayList<>();
+    hooks.add(channel -> {
+      throw new IllegalStateException("plugin bug");
+    });
+    hooks.add(channel -> seen.add("next"));
+
+    final PeerChannel channel = open(null, false, hooks);
+
+    assertEquals(List.of("next"), seen);
+    assertTrue(channel.isOpen());
+    assertNotNull(channel.pipeline().get(MinecraftConnection.class));
+  }
+
+  private static boolean codecAndConnectionAreThere(final Channel channel) {
+    return channel.pipeline().get(Connections.MINECRAFT_DECODER) != null
+        && channel.pipeline().get(Connections.MINECRAFT_ENCODER) != null
+        && channel.pipeline().get(MinecraftConnection.class) != null;
   }
 
   @Test

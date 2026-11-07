@@ -37,6 +37,10 @@ dependencies {
 
     api(libs.snakeyaml)
 
+    // Only the Channel type of ClientChannelHook / ConnectionChannel: the proxy that loads the
+    // plugin always provides Netty, so it is not a runtime dependency of the API.
+    compileOnlyApi(libs.netty.transport)
+
     api(libs.slf4j)
     api(libs.guice)
     api(libs.checker.qual)

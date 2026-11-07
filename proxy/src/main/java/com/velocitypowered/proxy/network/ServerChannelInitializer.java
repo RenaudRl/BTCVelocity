@@ -26,6 +26,7 @@ import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 import static com.velocitypowered.proxy.network.Connections.READ_TIMEOUT;
 
 import com.btcvelocity.api.connection.ListenerOrigin;
+import com.btcvelocity.proxy.network.ClientChannelHooks;
 import com.btcvelocity.proxy.security.ConnectionAdmission;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.proxy.VelocityServer;
@@ -57,9 +58,12 @@ import org.checkerframework.checker.nullness.qual.Nullable;
 public class ServerChannelInitializer extends ChannelInitializer<Channel> {
 
   private final VelocityServer server;
+  private final ClientChannelHooks clientChannelHooks;
 
-  public ServerChannelInitializer(final VelocityServer server) {
+  public ServerChannelInitializer(final VelocityServer server,
+      final ClientChannelHooks clientChannelHooks) {
     this.server = server;
+    this.clientChannelHooks = clientChannelHooks;
   }
 
   /**
@@ -154,5 +158,8 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
     if (proxyProtocol) {
       ch.pipeline().addFirst(new HAProxyMessageDecoder());
     }
+
+    // Last, so that a hook sees the whole pipeline; no byte is read before initChannel returns.
+    this.clientChannelHooks.run(ch);
   }
 }
