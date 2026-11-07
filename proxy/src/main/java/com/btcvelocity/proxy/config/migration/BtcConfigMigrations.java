@@ -217,6 +217,23 @@ public class BtcConfigMigrations {
             "advanced.backend-circuit-open-seconds",
             BackendCircuitBreaker.DEFAULT_OPEN_SECONDS
         ),
+        migration(
+            "What to do with a connection whose handshake host (the name the player typed) is neither in\n"
+                + " handshake-allowed-hosts nor a forced host. Scanners arrive with the IP address as the host.\n"
+                + " \"off\" checks nothing (default). \"observe\" lets everyone in, counts the unlisted hosts\n"
+                + " (btc_proxy_admission_total) and logs each new one once: run it first, read the list, then\n"
+                + " switch to \"enforce\", which closes the connection without an answer.\n"
+                + " The Geyser listener is never judged. The comparison ignores case, the DNS root dot and the\n"
+                + " Forge marker after the host.",
+            "advanced.handshake-host-filter",
+            "off"
+        ),
+        migration(
+            "Public names of the proxy, on top of the forced hosts (which are always allowed). Add the IP\n"
+                + " address too if staff or a health check connect by IP.",
+            "advanced.handshake-allowed-hosts",
+            List.of()
+        ),
 
         // [observability]
         migration(

@@ -299,6 +299,22 @@ geyser-listener = ""
 #   iptables -A OUTPUT -o lo -p tcp --dport <port> -m owner ! --uid-owner <geyser-uid> -j REJECT
 geyser-listener-trusted-proxies = ["127.0.0.0/8", "::1/128"]
 
+# What to do with a connection whose handshake host (the name the player typed) is neither in
+# handshake-allowed-hosts nor a forced host. Scanners arrive with the IP address as the host.
+#   "off"     checks nothing (default).
+#   "observe" lets everyone in, counts the unlisted hosts (btc_proxy_admission_total on /metrics) and
+#             logs each new one once. Start here, read the log, complete the list.
+#   "enforce" closes the connection without an answer. Refused at startup if the list is empty and
+#             there is no forced host.
+# The Geyser listener is never judged. Case, the DNS root dot and the Forge marker (\0FML\0) are
+# ignored in the comparison. Legacy (1.6) pings are not judged.
+# To try it, set: handshake-host-filter = "observe"
+handshake-host-filter = "off"
+
+# Public names of the proxy, on top of the forced hosts (always allowed). Add the IP address too if
+# staff or a health check connect by IP.
+handshake-allowed-hosts = []
+
 # Enables TCP fast open support on the proxy. Requires the proxy to run on Linux.
 tcp-fast-open = false
 

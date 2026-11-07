@@ -28,6 +28,7 @@ import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.btcvelocity.proxy.config.migration.BtcConfigMigrations;
 import com.btcvelocity.proxy.observability.MetricsEndpoint;
 import com.btcvelocity.proxy.security.GeyserListenerAddress;
+import com.btcvelocity.proxy.security.HandshakeHosts;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.api.proxy.config.BackendServerConfig;
 import com.velocitypowered.api.proxy.config.ProxyConfig;
@@ -501,6 +502,25 @@ public final class VelocityConfiguration implements ProxyConfig {
       }
     }
 
+    final HandshakeHosts.Mode hostMode = HandshakeHosts.Mode.parse(advanced.getHandshakeHostFilter());
+    if (hostMode == null) {
+      LOGGER.error("Invalid handshake-host-filter '{}': use off, observe or enforce",
+          advanced.getHandshakeHostFilter());
+      valid = false;
+    } else if (hostMode == HandshakeHosts.Mode.ENFORCE && getHandshakeHosts().isEmpty()) {
+      // Every connection would be closed, the staff's included.
+      LOGGER.error("handshake-host-filter is 'enforce' but handshake-allowed-hosts is empty and "
+          + "there are no forced hosts: it would refuse everyone");
+      valid = false;
+    }
+    for (String host : advanced.getHandshakeAllowedHosts()) {
+      if (HandshakeHosts.normalize(host).isEmpty()) {
+        LOGGER.error("Invalid handshake-allowed-hosts entry '{}': expected a host name or an address",
+            host);
+        valid = false;
+      }
+    }
+
     valid &= observability.validate();
 
     if (advanced.loginRatelimit < 0) {
@@ -890,6 +910,18 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   public TrustedProxies getProxyProtocolTrustedProxies() {
     return advanced.getTrustedProxies();
+  }
+
+  /**
+   * The handshake host policy: {@code handshake-allowed-hosts} plus every forced host. An
+   * unreadable mode reads as off ({@link #validate()} refuses it before it is used).
+   *
+   * @return the policy
+   */
+  public HandshakeHosts getHandshakeHosts() {
+    final HandshakeHosts.Mode mode = HandshakeHosts.Mode.parse(advanced.getHandshakeHostFilter());
+    return HandshakeHosts.of(mode == null ? HandshakeHosts.Mode.OFF : mode,
+        advanced.getHandshakeAllowedHosts(), forcedHosts.getForcedHosts().keySet());
   }
 
   /**
@@ -2192,6 +2224,14 @@ public final class VelocityConfiguration implements ProxyConfig {
     private TrustedProxies geyserTrustedProxies =
         TrustedProxies.parse(GeyserListenerAddress.DEFAULT_TRUSTED_PROXIES);
 
+    /** What to do with a handshake host outside the allow list: off, observe or enforce. */
+    @Expose
+    private String handshakeHostFilter = "off";
+
+    /** Public names of the proxy, on top of the forced hosts. */
+    @Expose
+    private List<String> handshakeAllowedHosts = List.of();
+
     @Expose
     private boolean tcpFastOpen = false;
 
@@ -2331,6 +2371,8 @@ public final class VelocityConfiguration implements ProxyConfig {
         this.geyserTrustedProxies = TrustedProxies.parse(this.geyserListenerTrustedProxies);
         final Object geyser = config.get("geyser-listener");
         this.geyserListener = geyser == null ? "" : String.valueOf(geyser).trim();
+        this.handshakeHostFilter = String.valueOf(config.getOrElse("handshake-host-filter", "off"));
+        this.handshakeAllowedHosts = entriesOf(config.get("handshake-allowed-hosts"), List.of());
         this.tcpFastOpen = config.getOrElse("tcp-fast-open", false);
         this.bungeePluginMessageChannel = config.getOrElse("bungee-plugin-message-channel", true);
         this.showPingRequests = config.getOrElse("show-ping-requests", false);
@@ -2405,6 +2447,14 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     public TrustedProxies getGeyserTrustedProxies() {
       return geyserTrustedProxies;
+    }
+
+    public String getHandshakeHostFilter() {
+      return handshakeHostFilter;
+    }
+
+    public List<String> getHandshakeAllowedHosts() {
+      return handshakeAllowedHosts;
     }
 
     public boolean isTcpFastOpen() {
@@ -2496,6 +2546,7 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", connectionTimeout=" + connectionTimeout
           + ", readTimeout=" + readTimeout
           + ", proxyProtocol=" + proxyProtocol
+          + ", handshakeHostFilter=" + handshakeHostFilter
           + ", tcpFastOpen=" + tcpFastOpen
           + ", bungeePluginMessageChannel=" + bungeePluginMessageChannel
           + ", showPingRequests=" + showPingRequests

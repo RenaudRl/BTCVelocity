@@ -18,6 +18,7 @@
 package com.btcvelocity.proxy.observability;
 
 import com.btcvelocity.proxy.bridge.BridgeMetrics;
+import com.btcvelocity.proxy.security.AdmissionStats;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.util.List;
@@ -46,6 +47,7 @@ public final class ProxyMetrics {
    * @param statusCacheMisses status pings the status cache had to build
    * @param duplicateSessions local sessions closed because another proxy held the player (0 when
    *                          Redis is off)
+   * @param admission pre-handshake admission counters, by outcome
    * @param loops event loop readings (empty when the watchdog is off)
    * @return the exposition text
    */
@@ -54,6 +56,7 @@ public final class ProxyMetrics {
                               final Map<BridgeMetrics.Event, Long> bridge,
                               final long statusCacheHits, final long statusCacheMisses,
                               final long duplicateSessions,
+                              final Map<AdmissionStats.Result, Long> admission,
                               final List<LoopWatchdog.Reading> loops) {
     final StringBuilder out = new StringBuilder(2048);
 
@@ -84,6 +87,14 @@ public final class ProxyMetrics {
     header(out, "btc_proxy_cluster_duplicate_sessions_total", "counter",
         "Local sessions closed because another proxy of the cluster holds the player.");
     out.append("btc_proxy_cluster_duplicate_sessions_total ").append(duplicateSessions).append('\n');
+
+    header(out, "btc_proxy_admission_total", "counter",
+        "Connections judged before the handshake completes, by outcome (host_observed and "
+            + "host_refused: handshake host outside the allow list).");
+    admission.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .forEach(entry -> sample(out, "btc_proxy_admission_total", "result",
+            entry.getKey().name().toLowerCase(Locale.ROOT), String.valueOf(entry.getValue())));
 
     header(out, "btc_proxy_eventloop_lag_seconds", "gauge",
         "How late the last task marker ran on each Netty event loop.");

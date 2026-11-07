@@ -19,7 +19,9 @@ package com.velocitypowered.proxy.connection.client;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.btcvelocity.api.event.connection.ConnectionEstablishEvent;
+import com.btcvelocity.proxy.security.HandshakeHosts;
 import com.velocitypowered.api.event.connection.ConnectionHandshakeEvent;
 import com.velocitypowered.api.network.HandshakeIntent;
 import com.velocitypowered.api.network.ProtocolState;
@@ -110,6 +112,8 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
     if (nextState == null) {
       LOGGER.error("{} provided invalid protocol {}", this, handshake.getNextStatus());
       connection.close(true);
+    } else if (this.hostRefused(handshake)) {
+      connection.close(true);
     } else {
       final InitialInboundConnection ic = new InitialInboundConnection(connection, cleanVhost(handshake.getServerAddress()), handshake);
       // Handle connection establish event.
@@ -143,6 +147,14 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
     }
 
     return true;
+  }
+
+  /** Whether the handshake host is outside the allow list in enforce mode (counted either way). */
+  private boolean hostRefused(final HandshakePacket handshake) {
+    // Geyser sends the address from its own config, not a public name: that listener is not judged.
+    final boolean geyser = connection.getListenerName().filter(ListenerOrigin.GEYSER::equals).isPresent();
+    return server.getConnectionAdmission().checkHost(handshake.getServerAddress(), geyser)
+        == HandshakeHosts.Verdict.REFUSE;
   }
 
   private static @Nullable StateRegistry getStateForProtocol(final int status) {
