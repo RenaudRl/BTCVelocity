@@ -51,6 +51,7 @@ import com.velocitypowered.proxy.util.MotdRenderer;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -526,7 +527,7 @@ public final class VelocityConfiguration implements ProxyConfig {
         LOGGER.error("Invalid handshake-allowed-hosts entry '{}': expected a host name or an address",
             host);
         valid = false;
-      } else if (host.contains(":") || host.contains("*") || host.contains("/")) {
+      } else if (neverMatches(host)) {
         // The client sends the host without a port, and the comparison is exact.
         LOGGER.warn("handshake-allowed-hosts entry '{}' contains ':', '*' or '/': it will never "
             + "match a handshake host (no port, no wildcard, no network)", host);
@@ -1736,6 +1737,26 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   private static boolean isUnbounded(final String version) {
     return UNBOUNDED.equalsIgnoreCase(version);
+  }
+
+  /**
+   * Whether a {@code handshake-allowed-hosts} entry can never match a handshake host: it has a
+   * ':', a '*' or a '/' and is not an IP address literal. An IPv6 literal (sent without brackets by
+   * the client) is a valid entry.
+   *
+   * @param entry the entry as written in the configuration
+   * @return {@code true} if the entry must be warned about
+   */
+  static boolean neverMatches(final String entry) {
+    if (!(entry.contains(":") || entry.contains("*") || entry.contains("/"))) {
+      return false;
+    }
+    try {
+      InetAddress.ofLiteral(entry);
+      return false;
+    } catch (final IllegalArgumentException notAnAddress) {
+      return true;
+    }
   }
 
   /**

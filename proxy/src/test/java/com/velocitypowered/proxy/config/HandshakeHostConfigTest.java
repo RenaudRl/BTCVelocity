@@ -137,6 +137,20 @@ class HandshakeHostConfigTest {
   }
 
   @Test
+  void anIpv6LiteralIsAnEntryAndIsNotWarnedAbout(@TempDir final Path dir) throws IOException {
+    final VelocityConfiguration config = read(dir, "handshake-host-filter = \"enforce\"",
+        "handshake-allowed-hosts = [\"2001:db8::1\"]", false);
+
+    assertTrue(config.validate());
+    assertEquals(HandshakeHosts.Verdict.ADMIT, config.getHandshakeHosts().check("2001:db8::1"));
+    assertFalse(VelocityConfiguration.neverMatches("2001:db8::1"));
+    // still warned about: a port, a wildcard, a network
+    assertTrue(VelocityConfiguration.neverMatches("play.borntocraft.net:25565"));
+    assertTrue(VelocityConfiguration.neverMatches("*.borntocraft.net"));
+    assertTrue(VelocityConfiguration.neverMatches("10.0.0.0/8"));
+  }
+
+  @Test
   void aBlankEntryIsRefused(@TempDir final Path dir) throws IOException {
     assertFalse(read(dir, OFF, "handshake-allowed-hosts = [\"play.borntocraft.net\", \" . \"]", true)
         .validate());

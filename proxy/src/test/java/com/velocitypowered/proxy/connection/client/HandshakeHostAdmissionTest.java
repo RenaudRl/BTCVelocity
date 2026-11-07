@@ -20,6 +20,7 @@ package com.velocitypowered.proxy.connection.client;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -35,6 +36,7 @@ import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.event.VelocityEventManager;
+import com.velocitypowered.proxy.protocol.StateRegistry;
 import com.velocitypowered.proxy.protocol.packet.HandshakePacket;
 import com.velocitypowered.proxy.protocol.packet.LegacyPingPacket;
 import com.velocitypowered.proxy.protocol.packet.legacyping.LegacyMinecraftPingVersion;
@@ -153,6 +155,37 @@ class HandshakeHostAdmissionTest {
     verify(noHost, never()).setActiveSessionHandler(any(), any());
     verify(otherHost, never()).setActiveSessionHandler(any(), any());
     assertEquals(2, stats.count(AdmissionStats.Result.HOST_REFUSED));
+  }
+
+  @Test
+  void offLetsALegacyPingGoOnToTheStatusHandler() {
+    final MinecraftConnection connection = connection(null);
+
+    legacyPingFromAnUnlistedHost(HandshakeHosts.Mode.OFF, connection);
+
+    verify(connection, never()).close(anyBoolean());
+    verify(connection).setActiveSessionHandler(eq(StateRegistry.STATUS), any());
+  }
+
+  @Test
+  void observeLetsALegacyPingGoOnToTheStatusHandler() {
+    final MinecraftConnection connection = connection(null);
+
+    legacyPingFromAnUnlistedHost(HandshakeHosts.Mode.OBSERVE, connection);
+
+    verify(connection, never()).close(anyBoolean());
+    verify(connection).setActiveSessionHandler(eq(StateRegistry.STATUS), any());
+  }
+
+  private void legacyPingFromAnUnlistedHost(final HandshakeHosts.Mode mode,
+      final MinecraftConnection connection) {
+    try {
+      handler(mode, connection).handle(new LegacyPingPacket(
+          LegacyMinecraftPingVersion.MINECRAFT_1_6,
+          InetSocketAddress.createUnresolved("203.0.113.9", 25565)));
+    } catch (RuntimeException statusHandlerOnAMock) {
+      // the status handler runs on mocks after the check: only the verdict and the handler matter
+    }
   }
 
   @Test

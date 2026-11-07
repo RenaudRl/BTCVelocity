@@ -233,10 +233,11 @@ public class BtcConfigMigrations {
             "off"
         ),
         migration(
-            "Exact host names or addresses, no port, no wildcard, no network (an entry with ':', '*' or '/'\n"
-                + " never matches and is warned about). Forced hosts are also allowed but do not replace this\n"
-                + " list in enforce mode. List the public names, the SRV targets, the IP address of this proxy\n"
-                + " that cluster transfers use, and what staff and health checks connect with.",
+            "Exact host names or addresses, no port, no wildcard, no network: an entry with a port, '*' or\n"
+                + " '/' never matches and is warned about. An IPv6 address literal is accepted, without\n"
+                + " brackets (\"2001:db8::1\"). Forced hosts are also allowed but do not replace this list in\n"
+                + " enforce mode. List the public names, the SRV targets, the IP address of this proxy that\n"
+                + " cluster transfers use, and what staff and health checks connect with.",
             "advanced.handshake-allowed-hosts",
             List.of()
         ),
