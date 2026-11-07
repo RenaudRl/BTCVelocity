@@ -97,7 +97,8 @@ public final class ProxyMetrics {
 
     header(out, "btc_proxy_admission_total", "counter",
         "Connections judged before the handshake completes, by outcome (host_observed and "
-            + "host_refused: handshake host outside the allow list).");
+            + "host_refused: handshake host outside the allow list; packet_limit: client closed "
+            + "by the [packet-limiter]).");
     admission.entrySet().stream()
         .sorted(Map.Entry.comparingByKey())
         .forEach(entry -> sample(out, "btc_proxy_admission_total", "result",
