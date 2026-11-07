@@ -20,7 +20,6 @@ package com.btcvelocity.proxy.permission;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.velocitypowered.api.permission.Tristate;
@@ -212,12 +211,18 @@ class NativePermissionEvaluatorTest {
     assertEquals(Tristate.UNDEFINED, NativePermissionEvaluator.evaluate(snapshot, WITNESS_STAFF, Map.of(), 0L));
   }
 
-  /** Without a base grade (or without a readable catalog) the subject stays unknown, as before. */
+  /**
+   * Without a base grade the player still gets a snapshot, an empty one, so that it can be cached.
+   * Whether the catalog is fresh enough to cache it is the service's decision, not this function's.
+   */
   @Test
-  void aNeverSeenPlayerStaysUnknownWithoutADefaultGroup() {
-    assertNull(NativePermissionService.neverSeen(UUID.randomUUID(), grades(false)));
-    assertNull(NativePermissionService.neverSeen(UUID.randomUUID(), Map.of()),
-        "an unreadable catalog looks empty: caching the subject as grade-less would outlive the outage");
+  void aNeverSeenPlayerWithoutADefaultGroupCarriesNothing() {
+    for (final Map<String, NativePermissionSnapshot.Group> catalog : List.of(grades(false), Map.<String, NativePermissionSnapshot.Group>of())) {
+      final NativePermissionSnapshot snapshot = NativePermissionService.neverSeen(UUID.randomUUID(), catalog);
+
+      assertNotNull(snapshot);
+      assertEquals(Tristate.UNDEFINED, NativePermissionEvaluator.evaluate(snapshot, WITNESS_PLAYER, Map.of(), 0L));
+    }
   }
 
   @Test

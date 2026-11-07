@@ -19,6 +19,7 @@ package com.velocitypowered.proxy.connection.client;
 
 import static com.velocitypowered.api.network.ProtocolVersion.MINECRAFT_1_8;
 
+import com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory;
 import com.google.common.base.Preconditions;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
@@ -156,8 +157,13 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
         LOGGER.info("{} has connected", player);
       }
 
+      // Authenticated: read the permissions now, so the wait overlaps the plugins' setup handlers.
+      final CompletableFuture<Void> permissionsLoaded =
+          PermissionResolverAdapterFactory.preloadPermissions(player.getUniqueId());
+
       return server.getEventManager()
           .fire(new PermissionsSetupEvent(player, ConnectedPlayer.DEFAULT_PERMISSIONS))
+          .thenCompose(event -> permissionsLoaded.thenApply(loaded -> event))
           .thenAcceptAsync(event -> {
             if (!mcConnection.isClosed()) {
               // wait for permissions to load, then set the players permission function

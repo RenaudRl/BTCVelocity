@@ -23,6 +23,8 @@ import com.btcvelocity.api.permission.PermissionResolverProvider;
 import com.velocitypowered.api.permission.PermissionFunction;
 import com.velocitypowered.api.permission.PermissionSubject;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -75,6 +77,27 @@ public final class PermissionResolverAdapterFactory {
       return resolver;
     }
     return new PermissionResolverFunctionAdapter(delegate);
+  }
+
+  /**
+   * Starts reading a freshly authenticated player's permissions and returns the point a login may
+   * go on from: the snapshot is cached, or {@link NativePermissionService#LOAD_TIMEOUT} has passed.
+   *
+   * <p>Compose on the result; never {@code join} it on a connection event loop. It never fails, and
+   * a slow or broken source costs the player their rights, never the entry. With the native provider
+   * off it is already complete, so nothing waits.
+   */
+  public static CompletableFuture<Void> preloadPermissions(final UUID subject) {
+    try {
+      if (getLoadedProvider().orElse(null) instanceof NativePermissionResolverProvider nativeProvider) {
+        return nativeProvider.awaitLoaded(subject);
+      }
+    } catch (RuntimeException error) {
+      // The provider's own message names settings and variables, never values.
+      LOGGER.error("Native BTC permissions preload could not start ({}); the player enters without rights.",
+          error.getClass().getSimpleName());
+    }
+    return CompletableFuture.completedFuture(null);
   }
 
   /** Stops the native provider's asynchronous resources during proxy shutdown. */

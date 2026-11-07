@@ -23,6 +23,8 @@ import com.velocitypowered.api.permission.PermissionFunction;
 import com.velocitypowered.api.permission.PermissionSubject;
 import com.velocitypowered.api.proxy.Player;
 import java.io.IOException;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -65,6 +67,11 @@ final class NativePermissionResolverProvider implements PermissionResolverProvid
       return null;
     }
     return new NativePermissionResolver(player, delegate, service);
+  }
+
+  /** See {@link NativePermissionService#awaitLoaded(UUID)}. */
+  CompletableFuture<Void> awaitLoaded(final UUID subject) {
+    return service.awaitLoaded(subject);
   }
 
   @Override

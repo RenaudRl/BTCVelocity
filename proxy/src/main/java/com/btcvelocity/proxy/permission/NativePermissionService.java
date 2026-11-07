@@ -25,9 +25,8 @@ import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
-import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -35,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -45,7 +45,13 @@ final class NativePermissionService implements AutoCloseable {
   private static final Logger LOGGER = LogManager.getLogger(NativePermissionService.class);
   /** Value of the {@code server} context at the proxy; see {@link #proxyContext(String)}. */
   static final String PROXY_SERVER_CONTEXT = "proxy";
-  private static final Gson GSON =new GsonBuilder().disableHtmlEscaping().create();
+  /**
+   * How long a login waits for the player's snapshot, and how long the pool waits for a connection:
+   * one number, so a database that cannot answer within the pool timeout never holds a login longer
+   * than the pool would have.
+   */
+  static final Duration LOAD_TIMEOUT = Duration.ofSeconds(3);
+  private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
   private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
   private final ConcurrentHashMap<UUID, NativePermissionSnapshot> snapshots = new ConcurrentHashMap<>();
@@ -55,12 +61,51 @@ final class NativePermissionService implements AutoCloseable {
   private volatile CompletableFuture<Void> initialization;
   private volatile NativePermissionConfig.Config config;
   private volatile HikariDataSource dataSource;
+  private volatile PermissionTables tables;
   private volatile RedisClient redisClient;
   private volatile StatefulRedisPubSubConnection<String, String> redisConnection;
   private volatile Map<String, NativePermissionSnapshot.Group> groupCatalog = Map.of();
   private volatile String lastFailureReason;
   private volatile boolean groupCatalogStale;
   private volatile long groupCatalogStaleSince;
+
+  NativePermissionService() {
+  }
+
+  /**
+   * A service already wired to {@code tables}, with no pool and no bus: the seam the cache-lifecycle
+   * tests use. The catalog is read here, on the calling thread, exactly as initialization reads it.
+   */
+  NativePermissionService(final PermissionTables tables, final NativePermissionConfig.Config config) {
+    this.tables = tables;
+    this.config = config;
+    this.initialization = CompletableFuture.completedFuture(null);
+    loadCatalogOrMarkStale();
+  }
+
+  /**
+   * Starts reading the snapshot of {@code subject} and tells when a login may go on: when the
+   * snapshot is cached, or {@link #LOAD_TIMEOUT} after the call, whichever comes first. The returned
+   * future never fails.
+   *
+   * <p>It never blocks: the read runs on this service's executor and the timeout is a stage of the
+   * future, so a Netty event loop can compose on it. When the timeout wins, the load carries on and
+   * caches the snapshot on arrival; the player simply entered without rights in the meantime.
+   */
+  CompletableFuture<Void> awaitLoaded(final UUID subject) {
+    return awaitLoaded(subject, LOAD_TIMEOUT);
+  }
+
+  CompletableFuture<Void> awaitLoaded(final UUID subject, final Duration timeout) {
+    return load(subject)
+        .<Void>handle((snapshot, error) -> null)
+        .orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
+        .exceptionally(timedOut -> {
+          LOGGER.warn("Native BTC permissions snapshot of {} is not ready after {} ms; the player enters"
+              + " without rights and the load continues.", subject, timeout.toMillis());
+          return null;
+        });
+  }
 
   CompletableFuture<NativePermissionSnapshot> load(final UUID subject) {
     final NativePermissionSnapshot cached = snapshots.get(subject);
@@ -201,14 +246,8 @@ final class NativePermissionService implements AutoCloseable {
       final NativePermissionConfig.Config loaded = NativePermissionConfig.load(NativePermissionConfig.configPath());
       config = loaded;
       dataSource = new HikariDataSource(hikariConfig(loaded));
-
-      try {
-        groupCatalog = readGroups();
-        markGroupCatalogFresh();
-      } catch (Throwable error) {
-        LOGGER.warn("Native BTC permissions group catalog is not available yet; retrying on demand.", error);
-        markGroupCatalogStale(error);
-      }
+      tables = new JdbcPermissionTables(dataSource, loaded.tablePrefix());
+      loadCatalogOrMarkStale();
 
       if (!loaded.valkeyUri().isBlank()) {
         startRedis(loaded);
@@ -225,12 +264,23 @@ final class NativePermissionService implements AutoCloseable {
       lastFailureReason = describeFailure(error);
       final HikariDataSource source = dataSource;
       dataSource = null;
+      tables = null;
       config = null;
       if (source != null) {
         source.close();
       }
       throw new IllegalStateException(
           "Native BTC permissions initialization failed (" + error.getClass().getSimpleName() + ")");
+    }
+  }
+
+  private void loadCatalogOrMarkStale() {
+    try {
+      groupCatalog = readGroups();
+      markGroupCatalogFresh();
+    } catch (Throwable error) {
+      LOGGER.warn("Native BTC permissions group catalog is not available yet; retrying on demand.", error);
+      markGroupCatalogStale(error);
     }
   }
 
@@ -246,7 +296,7 @@ final class NativePermissionService implements AutoCloseable {
     hikari.addDataSourceProperty("readOnlyMode", "always");
     hikari.setMaximumPoolSize(4);
     hikari.setMinimumIdle(1);
-    hikari.setConnectionTimeout(3_000);
+    hikari.setConnectionTimeout(LOAD_TIMEOUT.toMillis());
     hikari.setValidationTimeout(2_000);
     hikari.setPoolName("btc-velocity-permissions");
     return hikari;
@@ -271,33 +321,18 @@ final class NativePermissionService implements AutoCloseable {
 
   private CompletableFuture<NativePermissionSnapshot> readSnapshot(final UUID subject) {
     return CompletableFuture.supplyAsync(() -> {
-      final HikariDataSource source = dataSource;
-      final NativePermissionConfig.Config current = config;
-      if (source == null || current == null || closed.get()) {
+      final PermissionTables source = tables;
+      if (source == null || closed.get()) {
         return null;
       }
-      try (Connection connection = source.getConnection()) {
-        try (var statement = connection.prepareStatement(
-            "SELECT revision, payload FROM " + current.tablePrefix() + "players "
-                + "WHERE player_uuid = ? AND profile_id IS NULL")) {
-          statement.setString(1, subject.toString());
-          try (ResultSet result = statement.executeQuery()) {
-            if (!result.next()) {
-              final NativePermissionSnapshot unseen = neverSeen(subject, groupCatalog);
-              if (unseen == null) {
-                return null;
-              }
-              // putIfAbsent: a concurrent load of the same subject may already hold a real row.
-              final NativePermissionSnapshot previous = snapshots.putIfAbsent(subject, unseen);
-              return previous != null ? previous : unseen;
-            }
-            final NativePermissionSnapshot snapshot = GSON.fromJson(result.getString("payload"), NativePermissionSnapshot.class);
-            snapshot.revision = Math.max(snapshot.revision, result.getLong("revision"));
-            normalize(snapshot, subject, groupCatalog);
-            snapshots.compute(subject, (key, previous) -> previous == null || snapshot.revision >= previous.revision ? snapshot : previous);
-            return snapshots.get(subject);
-          }
+      try {
+        final NativePermissionSnapshot fetched = fetch(source, subject);
+        if (fetched == null) {
+          return null;
         }
+        // The revision guard keeps a concurrent load that already holds a newer row.
+        return snapshots.compute(subject, (key, previous) ->
+            previous == null || fetched.revision >= previous.revision ? fetched : previous);
       } catch (SQLException | RuntimeException error) {
         LOGGER.warn("Native BTC permissions snapshot load failed for subject {}; will retry asynchronously.", subject, error);
         lastFailureReason = describeFailure(error);
@@ -306,45 +341,46 @@ final class NativePermissionService implements AutoCloseable {
     }, ioExecutor);
   }
 
+  /**
+   * Reads {@code subject} from the tables and merges the held catalog into it, without caching.
+   *
+   * <p>A subject with no row gets the empty snapshot, which the caller caches so a player the
+   * database never saw costs one read, not one per permission test. That is only sound while the
+   * catalog is fresh: an unreadable catalog looks empty, and a subject cached as grade-less would
+   * outlive the outage. A stale catalog therefore leaves the answer {@code null} (unknown).
+   */
+  private NativePermissionSnapshot fetch(final PermissionTables source, final UUID subject) throws SQLException {
+    final NativePermissionSnapshot stored = source.readPlayer(subject);
+    final Map<String, NativePermissionSnapshot.Group> catalog = groupCatalog;
+    if (stored == null) {
+      return groupCatalogStale ? null : neverSeen(subject, catalog);
+    }
+    normalize(stored, subject, catalog);
+    return stored;
+  }
+
   private Map<String, NativePermissionSnapshot.Group> readGroups() throws SQLException {
-    final HikariDataSource source = dataSource;
-    final NativePermissionConfig.Config current = config;
-    if (source == null || current == null) {
+    final PermissionTables source = tables;
+    if (source == null) {
       // Ne jamais rendre une map vide ici : l'appelant remplace le catalogue détenu par ce qu'il
       // reçoit, et « aucun groupe en base » aurait alors la même forme que « backend indisponible ».
       // Les deux se soldent par le retrait de toutes les permissions de groupe du réseau, mais le
       // second est un incident à signaler, pas un état à propager.
       throw new IllegalStateException("Native BTC permissions backend is not available");
     }
-    final Map<String, NativePermissionSnapshot.Group> groups = new HashMap<>();
-    try (Connection connection = source.getConnection();
-         var statement = connection.createStatement();
-         ResultSet result = statement.executeQuery(
-             "SELECT group_name, payload FROM " + current.tablePrefix() + "groups")) {
-      while (result.next()) {
-        final NativePermissionSnapshot.Group group = GSON.fromJson(result.getString("payload"), NativePermissionSnapshot.Group.class);
-        if (group != null && group.name != null && !group.name.isBlank()) {
-          groups.put(result.getString("group_name").toLowerCase(), group);
-        }
-      }
-    }
-    return Map.copyOf(groups);
+    return source.readGroups();
   }
 
   /**
-   * Snapshot of a subject the database holds no row for, or {@code null} when it must stay unknown.
+   * Snapshot of a subject the database holds no row for: no grant of its own, only what the base
+   * group of {@code catalog} gives everyone, and nothing at all when the catalog has none.
    *
    * <p>"No row" is not "no grade": the base group applies to a player nobody ever granted anything.
-   * Without a default group in the catalog the answer stays {@code null}, as before, so a catalog that
-   * is empty because it could not be read yet never caches a subject as grade-less.
    */
   static NativePermissionSnapshot neverSeen(
       final UUID subject,
       final Map<String, NativePermissionSnapshot.Group> catalog
   ) {
-    if (catalog.values().stream().noneMatch(NativePermissionService::isDefaultGroup)) {
-      return null;
-    }
     final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
     normalize(snapshot, subject, catalog);
     return snapshot;
