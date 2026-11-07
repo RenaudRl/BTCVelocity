@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +41,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -211,6 +214,24 @@ class NativePermissionCacheLifecycleTest {
   }
 
   @Test
+  void aReloadPastItsDeadlineDropsWhatItHasNotReloaded() throws Exception {
+    service.close();
+    // Each reading of the clock moves it by 60 % of the deadline: the second subject is past it.
+    final long step = NativePermissionService.RECONCILE_DEADLINE.toNanos() * 3 / 5;
+    final AtomicLong clock = new AtomicLong();
+    service = new NativePermissionService(tables, CONFIG, refreshWindow, () -> clock.addAndGet(step));
+    load(ALICE);
+    load(BOB);
+    final int reads = tables.playerReads.get();
+
+    service.reconcileAfterReconnect().get(BOUND_SECONDS, TimeUnit.SECONDS);
+
+    assertEquals(reads + 1, tables.playerReads.get(), "nothing is read past the deadline");
+    assertEquals(1, Stream.of(ALICE, BOB).filter(subject -> service.snapshot(subject) != null).count(),
+        "the snapshot that could not be verified in time is not served");
+  }
+
+  @Test
   void theBusIsSubscribedAndItsMessagesAreInvalidations() {
     final Bus bus = attachBus();
 
@@ -250,6 +271,29 @@ class NativePermissionCacheLifecycleTest {
 
     assertNull(service.snapshot(ALICE));
     assertNull(service.snapshot(BOB));
+  }
+
+  @Test
+  void aRevocationWhileTheBusIsDeafIsAppliedWithoutAnyInvalidation() throws Exception {
+    final Bus bus = attachBus();
+    bus.messages().subscribed(CHANNEL, 1);
+    bus.state().onRedisDisconnected(null);
+    bus.state().onRedisConnected(null, null);
+    refreshWindow.runAll();
+    verify(bus.commands(), times(2)).subscribe(CHANNEL);
+    load(ALICE);
+    assertEquals(Tristate.TRUE, decision(ALICE, OWN_NODE), "reloaded after the cache was emptied");
+
+    // Revoked after that reload; the message announcing it is lost with the subscription.
+    tables.grants.put(ALICE, Set.of());
+    refreshWindow.runAll();
+
+    assertEquals(Tristate.UNDEFINED, decision(ALICE, OWN_NODE), "the deaf bus reloads instead of trusting");
+    verify(bus.commands(), times(3)).subscribe(CHANNEL);
+
+    bus.messages().subscribed(CHANNEL, 1);
+    refreshWindow.runAll();
+    assertEquals(0, refreshWindow.pending(), "a confirmed resubscription ends the retries and the reloads");
   }
 
   // --- group invalidation bursts -------------------------------------------------------------
@@ -293,6 +337,19 @@ class NativePermissionCacheLifecycleTest {
         + ALICE + "\",\"revision\":5}");
 
     assertNull(service.snapshot(ALICE), "the proxy never publishes: no message on the bus is its own");
+  }
+
+  @Test
+  void activatingAProfileNeverLocksOutTheBaseRow() throws Exception {
+    final UUID carol = UUID.fromString("c3c3c3c3-0000-4000-8000-000000000003");
+    assertNotNull(load(carol), "no base row: the empty snapshot, revision 0");
+
+    // Exactly what the extension publishes on profile-activated: the PROFILE row's own revision.
+    service.handleInvalidation("{\"version\":1,\"networkId\":\"btc\",\"serverId\":\"backend-1\",\"subject\":\""
+        + carol + "\",\"revision\":2,\"kind\":\"profile-activated\",\"profileId\":\"pvp\"}");
+
+    assertNotNull(service.snapshot(carol), "a profile revision says nothing about the base row");
+    assertNotNull(load(carol), "and never becomes a floor that refuses every base read");
   }
 
   @Test
@@ -381,7 +438,10 @@ class NativePermissionCacheLifecycleTest {
   // --- helpers -------------------------------------------------------------------------------
 
   /** The listeners the bus registers, taken from the Lettuce boundary it is attached to. */
-  private record Bus(RedisPubSubListener<String, String> messages, RedisConnectionStateListener state) {
+  private record Bus(
+      RedisPubSubListener<String, String> messages,
+      RedisConnectionStateListener state,
+      RedisPubSubCommands<String, String> commands) {
   }
 
   @SuppressWarnings("unchecked")
@@ -399,7 +459,7 @@ class NativePermissionCacheLifecycleTest {
     verify(connection).addListener(messages.capture());
     verify(commands).subscribe(CHANNEL);
     verify(client).addListener(state.capture());
-    return new Bus(messages.getValue(), state.getValue());
+    return new Bus(messages.getValue(), state.getValue(), commands);
   }
 
   private NativePermissionSnapshot load(final UUID subject) throws Exception {

@@ -55,13 +55,17 @@ final class NativePermissionBus {
   private final Executor graceDelay;
   private final AtomicLong subscriptions = new AtomicLong();
   private final AtomicLong subscriptionsAtDisconnect = new AtomicLong();
+  /** Bumped by each reconnection, so only the latest one keeps retrying its resubscription. */
+  private final AtomicLong reconnections = new AtomicLong();
+  private volatile StatefulRedisPubSubConnection<String, String> connection;
 
   /**
    * Builds a bus that is idle until {@link #attach} subscribes it.
    *
    * @param onResubscribed          every confirmed subscription but the first
-   * @param onResubscriptionMissing a reconnection not confirmed within {@link #RESUBSCRIBE_GRACE}
-   * @param graceDelay              runs a task {@link #RESUBSCRIBE_GRACE} later
+   * @param onResubscriptionMissing a reconnection not confirmed within {@link #RESUBSCRIBE_GRACE},
+   *                                once per reconnection
+   * @param graceDelay              runs a task {@link #RESUBSCRIBE_GRACE} later, off any event loop
    */
   NativePermissionBus(
       final String channel,
@@ -79,6 +83,7 @@ final class NativePermissionBus {
 
   /** Subscribes {@code connection} and watches {@code client}. Blocks on SUBSCRIBE: never on an event loop. */
   void attach(final RedisClient client, final StatefulRedisPubSubConnection<String, String> connection) {
+    this.connection = connection;
     connection.addListener(new RedisPubSubAdapter<>() {
       @Override
       public void message(final String from, final String message) {
@@ -112,13 +117,30 @@ final class NativePermissionBus {
 
   private void expectResubscription() {
     final long before = subscriptionsAtDisconnect.get();
-    graceDelay.execute(() -> {
-      if (subscriptions.get() != before) {
-        return;
-      }
+    final long reconnection = reconnections.incrementAndGet();
+    graceDelay.execute(() -> retryUntilConfirmed(before, reconnection, true));
+  }
+
+  /**
+   * Lettuce never retries a resubscription that failed, so the bus does, every
+   * {@link #RESUBSCRIBE_GRACE}, until the server confirms it ({@code subscribed} then reloads).
+   */
+  private void retryUntilConfirmed(final long before, final long reconnection, final boolean first) {
+    if (subscriptions.get() != before || reconnections.get() != reconnection) {
+      return;
+    }
+    if (first) {
       LOGGER.error("Native BTC permissions bus reconnected without confirming its subscription to {} within"
-          + " {} ms; invalidations may be lost, so the permission cache is emptied.", channel, RESUBSCRIBE_GRACE.toMillis());
+          + " {} ms; invalidations may be lost, so the permission cache is reloaded until it is.",
+          channel, RESUBSCRIBE_GRACE.toMillis());
       onResubscriptionMissing.run();
-    });
+    }
+    try {
+      connection.sync().subscribe(channel);
+    } catch (RuntimeException error) {
+      LOGGER.warn("Native BTC permissions bus resubscription to {} failed; retrying in {} ms: {}",
+          channel, RESUBSCRIBE_GRACE.toMillis(), error.toString());
+    }
+    graceDelay.execute(() -> retryUntilConfirmed(before, reconnection, false));
   }
 }

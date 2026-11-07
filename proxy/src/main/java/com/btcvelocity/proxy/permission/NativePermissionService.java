@@ -17,6 +17,8 @@
 
 package com.btcvelocity.proxy.permission;
 
+import static com.btcvelocity.proxy.permission.NativePermissionHealth.describeFailure;
+
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.zaxxer.hikari.HikariConfig;
@@ -42,6 +44,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.function.LongSupplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -70,6 +73,11 @@ final class NativePermissionService implements AutoCloseable {
   static final Duration CATALOG_RETRY_BACKOFF = Duration.ofSeconds(1);
   /** Bound of a reconnect reload: past it, the snapshots not yet replaced are evicted, not served. */
   static final Duration RECONCILE_DEADLINE = Duration.ofSeconds(10);
+  /**
+   * Pause between two reloads of the whole cache while the bus is deaf (resubscription never
+   * confirmed): a revocation then applies within this pause plus one reload, with no invalidation.
+   */
+  static final Duration DEAF_RELOAD_PERIOD = Duration.ofSeconds(1);
   /** Least time between two initialization attempts: a broken setup costs one attempt per period. */
   static final Duration INIT_RETRY_BACKOFF = Duration.ofSeconds(5);
   /** Server-side bound of one query ({@code statement_timeout}). */
@@ -85,13 +93,15 @@ final class NativePermissionService implements AutoCloseable {
   private static final Duration POOL_VALIDATION_TIMEOUT = Duration.ofSeconds(2);
   /** An invalidation is a few ids; anything larger is not one and is not parsed. */
   private static final int MAX_PAYLOAD_BYTES = 8 * 1024;
-  /** Guards the walk to a root cause against a pathological cause chain. */
-  private static final int MAX_CAUSE_DEPTH = 16;
   private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
   private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
   /** Runs a task after the given delay, on {@link #ioExecutor}; a manual executor in tests. */
   private final Function<Duration, Executor> delays;
+  /** {@link System#nanoTime()}; a test clock where a deadline is under test. */
+  private final LongSupplier nanoClock;
+  /** Set while the bus lost its subscription: the cache is then reloaded every {@link #DEAF_RELOAD_PERIOD}. */
+  private final AtomicBoolean busDeaf = new AtomicBoolean();
   private final ConcurrentHashMap<UUID, NativePermissionSnapshot> snapshots = new ConcurrentHashMap<>();
   /**
    * Players whose snapshot may be cached, each with a token of the period it is tracked for: asked
@@ -128,6 +138,7 @@ final class NativePermissionService implements AutoCloseable {
 
   NativePermissionService() {
     this.delays = delay -> CompletableFuture.delayedExecutor(delay.toMillis(), TimeUnit.MILLISECONDS, ioExecutor);
+    this.nanoClock = System::nanoTime;
   }
 
   /**
@@ -140,7 +151,17 @@ final class NativePermissionService implements AutoCloseable {
       final NativePermissionConfig.Config config,
       final Executor delay
   ) {
+    this(tables, config, delay, System::nanoTime);
+  }
+
+  NativePermissionService(
+      final PermissionTables tables,
+      final NativePermissionConfig.Config config,
+      final Executor delay,
+      final LongSupplier nanoClock
+  ) {
     this.delays = ignored -> delay;
+    this.nanoClock = nanoClock;
     this.tables = tables;
     this.config = config;
     this.initialization = CompletableFuture.completedFuture(null);
@@ -266,9 +287,9 @@ final class NativePermissionService implements AutoCloseable {
       return;
     }
     final Set<UUID> reloaded = new HashSet<>();
-    final long deadline = System.nanoTime() + RECONCILE_DEADLINE.toNanos();
+    final long deadline = nanoClock.getAsLong() + RECONCILE_DEADLINE.toNanos();
     for (final UUID subject : List.copyOf(snapshots.keySet())) {
-      if (System.nanoTime() - deadline >= 0) {
+      if (nanoClock.getAsLong() - deadline >= 0) {
         LOGGER.warn("Native BTC permissions reconnect reload passed its {} ms deadline; dropping the snapshots"
             + " not yet reloaded.", RECONCILE_DEADLINE.toMillis());
         snapshots.keySet().removeIf(key -> !reloaded.contains(key));
@@ -394,31 +415,6 @@ final class NativePermissionService implements AutoCloseable {
     }
   }
 
-  /**
-   * Décrit un échec pour affichage : type de la cause racine et message, sans chaîne de connexion.
-   *
-   * <p>Un état de santé est destiné à être affiché — journal, healthcheck, commande d'exploitation.
-   * Les messages de pilotes JDBC et de pools citent volontiers l'URL et parfois l'utilisateur ; tout
-   * lexème portant {@code ://} ou {@code @} est donc retiré plutôt que relayé.
-   */
-  private static String describeFailure(final Throwable error) {
-    Throwable root = error;
-    for (int depth = 0; root.getCause() != null && root.getCause() != root && depth < MAX_CAUSE_DEPTH; depth++) {
-      root = root.getCause();
-    }
-    final String message = root.getMessage();
-    final String detail = message == null || message.isBlank() ? "aucun message" : redact(message);
-    return root.getClass().getSimpleName() + ": " + detail;
-  }
-
-  private static String redact(final String message) {
-    final StringBuilder redacted = new StringBuilder(message.length());
-    for (final String token : message.split(" ")) {
-      redacted.append(token.contains("://") || token.indexOf('@') >= 0 ? "<retiré>" : token).append(' ');
-    }
-    return redacted.toString().strip();
-  }
-
   private CompletableFuture<Void> ensureInitialized() {
     CompletableFuture<Void> current = initialization;
     // Le court-circuit doit exclure une tentative échouée. Sans cette condition, la première
@@ -508,11 +504,44 @@ final class NativePermissionService implements AutoCloseable {
 
   /**
    * The bus wired to this service: messages are invalidations, a confirmed resubscription reloads
-   * the cache, and a reconnection left unconfirmed empties it.
+   * the cache, and a reconnection left unconfirmed makes the bus deaf until it is confirmed.
    */
   NativePermissionBus bus(final String channel) {
-    return new NativePermissionBus(channel, this::handleInvalidation, this::reconcileAfterReconnect,
-        snapshots::clear, delays.apply(NativePermissionBus.RESUBSCRIBE_GRACE));
+    return new NativePermissionBus(channel, this::handleInvalidation, this::onBusResubscribed,
+        this::onBusDeaf, delays.apply(NativePermissionBus.RESUBSCRIBE_GRACE));
+  }
+
+  private void onBusResubscribed() {
+    busDeaf.set(false);
+    reconcileAfterReconnect();
+  }
+
+  /**
+   * No invalidation can arrive, so the cache is emptied, then reloaded every
+   * {@link #DEAF_RELOAD_PERIOD} while the bus stays deaf: a revocation still applies without the
+   * player reconnecting, and a connected player keeps their rights between two reloads.
+   */
+  private void onBusDeaf() {
+    snapshots.clear();
+    if (busDeaf.compareAndSet(false, true)) {
+      scheduleDeafReload();
+    }
+  }
+
+  private void scheduleDeafReload() {
+    delays.apply(DEAF_RELOAD_PERIOD).execute(() -> {
+      if (!busDeaf.get() || closed.get()) {
+        return;
+      }
+      try {
+        reconcileBlocking();
+      } catch (RuntimeException error) {
+        LOGGER.error("Native BTC permissions reload of a deaf bus failed; the cache is emptied.", error);
+        snapshots.clear();
+      } finally {
+        scheduleDeafReload();
+      }
+    });
   }
 
   private CompletableFuture<NativePermissionSnapshot> readSnapshot(final UUID subject, final Object period) {
@@ -645,8 +674,10 @@ final class NativePermissionService implements AutoCloseable {
       final Invalidation invalidation = GSON.fromJson(payload, Invalidation.class);
       final NativePermissionConfig.Config current = config;
       // No filter on the sender: the proxy never publishes, so a backend sharing its server id is
-      // still another publisher whose change must apply here.
+      // still another publisher whose change must apply here. A profile message is skipped: the proxy
+      // reads only the base row, and a profile revision used as its floor would refuse it forever.
       if (invalidation == null || current == null || invalidation.version != 1
+          || invalidation.profileId != null
           || invalidation.revision < 0 || !current.networkId().equals(invalidation.networkId)
           || ((invalidation.subject == null) == (invalidation.group == null))) {
         return;
@@ -668,9 +699,11 @@ final class NativePermissionService implements AutoCloseable {
    * floor: any read of theirs starts after this message, so after the change it announces.
    */
   private void invalidateSubject(final UUID subject, final long revision) {
-    if (tracked.containsKey(subject)) {
-      revisionFloor.merge(subject, revision, Math::max);
-    }
+    // Raised under the tracked entry's lock: an evict racing it removes the floor after, never before.
+    tracked.computeIfPresent(subject, (key, period) -> {
+      revisionFloor.merge(key, revision, Math::max);
+      return period;
+    });
     snapshots.computeIfPresent(subject, (key, existing) -> revision > existing.revision ? null : existing);
   }
 
@@ -755,5 +788,7 @@ final class NativePermissionService implements AutoCloseable {
     UUID subject;
     String group;
     long revision;
+    /** Set when the message is about a profile row, whose revision counter is not the base row's. */
+    String profileId;
   }
 }

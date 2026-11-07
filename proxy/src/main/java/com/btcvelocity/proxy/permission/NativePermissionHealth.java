@@ -48,4 +48,32 @@ record NativePermissionHealth(
     boolean groupCatalogStale,
     long groupCatalogStaleSinceEpochMillis
 ) {
+
+  /** Guards the walk to a root cause against a pathological cause chain. */
+  private static final int MAX_CAUSE_DEPTH = 16;
+
+  /**
+   * Décrit un échec pour affichage : type de la cause racine et message, sans chaîne de connexion.
+   *
+   * <p>Un état de santé est destiné à être affiché — journal, healthcheck, commande d'exploitation.
+   * Les messages de pilotes JDBC et de pools citent volontiers l'URL et parfois l'utilisateur ; tout
+   * lexème portant {@code ://} ou {@code @} est donc retiré plutôt que relayé.
+   */
+  static String describeFailure(final Throwable error) {
+    Throwable root = error;
+    for (int depth = 0; root.getCause() != null && root.getCause() != root && depth < MAX_CAUSE_DEPTH; depth++) {
+      root = root.getCause();
+    }
+    final String message = root.getMessage();
+    final String detail = message == null || message.isBlank() ? "aucun message" : redact(message);
+    return root.getClass().getSimpleName() + ": " + detail;
+  }
+
+  private static String redact(final String message) {
+    final StringBuilder redacted = new StringBuilder(message.length());
+    for (final String token : message.split(" ")) {
+      redacted.append(token.contains("://") || token.indexOf('@') >= 0 ? "<retiré>" : token).append(' ');
+    }
+    return redacted.toString().strip();
+  }
 }
