@@ -847,45 +847,16 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       LOGGER.warn("[observability] changed: restart the proxy to apply");
     }
 
-    reloadServerList();
+    // Only servers from velocity.toml are touched: those registered through the API stay.
+    // Players of removed or replaced servers are moved to a fallback server below.
+    Collection<ConnectedPlayer> evacuate = servers.applyConfiguredServers(
+        oldConfiguration.getBackendServers(), newConfiguration.getBackendServers());
 
     registerCommands();
 
     translationRegistryManager.unregisterTranslations();
 
     translationRegistryManager.registerTranslations();
-
-    // Re-register servers. If a server is being replaced, make sure to note what players need to
-    // move back to a fallback server.
-    Collection<ConnectedPlayer> evacuate = new ArrayList<>();
-    // Servers removed from the configuration: evacuate their players and unregister them.
-    for (String oldName : oldConfiguration.getBackendServers().keySet()) {
-      if (newConfiguration.getBackendServers().keySet().stream()
-          .anyMatch(name -> name.equalsIgnoreCase(oldName))) {
-        continue;
-      }
-
-      Optional<VelocityRegisteredServer> removed = servers.getServer(oldName);
-      if (removed.isEmpty()) {
-        continue;
-      }
-
-      evacuate.addAll(removed.get().getPlayersConnected());
-      servers.unregister(removed.get().getServerInfo());
-    }
-
-    for (Map.Entry<String, BackendServerConfig> entry : newConfiguration.getBackendServers().entrySet()) {
-      ServerInfo newInfo = new ServerInfo(entry.getKey(), AddressUtil.parseAddress(entry.getValue().address()), entry.getValue().forwardingMode());
-      Optional<VelocityRegisteredServer> rs = servers.getServer(entry.getKey());
-      if (rs.isEmpty()) {
-        servers.register(newInfo);
-      } else if (!rs.get().getServerInfo().equals(newInfo)) {
-        evacuate.addAll(rs.get().getPlayersConnected());
-
-        servers.unregister(rs.get().getServerInfo());
-        servers.register(newInfo);
-      }
-    }
 
     // If we had any players to evacuate, let's move them now. Wait until they are all moved off.
     if (!evacuate.isEmpty()) {
@@ -1089,47 +1060,6 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     }
 
     return aliases.toArray(String[]::new);
-  }
-
-  /**
-   * Reloads the list of servers based on the updated configuration.
-   *
-   * <p>This is exclusively implemented within VelocityServer as it
-   * is not a function necessary and present for generic purposes
-   * within ServerCommand and is exclusive to reload's functionality.</p>
-   */
-  public void reloadServerList() {
-    VelocityConfiguration config = getConfiguration();
-    List<ServerInfo> newConfigServers = loadServersFromNewList(config);
-
-    getAllServers().forEach(server -> {
-      if (!newConfigServers.contains(server.getServerInfo())) {
-        unregisterServer(server.getServerInfo());
-      }
-    });
-
-    newConfigServers.forEach(serverInfo -> {
-      if (getServer(serverInfo.getName()).isEmpty()) {
-        registerServer(serverInfo);
-      }
-    });
-  }
-
-  /**
-   * Loads servers from the [servers] section of the configuration.
-   *
-   * @param config the Velocity configuration
-   * @return list of configured ServerInfo objects
-   */
-  private static List<ServerInfo> loadServersFromNewList(final VelocityConfiguration config) {
-    List<ServerInfo> serverList = new ArrayList<>();
-
-    config.getServers().forEach((serverName, address) -> {
-      InetSocketAddress socketAddress = AddressUtil.parseAddress(address);
-      serverList.add(new ServerInfo(serverName, socketAddress));
-    });
-
-    return serverList;
   }
 
   /**

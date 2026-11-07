@@ -38,7 +38,9 @@ public final class AdmissionStats {
     /** A connection closed because it did not finish its handshake in time. */
     HANDSHAKE_TIMEOUT,
     /** A login refused because this proxy is draining (arrivee-limbo-et-reveil 1.6). */
-    DRAINING
+    DRAINING,
+    /** A connection closed because the client sent more packets or bytes than [packet-limiter] allows. */
+    PACKET_LIMIT
   }
 
   private final Map<Result, LongAdder> counters = new EnumMap<>(Result.class);

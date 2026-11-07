@@ -19,6 +19,7 @@ package com.velocitypowered.proxy.protocol.netty;
 
 import static io.netty.util.ByteProcessor.FIND_NON_NUL;
 
+import com.btcvelocity.proxy.security.PacketLimitExceededException;
 import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.proxy.network.limiter.PacketLimiter;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
@@ -124,9 +125,7 @@ public class MinecraftVarintFrameDecoder extends ByteToMessageDecoder {
           // If enabled, rate-limit serverbound payload bytes based on frame length
           if (packetLimiter != null) {
             if (!packetLimiter.account(length)) {
-              throw new QuietDecoderException(
-                      "Rate limit exceeded while processing packets for %s".formatted(
-                              ctx.channel().remoteAddress()));
+              throw new PacketLimitExceededException();
             }
           }
           out.add(in.readRetainedSlice(length));

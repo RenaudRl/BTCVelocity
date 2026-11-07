@@ -22,6 +22,7 @@ import static com.velocitypowered.natives.util.MoreByteBufUtils.preferredBuffer;
 import static com.velocitypowered.proxy.protocol.util.NettyPreconditions.checkFrame;
 
 import com.btcvelocity.proxy.security.DecompressionGuard;
+import com.btcvelocity.proxy.security.PacketLimitExceededException;
 import com.velocitypowered.natives.compression.VelocityCompressor;
 import com.velocitypowered.proxy.network.limiter.PacketLimiter;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
@@ -88,8 +89,7 @@ public class MinecraftCompressDecoder extends MessageToMessageDecoder<ByteBuf> {
         return;
       }
       if (packetLimiter != null && !packetLimiter.account(in.readableBytes())) {
-        throw new QuietDecoderException("Rate limit exceeded while processing packets for %s"
-            .formatted(ctx.channel().remoteAddress()));
+        throw new PacketLimitExceededException();
       }
       out.add(in.retain());
       return;
@@ -117,8 +117,7 @@ public class MinecraftCompressDecoder extends MessageToMessageDecoder<ByteBuf> {
       checkFrame(uncompressed.writerIndex() == claimedUncompressedSize,
               "Decompressed size %s does not match claimed uncompressed size %s", uncompressed.writerIndex(), claimedUncompressedSize);
       if (packetLimiter != null && !packetLimiter.account(claimedUncompressedSize)) {
-        throw new QuietDecoderException("Rate limit exceeded while processing packets for %s"
-            .formatted(ctx.channel().remoteAddress()));
+        throw new PacketLimitExceededException();
       }
       out.add(uncompressed);
     } catch (Exception e) {

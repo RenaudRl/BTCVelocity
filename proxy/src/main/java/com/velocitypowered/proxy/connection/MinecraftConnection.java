@@ -27,6 +27,7 @@ import static com.velocitypowered.proxy.network.Connections.MINECRAFT_DECODER;
 import static com.velocitypowered.proxy.network.Connections.MINECRAFT_ENCODER;
 
 import com.btcvelocity.proxy.security.DecompressionGuard;
+import com.btcvelocity.proxy.security.PacketLimitExceededException;
 import com.google.common.base.Preconditions;
 import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.natives.compression.VelocityCompressor;
@@ -87,6 +88,7 @@ import java.util.concurrent.TimeUnit;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.translation.GlobalTranslator;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -100,6 +102,10 @@ import org.jetbrains.annotations.NotNull;
 public class MinecraftConnection extends ChannelInboundHandlerAdapter {
 
   private static final Logger LOGGER = LogManager.getLogger(MinecraftConnection.class);
+
+  private static final String PACKET_LIMIT_KICK_KEY = "velocity.error.packet-limit-exceeded";
+  // Bound on how long a flooding client keeps its socket while the kick message is written.
+  private static final long PACKET_LIMIT_CLOSE_GRACE_MS = 1_000;
 
   /**
    * The maximum size in bytes for an incoming packet from the client before disconnection.
@@ -131,6 +137,8 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
   private ConnectionType connectionType = ConnectionTypes.UNDETERMINED;
 
   private boolean knownDisconnect = false;
+
+  private boolean packetLimitHandled = false;
 
   /**
    * Initializes a new {@link MinecraftConnection} instance with no session ID.
@@ -277,6 +285,10 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
   @Override
   public void exceptionCaught(final ChannelHandlerContext ctx, final Throwable cause) {
     if (ctx.channel().isActive()) {
+      if (cause instanceof PacketLimitExceededException) {
+        onPacketLimitExceeded(ctx);
+        return;
+      }
       if (activeSessionHandler != null) {
         try {
           activeSessionHandler.exception(cause);
@@ -309,6 +321,35 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
 
       ctx.close();
     }
+  }
+
+  /**
+   * The client went past the packet limiter: count it, log it once per connection, and tell the
+   * player why instead of the generic internal error. A connection that has no player yet is
+   * closed without a message.
+   */
+  private void onPacketLimitExceeded(final ChannelHandlerContext ctx) {
+    if (packetLimitHandled) {
+      // The decoder kept failing on what the flood left in the buffer while the disconnect is
+      // written: do not wait for a client that does not read.
+      ctx.close();
+      return;
+    }
+    packetLimitHandled = true;
+    knownDisconnect = true;
+    final ConnectedPlayer player =
+        association instanceof ConnectedPlayer connected ? connected : null;
+    server.getConnectionAdmission().recordPacketLimit(remoteAddress,
+        player == null ? null : player.getUsername());
+    if (player == null) {
+      ctx.close();
+      return;
+    }
+    player.disconnect(Component.translatable(PACKET_LIMIT_KICK_KEY, NamedTextColor.RED));
+    // A client that stops reading would hold the write (and the socket) until the read timeout.
+    ctx.executor().schedule(() -> {
+      ctx.close();
+    }, PACKET_LIMIT_CLOSE_GRACE_MS, TimeUnit.MILLISECONDS);
   }
 
   @Override

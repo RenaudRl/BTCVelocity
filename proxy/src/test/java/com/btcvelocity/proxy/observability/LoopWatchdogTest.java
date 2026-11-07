@@ -35,6 +35,8 @@ import org.junit.jupiter.api.Test;
 class LoopWatchdogTest {
 
   private static final long LONG_WINDOW_MILLIS = 60_000;
+  private static final long ONE_HOUR_MILLIS = 3_600_000;
+  private static final long THRESHOLD_MILLIS = 50;
 
   private DefaultEventLoop blockedLoop;
   private DefaultEventLoop healthyLoop;
@@ -164,6 +166,92 @@ class LoopWatchdogTest {
     }
 
     assertTrue(stalls.size() >= 2);
+  }
+
+  /**
+   * The gauge and the alert measure the same marker: when the gauge shows a lag above the
+   * threshold, a stall must have been reported. The scheduler never ticks here (one-hour interval)
+   * and the checks are made by hand, as when the watchdog thread itself is paused (JVM pause, CPU
+   * starvation) while the loop is stalled: the loop then runs its marker before any check saw it
+   * waiting.
+   */
+  @Test
+  void aMarkerThatRanLateBeforeAnyCheckSawItIsStillReported() throws Exception {
+    watchdog = new LoopWatchdog(Map.of("late", blockedLoop), THRESHOLD_MILLIS, ONE_HOUR_MILLIS,
+        LONG_WINDOW_MILLIS, stalls::add);
+    blockedLoop.submit(() -> { }).sync();
+    final CountDownLatch release = new CountDownLatch(1);
+    blockedLoop.execute(() -> await(release));
+    watchdog.tickSafely();
+    Thread.sleep(3 * THRESHOLD_MILLIS);
+    release.countDown();
+    blockedLoop.submit(() -> { }).sync();
+
+    final long gaugeNanos = watchdog.readings().get(0).lagNanos();
+    assertTrue(gaugeNanos >= TimeUnit.MILLISECONDS.toNanos(THRESHOLD_MILLIS),
+        "the gauge shows the stall: " + gaugeNanos);
+    watchdog.tickSafely();
+
+    assertEquals(1, stalls.size(), "the alert says what the gauge says");
+    final LoopWatchdog.Stall stall = stalls.get(0);
+    assertEquals("late", stall.loop());
+    assertEquals("test-blocked-loop", stall.threadName());
+    assertTrue(stall.lagMillis() >= THRESHOLD_MILLIS, "lag " + stall.lagMillis());
+    assertEquals(0, stall.stack().length, "the stall was over: there is no stack to sample");
+  }
+
+  @Test
+  void aStallReportedWhileItLastedIsNotReportedAgainOnceItEnds() throws Exception {
+    // No window: only the bookkeeping of what was already reported can prevent a second report.
+    watchdog = new LoopWatchdog(Map.of("blocked", blockedLoop), THRESHOLD_MILLIS, ONE_HOUR_MILLIS,
+        0, stalls::add);
+    blockedLoop.submit(() -> { }).sync();
+    final CountDownLatch release = new CountDownLatch(1);
+    blockedLoop.execute(() -> await(release));
+    watchdog.tickSafely();
+    Thread.sleep(3 * THRESHOLD_MILLIS);
+    watchdog.tickSafely();
+    assertEquals(1, stalls.size());
+    assertTrue(stalls.get(0).stack().length > 0);
+    release.countDown();
+    blockedLoop.submit(() -> { }).sync();
+
+    watchdog.tickSafely();
+
+    assertEquals(1, stalls.size(), "the same stall is reported once");
+  }
+
+  @Test
+  void aLoopThatOnlyStartedItsThreadLateIsNotReportedAsLate() throws Exception {
+    // The first marker measures the thread starting, not a stall: nothing to report afterwards.
+    final ThreadFactory late = runnable -> new Thread(() -> {
+      try {
+        Thread.sleep(3 * THRESHOLD_MILLIS);
+      } catch (final InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+      runnable.run();
+    }, "test-slow-start-loop");
+    final DefaultEventLoop slowStart = new DefaultEventLoop(null, late);
+    try {
+      watchdog = new LoopWatchdog(Map.of("slow", slowStart), THRESHOLD_MILLIS, ONE_HOUR_MILLIS,
+          0, stalls::add);
+      slowStart.submit(() -> { }).sync();
+
+      watchdog.tickSafely();
+    } finally {
+      slowStart.shutdownGracefully(0, 1, TimeUnit.SECONDS);
+    }
+
+    assertTrue(stalls.isEmpty());
+  }
+
+  private static void await(final CountDownLatch latch) {
+    try {
+      latch.await();
+    } catch (final InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   private void awaitStall() throws InterruptedException {

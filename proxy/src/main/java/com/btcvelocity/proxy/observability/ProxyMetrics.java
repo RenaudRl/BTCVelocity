@@ -99,7 +99,8 @@ public final class ProxyMetrics {
 
     header(out, "btc_proxy_admission_total", "counter",
         "Connections judged before the handshake completes, by outcome (host_observed and "
-            + "host_refused: handshake host outside the allow list).");
+            + "host_refused: handshake host outside the allow list; packet_limit: client closed "
+            + "by the [packet-limiter]).");
     admission.entrySet().stream()
         .sorted(Map.Entry.comparingByKey())
         .forEach(entry -> sample(out, "btc_proxy_admission_total", "result",
@@ -110,7 +111,9 @@ public final class ProxyMetrics {
     out.append("btc_proxy_draining ").append(draining ? 1 : 0).append('\n');
 
     header(out, "btc_proxy_eventloop_lag_seconds", "gauge",
-        "How late the last task marker ran on each Netty event loop.");
+        "Seconds the last task marker waited before each Netty event loop ran it (a marker still "
+            + "waiting counts its wait so far). The watchdog warns about the same measure above "
+            + "watchdog-threshold-ms; at most once a minute per loop.");
     for (final LoopWatchdog.Reading loop : loops) {
       sample(out, "btc_proxy_eventloop_lag_seconds", "loop", loop.loop(),
           String.format(Locale.ROOT, "%.9f", loop.lagNanos() / 1e9));
