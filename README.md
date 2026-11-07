@@ -206,7 +206,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly("dev.btc.velocity:api:0.3")
+    compileOnly("dev.btc.velocity:api:0.4")
 }
 ```
 
@@ -217,7 +217,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'dev.btc.velocity:api:0.3'
+    compileOnly 'dev.btc.velocity:api:0.4'
 }
 ```
 
@@ -234,7 +234,15 @@ dependencies {
     <dependency>
         <groupId>dev.btc.velocity</groupId>
         <artifactId>api</artifactId>
-        <version>0.3</version>
+        <version>0.4</version>
+        <scope>provided</scope>
+    </dependency>
+    <!-- Netty types of the pipeline hook (ClientChannelHook, ConnectionChannel). Gradle gets it
+         from the API's module metadata (compileOnlyApi); the POM cannot express it. -->
+    <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-transport</artifactId>
+        <version>4.2.19.Final</version>
         <scope>provided</scope>
     </dependency>
 </dependencies>
@@ -243,6 +251,39 @@ dependencies {
 - **Javadoc**: https://borntocraftstudio.net/repo/javadoc/velocity/
 - The same repository also hosts the backend API `dev.btc.core:api` (BTC-CORE).
 - API `0.3` moved to Adventure 5: plugins built against `0.2` must be recompiled.
+- API `0.4` adds the pipeline hook below. `addClientChannelHook` / `removeClientChannelHook` are
+  abstract methods of `ProxyServer`: a plugin that calls them needs a 0.4 proxy, or must check that
+  the method exists before calling it (see the fallback note below).
+
+### Pipeline hook (`ClientChannelHook`, API 0.4)
+
+A plugin that needs the raw packets of every client (packet rewriting, resource-pack tooling) adds
+its Netty handlers through the API instead of reflecting on the proxy's channel initializer:
+
+```java
+server.addClientChannelHook(this, channel -> channel.pipeline()
+    .addBefore(ClientChannelHook.MINECRAFT_DECODER, "my-decoder", new MyDecoder())
+    .addBefore(ClientChannelHook.MINECRAFT_ENCODER, "my-encoder", new MyEncoder()));
+// later, from a PostLoginEvent: ConnectionChannel.of(player) gives the same channel
+```
+
+- Called once per new client channel, on every listener (Geyser included), from its event loop,
+  after the proxy has built its pipeline and before the first byte is read. Must not block nor do
+  I/O: the proxy warns when a hook takes more than 10 ms.
+- **Compression**: when it turns on, the proxy inserts `compression-decoder` / `compression-encoder`
+  right before the codec, i.e. between your handlers and the codec. To keep seeing uncompressed
+  frames, listen to the `CompressionState` user event in an inbound handler and, on `ENABLED`, move
+  your handlers back before `MINECRAFT_DECODER` / `MINECRAFT_ENCODER` (re-adding the same instance
+  needs `@ChannelHandler.Sharable` handlers; otherwise add new instances).
+- `channel.remoteAddress()` is the TCP peer (loopback behind Geyser or a PROXY sender), not the
+  player; the connection checks may still close the channel after the hook; Floodgate adds its own
+  handlers after the hooks.
+- A hook that throws is logged (stack once, then a counted line every 30 s) and the handlers it
+  added are removed; the connection and the other hooks go on. `plugin` must be a loaded plugin
+  instance, and is named in those logs.
+- Fallback for plugins that also run on other proxies: test for the method
+  (`ProxyServer.class.getMethod("addClientChannelHook", Object.class, ClientChannelHook.class)`),
+  not just for the class, and fall back on your own injection otherwise.
 
 ---
 
