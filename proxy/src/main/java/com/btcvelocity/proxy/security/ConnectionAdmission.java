@@ -20,6 +20,7 @@ package com.btcvelocity.proxy.security;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiter;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
 import java.net.InetAddress;
+import java.net.SocketAddress;
 import java.net.UnknownHostException;
 import java.util.List;
 import java.util.Set;
@@ -27,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The checks made on a connection before the proxy spends an event on it.
@@ -55,6 +57,7 @@ public final class ConnectionAdmission {
   private final AtomicBoolean observeCapWarned = new AtomicBoolean();
   private final AtomicBoolean rateWarned = new AtomicBoolean();
   private final AtomicBoolean timeoutWarned = new AtomicBoolean();
+  private final AtomicBoolean packetLimitWarned = new AtomicBoolean();
 
   /**
    * Creates the checks of one configuration.
@@ -128,6 +131,25 @@ public final class ConnectionAdmission {
       LOGGER.warn("Closing a connection that did not send its handshake within {} ms "
           + "(handshake-timeout-ms; further ones are not logged, see btc_proxy_admission_total)",
           this.handshakeTimeoutMillis);
+    }
+  }
+
+  /**
+   * Counts and logs a connection closed by the packet limiter: a warning the first time (so a limit
+   * set too low is noticed), debug after that, since a flood would fill the log.
+   *
+   * @param remote the client address (masked in the log)
+   * @param player the player's name once the connection has one, otherwise {@code null}
+   */
+  public void recordPacketLimit(final SocketAddress remote, final @Nullable String player) {
+    this.stats.record(AdmissionStats.Result.PACKET_LIMIT);
+    final String who = player == null ? "an unidentified connection" : "player " + printable(player);
+    if (this.packetLimitWarned.compareAndSet(false, true)) {
+      LOGGER.warn("Packet limit reached by {} from {}: closing the connection ([packet-limiter] "
+          + "packets-per-second, bytes-per-second; further ones are logged at debug)",
+          who, LogAddress.of(remote));
+    } else if (LOGGER.isDebugEnabled()) {
+      LOGGER.debug("Packet limit reached by {} from {}", who, LogAddress.of(remote));
     }
   }
 
