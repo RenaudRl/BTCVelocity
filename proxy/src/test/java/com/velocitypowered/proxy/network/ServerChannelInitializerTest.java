@@ -53,6 +53,7 @@ class ServerChannelInitializerTest {
     final VelocityServer server = mock(VelocityServer.class);
     final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
     when(server.getConfiguration()).thenReturn(configuration);
+    when(server.getConnectionAdmission()).thenReturn(NoAdmission.checks());
     when(configuration.isProxyProtocol()).thenReturn(mainFlag);
     when(configuration.getPacketLimiterConfig())
         .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);
@@ -72,6 +73,7 @@ class ServerChannelInitializerTest {
     final VelocityServer server = mock(VelocityServer.class);
     final VelocityConfiguration configuration = mock(VelocityConfiguration.class);
     when(server.getConfiguration()).thenReturn(configuration);
+    when(server.getConnectionAdmission()).thenReturn(NoAdmission.checks());
     when(configuration.isProxyProtocol()).thenReturn(true);
     when(configuration.getPacketLimiterConfig())
         .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);

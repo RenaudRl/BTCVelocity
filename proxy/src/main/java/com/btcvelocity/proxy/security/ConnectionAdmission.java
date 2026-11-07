@@ -17,6 +17,11 @@
 
 package com.btcvelocity.proxy.security;
 
+import com.velocitypowered.proxy.util.ratelimit.Ratelimiter;
+import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -37,25 +42,114 @@ public final class ConnectionAdmission {
   private static final int MAX_LOGGED_HOSTS = 50;
   private static final int MAX_LOGGED_HOST_LENGTH = 64;
 
+  /** IPv6 bits that identify one subscriber: a /64 is what an ISP hands out to a single line. */
+  private static final int IPV6_LIMIT_PREFIX_BYTES = 8;
+
   private final HandshakeHosts hosts;
+  private final Ratelimiter<InetAddress> connectionLimiter;
+  private final TrustedProxies connectionExempt;
+  private final long handshakeTimeoutMillis;
   private final AdmissionStats stats;
   private final Set<String> loggedHosts = ConcurrentHashMap.newKeySet();
   private final AtomicBoolean refusalWarned = new AtomicBoolean();
   private final AtomicBoolean observeCapWarned = new AtomicBoolean();
+  private final AtomicBoolean rateWarned = new AtomicBoolean();
+  private final AtomicBoolean timeoutWarned = new AtomicBoolean();
 
   /**
    * Creates the checks of one configuration.
    *
    * @param hosts the handshake host policy
+   * @param connectionLimiter how many connections a source may open per window (keyed by
+   *                          {@link #limitKey}); a no-op limiter turns the limit off
+   * @param connectionExempt sources never limited
+   * @param handshakeTimeoutMillis how long a connection may take to send its handshake; 0 = no
+   *                               deadline
+   * @param stats the counters to feed
+   */
+  public ConnectionAdmission(final HandshakeHosts hosts,
+      final Ratelimiter<InetAddress> connectionLimiter, final TrustedProxies connectionExempt,
+      final long handshakeTimeoutMillis, final AdmissionStats stats) {
+    this.hosts = hosts;
+    this.connectionLimiter = connectionLimiter;
+    this.connectionExempt = connectionExempt;
+    this.handshakeTimeoutMillis = handshakeTimeoutMillis;
+    this.stats = stats;
+  }
+
+  /**
+   * Host policy only: no connection limit, no handshake deadline.
+   *
+   * @param hosts the handshake host policy
    * @param stats the counters to feed
    */
   public ConnectionAdmission(final HandshakeHosts hosts, final AdmissionStats stats) {
-    this.hosts = hosts;
-    this.stats = stats;
+    this(hosts, Ratelimiters.createWindowed(0, 0, 0), TrustedProxies.parse(List.of()), 0, stats);
   }
 
   public AdmissionStats stats() {
     return this.stats;
+  }
+
+  /**
+   * How long a connection may take to send its handshake.
+   *
+   * @return milliseconds, 0 when there is no deadline
+   */
+  public long handshakeTimeoutMillis() {
+    return this.handshakeTimeoutMillis;
+  }
+
+  /**
+   * Counts a new connection of a source against its window. Every connection counts, a status ping
+   * as much as a login: the point is the volume, not what is asked.
+   *
+   * @param source the client address, after PROXY protocol resolution when it is in use
+   * @return {@code false} if the source opened too many connections: close this one
+   */
+  public boolean admitConnection(final InetAddress source) {
+    if (this.connectionExempt.contains(source) || this.connectionLimiter.attempt(limitKey(source))) {
+      return true;
+    }
+    this.stats.record(AdmissionStats.Result.RATE_LIMITED);
+    if (this.rateWarned.compareAndSet(false, true)) {
+      LOGGER.warn("Connection rate limit reached by {}: closing its connections until the window "
+          + "ends (connection-rate-limit; further ones are logged at debug)", LogAddress.mask(source));
+    } else {
+      LOGGER.debug("Connection rate limit reached by {}", LogAddress.mask(source));
+    }
+    return false;
+  }
+
+  /** Counts a connection closed for being late with its handshake. */
+  public void recordHandshakeTimeout() {
+    this.stats.record(AdmissionStats.Result.HANDSHAKE_TIMEOUT);
+    if (this.timeoutWarned.compareAndSet(false, true)) {
+      LOGGER.warn("Closing a connection that did not send its handshake within {} ms "
+          + "(handshake-timeout-ms; further ones are not logged, see btc_proxy_admission_total)",
+          this.handshakeTimeoutMillis);
+    }
+  }
+
+  /**
+   * What a source is counted as: its IPv4 address, or the /64 of an IPv6 one (a single line owns
+   * 2^64 addresses, counting them one by one would limit nothing).
+   *
+   * @param source the client address
+   * @return the address to count
+   */
+  static InetAddress limitKey(final InetAddress source) {
+    final byte[] bytes = source.getAddress();
+    if (bytes.length != 16) {
+      return source;
+    }
+    final byte[] masked = new byte[16];
+    System.arraycopy(bytes, 0, masked, 0, IPV6_LIMIT_PREFIX_BYTES);
+    try {
+      return InetAddress.getByAddress(masked);
+    } catch (final UnknownHostException impossible) {
+      throw new IllegalStateException("an address of 16 bytes", impossible);
+    }
   }
 
   /**

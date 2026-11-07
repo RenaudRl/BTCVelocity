@@ -234,6 +234,34 @@ public class BtcConfigMigrations {
             "advanced.handshake-allowed-hosts",
             List.of()
         ),
+        migration(
+            "New connections a single source may open per connection-rate-window-ms, status pings included,\n"
+                + " counted before the handshake is read (login-ratelimit only sees logins). The source is the\n"
+                + " client address after the PROXY protocol; an IPv6 address counts as its /64. Over the limit the\n"
+                + " connection is closed without an answer. 0 (default) turns it off.\n"
+                + " CAUTION: behind one NAT, or a load balancer WITHOUT the PROXY protocol, all players are ONE\n"
+                + " source and a low value locks them out. Leave it off unless the real client address reaches\n"
+                + " the proxy; then start high (for example 20 per 10 s).",
+            "advanced.connection-rate-limit",
+            0
+        ),
+        migration(
+            "Length of that window, in milliseconds.",
+            "advanced.connection-rate-window-ms",
+            10000
+        ),
+        migration(
+            "Sources never limited (address or CIDR, never a host name; at most /8 for IPv4).",
+            "advanced.connection-rate-exempt",
+            List.of()
+        ),
+        migration(
+            "A connection that has not sent its handshake after this many milliseconds is closed (slow-loris\n"
+                + " guard), long before read-timeout. 5000 is generous: a handshake is one small packet.\n"
+                + " 0 (default) means no deadline.",
+            "advanced.handshake-timeout-ms",
+            0
+        ),
 
         // [observability]
         migration(

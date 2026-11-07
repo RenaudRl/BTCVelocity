@@ -69,6 +69,9 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
 
   private final VelocityServer server;
 
+  // Written and read on the connection's event loop only.
+  private boolean handshakeReceived;
+
   /**
    * The configured minimum version string used to validate connecting clients.
    */
@@ -87,8 +90,19 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
         .orElse(ProtocolVersion.MAXIMUM_VERSION.getMostRecentSupportedVersion());
   }
 
+  /**
+   * Whether the client has sent its handshake (or a legacy ping/handshake). A connection that has
+   * not, after the handshake deadline, is closed by the channel initializer.
+   *
+   * @return {@code true} once a handshake packet has arrived
+   */
+  public boolean isHandshakeReceived() {
+    return this.handshakeReceived;
+  }
+
   @Override
   public boolean handle(final LegacyPingPacket packet) {
+    this.handshakeReceived = true;
     connection.setProtocolVersion(ProtocolVersion.LEGACY);
     final StatusSessionHandler handler = new StatusSessionHandler(server, new LegacyInboundConnection(connection, packet));
     connection.setActiveSessionHandler(StateRegistry.STATUS, handler);
@@ -98,6 +112,7 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
 
   @Override
   public boolean handle(final LegacyHandshakePacket packet) {
+    this.handshakeReceived = true;
     connection.closeWith(LegacyDisconnect.from(Component.text(
         "Your client is extremely old. Please update to a newer version of Minecraft.",
         NamedTextColor.RED)
@@ -108,6 +123,7 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
 
   @Override
   public boolean handle(final HandshakePacket handshake) {
+    this.handshakeReceived = true;
     final StateRegistry nextState = getStateForProtocol(handshake.getNextStatus());
     if (nextState == null) {
       LOGGER.error("{} provided invalid protocol {}", this, handshake.getNextStatus());

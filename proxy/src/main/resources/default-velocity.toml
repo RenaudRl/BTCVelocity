@@ -315,6 +315,28 @@ handshake-host-filter = "off"
 # staff or a health check connect by IP.
 handshake-allowed-hosts = []
 
+# New connections a single source may open per connection-rate-window-ms, status pings included,
+# counted before the handshake is read (login-ratelimit above only sees logins). The source is the
+# client address after the PROXY protocol, an IPv6 address counts as its /64. Over the limit, the
+# connection is closed without an answer. 0 (the default) turns it off.
+# CAUTION: behind one NAT, one load balancer WITHOUT the PROXY protocol, or a cluster of players
+# sharing an address, all players are ONE source: a low value locks them out. Leave it off unless
+# the real client address reaches the proxy; then start high (for example 20 per 10 s) and watch
+# btc_proxy_admission_total{result="rate_limited"}.
+connection-rate-limit = 0
+
+# Length of that window, in milliseconds.
+connection-rate-window-ms = 10000
+
+# Sources never limited (address or CIDR, never a host name; at most /8 for IPv4): monitoring,
+# your own tools.
+connection-rate-exempt = []
+
+# Slow-loris guard: a connection that has not sent its handshake after this many milliseconds is
+# closed, long before read-timeout. A handshake is a single small packet, so 5000 is generous; it
+# also covers the PROXY protocol header. 0 (the default) means no deadline, only read-timeout.
+handshake-timeout-ms = 0
+
 # Enables TCP fast open support on the proxy. Requires the proxy to run on Linux.
 tcp-fast-open = false
 

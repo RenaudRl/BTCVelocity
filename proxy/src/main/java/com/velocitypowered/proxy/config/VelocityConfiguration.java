@@ -28,6 +28,8 @@ import com.btcvelocity.proxy.bridge.BackendCircuitBreaker;
 import com.btcvelocity.proxy.config.migration.BtcConfigMigrations;
 import com.btcvelocity.proxy.observability.MetricsEndpoint;
 import com.btcvelocity.proxy.security.GeyserListenerAddress;
+import com.btcvelocity.proxy.security.AdmissionStats;
+import com.btcvelocity.proxy.security.ConnectionAdmission;
 import com.btcvelocity.proxy.security.HandshakeHosts;
 import com.btcvelocity.proxy.security.TrustedProxies;
 import com.velocitypowered.api.proxy.config.BackendServerConfig;
@@ -46,6 +48,7 @@ import com.velocitypowered.proxy.config.migration.PingPassthroughMigration;
 import com.velocitypowered.proxy.config.migration.TransferIntegrationMigration;
 import com.velocitypowered.proxy.util.AddressUtil;
 import com.velocitypowered.proxy.util.MotdRenderer;
+import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
@@ -84,6 +87,10 @@ public final class VelocityConfiguration implements ProxyConfig {
 
   // advanced.status-cache-ttl: the only negative value accepted, same meaning as 0 (cache off).
   private static final double STATUS_CACHE_OFF = -1;
+
+  // Sources the connection limiter follows at once (a few MB); beyond it the oldest are forgotten,
+  // which can only let connections through.
+  private static final long MAX_RATE_LIMITED_SOURCES = 100_000;
 
   @Expose
   private String bind = "0.0.0.0:25565";
@@ -521,6 +528,29 @@ public final class VelocityConfiguration implements ProxyConfig {
       }
     }
 
+    if (advanced.connectionRateLimit < 0) {
+      LOGGER.error("Invalid connection-rate-limit {}: use 0 to disable or a count >= 1",
+          advanced.connectionRateLimit);
+      valid = false;
+    } else if (advanced.connectionRateLimit > 0 && advanced.connectionRateWindowMs < 1) {
+      LOGGER.error("Invalid connection-rate-window-ms {}: expected at least 1",
+          advanced.connectionRateWindowMs);
+      valid = false;
+    }
+    for (String entry : advanced.connectionRateExemptNetworks.invalidEntries()) {
+      LOGGER.error("Invalid connection-rate-exempt entry '{}' (expected address or "
+          + "address/prefix, at most /8 for IPv4 and /7 for IPv6)", entry);
+      valid = false;
+    }
+    if (advanced.handshakeTimeoutMs < 0) {
+      LOGGER.error("Invalid handshake-timeout-ms {}: use 0 to disable or milliseconds >= 1",
+          advanced.handshakeTimeoutMs);
+      valid = false;
+    } else if (advanced.handshakeTimeoutMs > 0 && advanced.handshakeTimeoutMs >= advanced.readTimeout) {
+      LOGGER.warn("handshake-timeout-ms {} is not below read-timeout {}: it will never fire first",
+          advanced.handshakeTimeoutMs, advanced.readTimeout);
+    }
+
     valid &= observability.validate();
 
     if (advanced.loginRatelimit < 0) {
@@ -922,6 +952,19 @@ public final class VelocityConfiguration implements ProxyConfig {
     final HandshakeHosts.Mode mode = HandshakeHosts.Mode.parse(advanced.getHandshakeHostFilter());
     return HandshakeHosts.of(mode == null ? HandshakeHosts.Mode.OFF : mode,
         advanced.getHandshakeAllowedHosts(), forcedHosts.getForcedHosts().keySet());
+  }
+
+  /**
+   * The checks made before the handshake, as configured: host list, connection limit, deadline.
+   *
+   * @param stats the counters to feed, owned by the server so that a reload keeps them
+   * @return a new set of checks (the connection counts start from zero)
+   */
+  public ConnectionAdmission createConnectionAdmission(final AdmissionStats stats) {
+    return new ConnectionAdmission(getHandshakeHosts(),
+        Ratelimiters.createWindowed(advanced.getConnectionRateLimit(),
+            advanced.getConnectionRateWindowMs(), MAX_RATE_LIMITED_SOURCES),
+        advanced.getConnectionRateExemptNetworks(), advanced.getHandshakeTimeoutMs(), stats);
   }
 
   /**
@@ -2232,6 +2275,23 @@ public final class VelocityConfiguration implements ProxyConfig {
     @Expose
     private List<String> handshakeAllowedHosts = List.of();
 
+    /** New connections a source may open per window, pings included; 0 = no limit. */
+    @Expose
+    private int connectionRateLimit = 0;
+
+    @Expose
+    private int connectionRateWindowMs = 10000;
+
+    /** Sources never limited (address or CIDR). */
+    @Expose
+    private List<String> connectionRateExempt = List.of();
+
+    private TrustedProxies connectionRateExemptNetworks = TrustedProxies.parse(List.of());
+
+    /** Milliseconds a connection may take to send its handshake; 0 = no deadline. */
+    @Expose
+    private int handshakeTimeoutMs = 0;
+
     @Expose
     private boolean tcpFastOpen = false;
 
@@ -2373,6 +2433,11 @@ public final class VelocityConfiguration implements ProxyConfig {
         this.geyserListener = geyser == null ? "" : String.valueOf(geyser).trim();
         this.handshakeHostFilter = String.valueOf(config.getOrElse("handshake-host-filter", "off"));
         this.handshakeAllowedHosts = entriesOf(config.get("handshake-allowed-hosts"), List.of());
+        this.connectionRateLimit = config.getIntOrElse("connection-rate-limit", 0);
+        this.connectionRateWindowMs = config.getIntOrElse("connection-rate-window-ms", 10000);
+        this.connectionRateExempt = entriesOf(config.get("connection-rate-exempt"), List.of());
+        this.connectionRateExemptNetworks = TrustedProxies.parse(this.connectionRateExempt);
+        this.handshakeTimeoutMs = config.getIntOrElse("handshake-timeout-ms", 0);
         this.tcpFastOpen = config.getOrElse("tcp-fast-open", false);
         this.bungeePluginMessageChannel = config.getOrElse("bungee-plugin-message-channel", true);
         this.showPingRequests = config.getOrElse("show-ping-requests", false);
@@ -2455,6 +2520,22 @@ public final class VelocityConfiguration implements ProxyConfig {
 
     public List<String> getHandshakeAllowedHosts() {
       return handshakeAllowedHosts;
+    }
+
+    public int getConnectionRateLimit() {
+      return connectionRateLimit;
+    }
+
+    public int getConnectionRateWindowMs() {
+      return connectionRateWindowMs;
+    }
+
+    public TrustedProxies getConnectionRateExemptNetworks() {
+      return connectionRateExemptNetworks;
+    }
+
+    public int getHandshakeTimeoutMs() {
+      return handshakeTimeoutMs;
     }
 
     public boolean isTcpFastOpen() {
@@ -2547,6 +2628,9 @@ public final class VelocityConfiguration implements ProxyConfig {
           + ", readTimeout=" + readTimeout
           + ", proxyProtocol=" + proxyProtocol
           + ", handshakeHostFilter=" + handshakeHostFilter
+          + ", connectionRateLimit=" + connectionRateLimit
+          + ", connectionRateWindowMs=" + connectionRateWindowMs
+          + ", handshakeTimeoutMs=" + handshakeTimeoutMs
           + ", tcpFastOpen=" + tcpFastOpen
           + ", bungeePluginMessageChannel=" + bungeePluginMessageChannel
           + ", showPingRequests=" + showPingRequests

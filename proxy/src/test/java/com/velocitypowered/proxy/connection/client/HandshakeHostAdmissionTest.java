@@ -136,6 +136,20 @@ class HandshakeHostAdmissionTest {
   }
 
   @Test
+  void theHandshakeIsMarkedReceivedWhateverTheVerdictSoTheDeadlineLeavesItAlone() {
+    final HandshakeSessionHandler refused =
+        handler(HandshakeHosts.Mode.ENFORCE, connection(null));
+    final HandshakeSessionHandler admitted = handler(HandshakeHosts.Mode.OFF, connection(null));
+    assertEquals(false, admitted.isHandshakeReceived());
+
+    refused.handle(handshake("203.0.113.9"));
+    admitted.handle(handshake("203.0.113.9"));
+
+    assertEquals(true, refused.isHandshakeReceived());
+    assertEquals(true, admitted.isHandshakeReceived());
+  }
+
+  @Test
   void theGeyserListenerIsNotJudgedEvenInEnforceMode() {
     final MinecraftConnection connection = connection(ListenerOrigin.GEYSER);
 

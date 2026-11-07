@@ -216,6 +216,9 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
             LOGGER.debug("{}: closing, unsupported PROXY header ({})", association,
                 proxyMessage.proxiedProtocol());
             close();
+          } else if (!server.getConnectionAdmission().admitConnection(source.getAddress())) {
+            // The client address is only known now; without PROXY protocol the initializer judged it.
+            close();
           } else {
             this.remoteAddress = source;
           }

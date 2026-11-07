@@ -85,6 +85,7 @@ class ListenerBootstrapTest {
     this.events = mock(VelocityEventManager.class);
     when(server.getConfiguration()).thenReturn(this.configuration);
     when(server.getEventManager()).thenReturn(this.events);
+    when(server.getConnectionAdmission()).thenReturn(NoAdmission.checks());
     doReturn(CompletableFuture.completedFuture(null)).when(this.events).fire(any());
     when(this.configuration.getPacketLimiterConfig())
         .thenReturn(VelocityConfiguration.PacketLimiterConfig.DEFAULT);
