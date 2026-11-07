@@ -36,6 +36,9 @@ import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.event.VelocityEventManager;
 import com.velocitypowered.proxy.protocol.packet.HandshakePacket;
+import com.velocitypowered.proxy.protocol.packet.LegacyPingPacket;
+import com.velocitypowered.proxy.protocol.packet.legacyping.LegacyMinecraftPingVersion;
+import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -133,6 +136,38 @@ class HandshakeHostAdmissionTest {
     verify(connection, never()).close(anyBoolean());
     verify(events).fire(any());
     assertEquals(0, stats.count(AdmissionStats.Result.HOST_OBSERVED));
+  }
+
+  @Test
+  void enforceClosesALegacyPingWithoutAnswerAndCountsIt() {
+    final MinecraftConnection noHost = connection(null);
+    final MinecraftConnection otherHost = connection(null);
+
+    handler(HandshakeHosts.Mode.ENFORCE, noHost)
+        .handle(new LegacyPingPacket(LegacyMinecraftPingVersion.MINECRAFT_1_4));
+    handler(HandshakeHosts.Mode.ENFORCE, otherHost).handle(new LegacyPingPacket(
+        LegacyMinecraftPingVersion.MINECRAFT_1_6, InetSocketAddress.createUnresolved("203.0.113.9", 25565)));
+
+    verify(noHost).close(true);
+    verify(otherHost).close(true);
+    verify(noHost, never()).setActiveSessionHandler(any(), any());
+    verify(otherHost, never()).setActiveSessionHandler(any(), any());
+    assertEquals(2, stats.count(AdmissionStats.Result.HOST_REFUSED));
+  }
+
+  @Test
+  void theGeyserListenerLegacyPingIsNotJudged() {
+    final MinecraftConnection connection = connection(ListenerOrigin.GEYSER);
+
+    try {
+      handler(HandshakeHosts.Mode.ENFORCE, connection)
+          .handle(new LegacyPingPacket(LegacyMinecraftPingVersion.MINECRAFT_1_4));
+    } catch (RuntimeException statusHandlerOnAMock) {
+      // the status handler runs on mocks after the check: only the verdict matters here
+    }
+
+    verify(connection, never()).close(anyBoolean());
+    assertEquals(0, stats.count(AdmissionStats.Result.HOST_REFUSED));
   }
 
   @Test

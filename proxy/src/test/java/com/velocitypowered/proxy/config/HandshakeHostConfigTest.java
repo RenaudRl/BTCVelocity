@@ -120,8 +120,20 @@ class HandshakeHostConfigTest {
       throws IOException {
     assertFalse(read(dir, "handshake-host-filter = \"enforce\"", NO_HOSTS, false).validate());
     assertTrue(read(dir, "handshake-host-filter = \"observe\"", NO_HOSTS, false).validate());
-    assertTrue(read(dir, "handshake-host-filter = \"enforce\"", NO_HOSTS, true).validate(),
-        "forced hosts alone are a list");
+    assertTrue(read(dir, "handshake-host-filter = \"observe\"", NO_HOSTS, true).validate());
+    // the shipped file has three example forced hosts: they must not let enforce start
+    assertFalse(read(dir, "handshake-host-filter = \"enforce\"", NO_HOSTS, true).validate(),
+        "forced hosts alone are not a list");
+  }
+
+  @Test
+  void anEntryThatCanNeverMatchIsOnlyAWarning(@TempDir final Path dir) throws IOException {
+    final VelocityConfiguration config = read(dir, "handshake-host-filter = \"enforce\"",
+        "handshake-allowed-hosts = [\"play.borntocraft.net\", \"*.borntocraft.net\", "
+            + "\"play.borntocraft.net:25565\", \"10.0.0.0/8\"]", false);
+
+    assertTrue(config.validate());
+    assertEquals(HandshakeHosts.Verdict.REFUSE, config.getHandshakeHosts().check("mc.borntocraft.net"));
   }
 
   @Test

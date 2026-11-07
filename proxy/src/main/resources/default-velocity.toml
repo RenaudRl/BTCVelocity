@@ -304,15 +304,21 @@ geyser-listener-trusted-proxies = ["127.0.0.0/8", "::1/128"]
 #   "off"     checks nothing (default).
 #   "observe" lets everyone in, counts the unlisted hosts (btc_proxy_admission_total on /metrics) and
 #             logs each new one once. Start here, read the log, complete the list.
-#   "enforce" closes the connection without an answer. Refused at startup if the list is empty and
-#             there is no forced host.
-# The Geyser listener is never judged. Case, the DNS root dot and the Forge marker (\0FML\0) are
-# ignored in the comparison. Legacy (1.6) pings are not judged.
+#   "enforce" closes the connection without an answer. Refused at startup if handshake-allowed-hosts
+#             is empty (the forced hosts do not count: the example ones below would pass).
+# The handshake host is not always what the player typed: with an SRV record it is the record's
+# target (often with a trailing dot, which is ignored), and a cluster transfer (/transfer, the Redis
+# routes) connects to the target proxy's IP address, which must be listed. The TRANSFER intent is
+# NOT exempted. The Geyser listener is never judged. Case, the DNS root dot and the Forge marker
+# (\0FML\0) are ignored in the comparison. A legacy (1.6) ping is judged too; the oldest ones carry
+# no host and are refused by enforce.
 # To try it, set: handshake-host-filter = "observe"
 handshake-host-filter = "off"
 
-# Public names of the proxy, on top of the forced hosts (always allowed). Add the IP address too if
-# staff or a health check connect by IP.
+# Exact host names or addresses, no port, no wildcard, no network (an entry with ':', '*' or '/' never
+# matches and is warned about). Forced hosts are also allowed, but do not replace this list in
+# enforce mode. List the public names, the SRV targets, the IP address of this proxy that cluster
+# transfers use, and the IP or name staff and health checks connect with.
 handshake-allowed-hosts = []
 
 # New connections a single source may open per connection-rate-window-ms, status pings included,
@@ -329,7 +335,8 @@ connection-rate-limit = 0
 connection-rate-window-ms = 10000
 
 # Sources never limited (address or CIDR, never a host name; at most /8 for IPv4): monitoring,
-# your own tools.
+# your own tools. Add the local address Geyser connects from, and the one SoulFire bots use, if
+# either runs on this network: they open many connections from a single address.
 connection-rate-exempt = []
 
 # Slow-loris guard: a connection that has not sent its handshake after this many milliseconds is

@@ -83,11 +83,33 @@ final class ListenerSourceFilter extends ChannelInboundHandlerAdapter {
     return admitted;
   }
 
+  /**
+   * Whether a connection admitted by {@link #admits} is over the connection limit. Only a direct
+   * peer is counted here (it is the client); behind the PROXY protocol the client address comes in
+   * the header and {@code MinecraftConnection} counts it there.
+   *
+   * @param child the accepted connection, not registered yet
+   * @return {@code true} if it must be closed
+   */
+  boolean overLimit(final Channel child) {
+    return !Boolean.TRUE.equals(child.attr(Connections.PROXY_PROTOCOL).get())
+        && child.remoteAddress() instanceof InetSocketAddress peer
+        && !this.server.getConnectionAdmission().admitConnection(peer.getAddress());
+  }
+
   @Override
   public void channelRead(final ChannelHandlerContext ctx, final Object msg) {
-    if (msg instanceof Channel child && !admits(child)) {
-      refuse(child);
-      return;
+    if (msg instanceof Channel child) {
+      if (!admits(child)) {
+        refuse(child);
+        return;
+      }
+      // Closed here, unregistered and silent: a plugin that wraps the initializer (Floodgate) must
+      // never get a channel without a pipeline, and a flood must not fill the log.
+      if (overLimit(child)) {
+        child.unsafe().closeForcibly();
+        return;
+      }
     }
     ctx.fireChannelRead(msg);
   }

@@ -46,7 +46,6 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.handler.codec.haproxy.HAProxyMessageDecoder;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.concurrent.ScheduledFuture;
-import java.net.InetSocketAddress;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
@@ -121,14 +120,10 @@ public class ServerChannelInitializer extends ChannelInitializer<Channel> {
     // filter never saw has no decision: no PROXY decoder for a source nobody verified.
     final boolean proxyProtocol = Boolean.TRUE.equals(ch.attr(Connections.PROXY_PROTOCOL).get());
 
-    // Without the PROXY protocol the peer is the client: count it before building anything. With
-    // it, the client address arrives in the header and MinecraftConnection counts it there.
+    // The connection limit is applied earlier, by ListenerSourceFilter (direct peer) or when the
+    // PROXY header arrives (MinecraftConnection): refusing here would hand a plugin that wraps this
+    // initializer (Floodgate) a channel without a pipeline.
     final ConnectionAdmission admission = this.server.getConnectionAdmission();
-    if (!proxyProtocol && ch.remoteAddress() instanceof InetSocketAddress peer
-        && !admission.admitConnection(peer.getAddress())) {
-      ch.close();
-      return;
-    }
 
     ch.pipeline()
         .addLast(LEGACY_PING_DECODER, new LegacyPingDecoder())

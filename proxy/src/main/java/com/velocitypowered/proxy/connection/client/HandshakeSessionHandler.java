@@ -103,6 +103,13 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
   @Override
   public boolean handle(final LegacyPingPacket packet) {
     this.handshakeReceived = true;
+    // A 1.6 ping carries a host, the older ones none (read as "", so enforce refuses them): it must
+    // not hand out the MOTD and player count to a client the list would refuse.
+    final InetSocketAddress legacyHost = packet.getVhost();
+    if (hostRefused(legacyHost == null ? "" : legacyHost.getHostString())) {
+      connection.close(true);
+      return true;
+    }
     connection.setProtocolVersion(ProtocolVersion.LEGACY);
     final StatusSessionHandler handler = new StatusSessionHandler(server, new LegacyInboundConnection(connection, packet));
     connection.setActiveSessionHandler(StateRegistry.STATUS, handler);
@@ -167,9 +174,13 @@ public class HandshakeSessionHandler implements MinecraftSessionHandler {
 
   /** Whether the handshake host is outside the allow list in enforce mode (counted either way). */
   private boolean hostRefused(final HandshakePacket handshake) {
+    return hostRefused(handshake.getServerAddress());
+  }
+
+  private boolean hostRefused(final String serverAddress) {
     // Geyser sends the address from its own config, not a public name: that listener is not judged.
     final boolean geyser = connection.getListenerName().filter(ListenerOrigin.GEYSER::equals).isPresent();
-    return server.getConnectionAdmission().checkHost(handshake.getServerAddress(), geyser)
+    return server.getConnectionAdmission().checkHost(serverAddress, geyser)
         == HandshakeHosts.Verdict.REFUSE;
   }
 

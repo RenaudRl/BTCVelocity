@@ -514,10 +514,11 @@ public final class VelocityConfiguration implements ProxyConfig {
       LOGGER.error("Invalid handshake-host-filter '{}': use off, observe or enforce",
           advanced.getHandshakeHostFilter());
       valid = false;
-    } else if (hostMode == HandshakeHosts.Mode.ENFORCE && getHandshakeHosts().isEmpty()) {
-      // Every connection would be closed, the staff's included.
-      LOGGER.error("handshake-host-filter is 'enforce' but handshake-allowed-hosts is empty and "
-          + "there are no forced hosts: it would refuse everyone");
+    } else if (hostMode == HandshakeHosts.Mode.ENFORCE && advanced.getHandshakeAllowedHosts().isEmpty()) {
+      // The forced hosts do not count: the shipped file has example ones, and enforce with only
+      // those would close every real player.
+      LOGGER.error("handshake-host-filter is 'enforce' but handshake-allowed-hosts is empty: it "
+          + "would refuse everyone. List the public names (and the address cluster transfers use).");
       valid = false;
     }
     for (String host : advanced.getHandshakeAllowedHosts()) {
@@ -525,6 +526,10 @@ public final class VelocityConfiguration implements ProxyConfig {
         LOGGER.error("Invalid handshake-allowed-hosts entry '{}': expected a host name or an address",
             host);
         valid = false;
+      } else if (host.contains(":") || host.contains("*") || host.contains("/")) {
+        // The client sends the host without a port, and the comparison is exact.
+        LOGGER.warn("handshake-allowed-hosts entry '{}' contains ':', '*' or '/': it will never "
+            + "match a handshake host (no port, no wildcard, no network)", host);
       }
     }
 

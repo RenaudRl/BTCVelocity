@@ -17,6 +17,7 @@
 
 package com.velocitypowered.proxy.network;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -33,6 +34,8 @@ import com.velocitypowered.proxy.VelocityServer;
 import com.velocitypowered.proxy.config.VelocityConfiguration;
 import com.velocitypowered.proxy.connection.MinecraftConnection;
 import com.velocitypowered.proxy.util.ratelimit.Ratelimiters;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.haproxy.HAProxyCommand;
 import io.netty.handler.codec.haproxy.HAProxyMessage;
 import io.netty.handler.codec.haproxy.HAProxyProtocolVersion;
@@ -76,22 +79,54 @@ class ConnectionAdmissionPipelineTest {
         HAProxyProxiedProtocol.TCP4, client, "127.0.0.1", 4242, 25565);
   }
 
+  /** Offers a child to the listener's server channel; {@code true} if it goes on to the acceptor. */
+  private static boolean accepted(final EmbeddedChannel serverChannel, final PeerChannel child) {
+    serverChannel.writeInbound(child);
+    return serverChannel.readInbound() != null;
+  }
+
   @Test
-  void aDirectPeerOverTheLimitIsClosedBeforeAnyPipelineIsBuilt() {
-    final VelocityServer server = server(2, List.of(), 0);
+  void aDirectPeerOverTheLimitIsClosedOnTheServerChannelBeforeAnyPipelineIsBuilt() {
+    final EmbeddedChannel serverChannel =
+        new EmbeddedChannel(new ListenerSourceFilter(server(2, List.of(), 0), null));
+    final PeerChannel third = new PeerChannel("203.0.113.9");
+    final PeerChannel other = new PeerChannel("203.0.113.10");
 
-    final PeerChannel first = open(server, "203.0.113.9", false);
-    final PeerChannel second = open(server, "203.0.113.9", false);
-    final PeerChannel third = open(server, "203.0.113.9", false);
-    final PeerChannel other = open(server, "203.0.113.10", false);
+    assertTrue(accepted(serverChannel, new PeerChannel("203.0.113.9")));
+    assertTrue(accepted(serverChannel, new PeerChannel("203.0.113.9")));
+    assertFalse(accepted(serverChannel, third));
+    assertTrue(accepted(serverChannel, other), "another source has its own count");
 
-    assertTrue(first.isOpen());
-    assertTrue(second.isOpen());
     assertFalse(third.isOpen());
     assertNull(third.pipeline().get(MinecraftConnection.class), "nothing was built for it");
-    assertTrue(other.isOpen(), "another source has its own count");
     assertEquals(1, stats.count(AdmissionStats.Result.RATE_LIMITED));
   }
+
+  /**
+   * Floodgate wraps the original initializer and then adds a handler before "minecraft-decoder"
+   * without a try/catch: a channel that reached it without a pipeline would throw, and Netty would
+   * log the stack of each refused connection.
+   */
+  @Test
+  void aPluginThatWrapsTheInitializerNeverSeesAChannelOverTheLimit() {
+    final VelocityServer server = server(1, List.of(), 0);
+    final ServerChannelInitializer real = new ServerChannelInitializer(server);
+    final EmbeddedChannel serverChannel = new EmbeddedChannel(new ListenerSourceFilter(server, null));
+
+    for (int i = 0; i < 20; i++) {
+      final PeerChannel child = new PeerChannel("203.0.113.9");
+      if (accepted(serverChannel, child)) {
+        assertDoesNotThrow(() -> {
+          real.initChannel(child);
+          child.pipeline().addBefore(Connections.MINECRAFT_DECODER, "floodgate-like",
+              new ChannelInboundHandlerAdapter());
+        });
+      }
+    }
+
+    assertEquals(19, stats.count(AdmissionStats.Result.RATE_LIMITED));
+  }
+
 
   @Test
   void withTheProxyProtocolTheClientAddressInTheHeaderIsTheOneCounted() {
@@ -125,9 +160,10 @@ class ConnectionAdmissionPipelineTest {
   @Test
   void anExemptSourceIsNotLimitedOnEitherPath() {
     final VelocityServer server = server(1, List.of("203.0.113.0/24"), 0);
+    final EmbeddedChannel serverChannel = new EmbeddedChannel(new ListenerSourceFilter(server, null));
 
     for (int i = 0; i < 5; i++) {
-      assertTrue(open(server, "203.0.113.9", false).isOpen());
+      assertTrue(accepted(serverChannel, new PeerChannel("203.0.113.9")));
     }
     final PeerChannel viaHeader = open(server, "127.0.0.1", true);
     final PeerChannel viaHeader2 = open(server, "127.0.0.1", true);
@@ -139,10 +175,11 @@ class ConnectionAdmissionPipelineTest {
 
   @Test
   void aLimitOfZeroLimitsNothing() {
-    final VelocityServer server = server(0, List.of(), 0);
+    final EmbeddedChannel serverChannel =
+        new EmbeddedChannel(new ListenerSourceFilter(server(0, List.of(), 0), null));
 
     for (int i = 0; i < 20; i++) {
-      assertTrue(open(server, "203.0.113.9", false).isOpen());
+      assertTrue(accepted(serverChannel, new PeerChannel("203.0.113.9")));
     }
   }
 

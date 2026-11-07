@@ -218,19 +218,25 @@ public class BtcConfigMigrations {
             BackendCircuitBreaker.DEFAULT_OPEN_SECONDS
         ),
         migration(
-            "What to do with a connection whose handshake host (the name the player typed) is neither in\n"
-                + " handshake-allowed-hosts nor a forced host. Scanners arrive with the IP address as the host.\n"
+            "What to do with a connection whose handshake host is neither in handshake-allowed-hosts nor a\n"
+                + " forced host. Scanners arrive with the IP address as the host.\n"
                 + " \"off\" checks nothing (default). \"observe\" lets everyone in, counts the unlisted hosts\n"
                 + " (btc_proxy_admission_total) and logs each new one once: run it first, read the list, then\n"
-                + " switch to \"enforce\", which closes the connection without an answer.\n"
-                + " The Geyser listener is never judged. The comparison ignores case, the DNS root dot and the\n"
-                + " Forge marker after the host.",
+                + " switch to \"enforce\", which closes the connection without an answer. Enforce is refused at\n"
+                + " startup if handshake-allowed-hosts is empty (forced hosts do not count).\n"
+                + " The host is not always what the player typed: with an SRV record it is the record's target,\n"
+                + " and a cluster transfer connects to the target proxy's IP address, which must be listed.\n"
+                + " The TRANSFER intent is NOT exempted. The Geyser listener is never judged. The comparison\n"
+                + " ignores case, the DNS root dot and the Forge marker after the host. A legacy (1.6) ping is\n"
+                + " judged too; the oldest ones carry no host and are refused by enforce.",
             "advanced.handshake-host-filter",
             "off"
         ),
         migration(
-            "Public names of the proxy, on top of the forced hosts (which are always allowed). Add the IP\n"
-                + " address too if staff or a health check connect by IP.",
+            "Exact host names or addresses, no port, no wildcard, no network (an entry with ':', '*' or '/'\n"
+                + " never matches and is warned about). Forced hosts are also allowed but do not replace this\n"
+                + " list in enforce mode. List the public names, the SRV targets, the IP address of this proxy\n"
+                + " that cluster transfers use, and what staff and health checks connect with.",
             "advanced.handshake-allowed-hosts",
             List.of()
         ),
@@ -251,7 +257,9 @@ public class BtcConfigMigrations {
             10000
         ),
         migration(
-            "Sources never limited (address or CIDR, never a host name; at most /8 for IPv4).",
+            "Sources never limited (address or CIDR, never a host name; at most /8 for IPv4). Add the local\n"
+                + " address Geyser connects from, and the one SoulFire bots use, if either runs on this network:\n"
+                + " they open many connections from a single address.",
             "advanced.connection-rate-exempt",
             List.of()
         ),
