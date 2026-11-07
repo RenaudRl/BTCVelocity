@@ -104,6 +104,8 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
   private static final Logger LOGGER = LogManager.getLogger(MinecraftConnection.class);
 
   private static final String PACKET_LIMIT_KICK_KEY = "velocity.error.packet-limit-exceeded";
+  // Bound on how long a flooding client keeps its socket while the kick message is written.
+  private static final long PACKET_LIMIT_CLOSE_GRACE_MS = 1_000;
 
   /**
    * The maximum size in bytes for an incoming packet from the client before disconnection.
@@ -344,6 +346,10 @@ public class MinecraftConnection extends ChannelInboundHandlerAdapter {
       return;
     }
     player.disconnect(Component.translatable(PACKET_LIMIT_KICK_KEY, NamedTextColor.RED));
+    // A client that stops reading would hold the write (and the socket) until the read timeout.
+    ctx.executor().schedule(() -> {
+      ctx.close();
+    }, PACKET_LIMIT_CLOSE_GRACE_MS, TimeUnit.MILLISECONDS);
   }
 
   @Override

@@ -100,6 +100,21 @@ class PacketLimitConnectionTest {
   }
 
   @Test
+  void aPlayerWhoStopsSendingAfterTheKickIsStillClosedShortly() {
+    final ConnectedPlayer player = mock(ConnectedPlayer.class);
+    final PeerChannel channel = channelWith(player);
+
+    channel.writeInbound(Unpooled.wrappedBuffer(FRAME));
+    channel.writeInbound(Unpooled.wrappedBuffer(FRAME));
+
+    verify(player, times(1)).disconnect(org.mockito.ArgumentMatchers.any(Component.class));
+    assertTrue(channel.isOpen(), "the kick message gets its chance to be written");
+    channel.advanceTimeBy(2, java.util.concurrent.TimeUnit.SECONDS);
+    channel.runScheduledPendingTasks();
+    assertFalse(channel.isOpen(), "a client that no longer reads does not keep the socket");
+  }
+
+  @Test
   void aConnectionWithoutAPlayerIsClosedAndCounted() {
     final PeerChannel channel = channelWith(null);
 
