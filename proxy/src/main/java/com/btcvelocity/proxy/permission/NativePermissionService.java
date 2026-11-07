@@ -384,10 +384,7 @@ final class NativePermissionService implements AutoCloseable {
       dataSource = new HikariDataSource(hikariConfig(loaded));
       tables = new JdbcPermissionTables(dataSource, loaded.tablePrefix());
       refreshCatalogBlocking();
-
-      if (!loaded.valkeyUri().isBlank()) {
-        startRedis(loaded);
-      }
+      startRedis(loaded);
       lastFailureReason = null;
       LOGGER.info("Native BTC permissions backend configured for network {} and server {}.",
           loaded.networkId(), loaded.serverId());
@@ -395,7 +392,7 @@ final class NativePermissionService implements AutoCloseable {
       // Neither the original exception nor its cause is logged or chained: a pool or client error
       // can quote the connection string, password included. The type is enough to triage; the
       // redacted detail is in the health state.
-      LOGGER.error("Native BTC permissions backend could not initialize ({}); proxy permissions remain undefined until it recovers.",
+      LOGGER.error("Native BTC permissions backend could not initialize ({}); player permissions are refused until it recovers.",
           error.getClass().getSimpleName());
       lastFailureReason = describeFailure(error);
       final HikariDataSource source = dataSource;

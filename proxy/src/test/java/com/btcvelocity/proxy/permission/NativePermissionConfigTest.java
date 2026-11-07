@@ -22,7 +22,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import com.velocitypowered.api.permission.PermissionSubject;
+import com.velocitypowered.api.permission.Tristate;
+import com.velocitypowered.api.proxy.Player;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -43,6 +48,7 @@ import org.junit.jupiter.api.io.TempDir;
 class NativePermissionConfigTest {
 
   private static final String JDBC_URL = "jdbc:postgresql://db.invalid:5432/btc";
+  private static final String VALKEY_URI = "redis://cache.invalid:6379";
 
   @TempDir
   Path directory;
@@ -79,10 +85,10 @@ class NativePermissionConfigTest {
 
   @Test
   void aLiteralValueAndAPartialPlaceholderAreLeftAsTheyAre() throws IOException {
-    final Path file = write(JDBC_URL, "literal-" + secret, "");
+    final Path file = write(JDBC_URL, "literal-" + secret, VALKEY_URI);
     assertEquals("literal-" + secret, NativePermissionConfig.load(file, name -> "ignored").password());
 
-    final Path partial = write(JDBC_URL, "x${env:PERM_TEST_DB_PASSWORD}", "");
+    final Path partial = write(JDBC_URL, "x${env:PERM_TEST_DB_PASSWORD}", VALKEY_URI);
     assertEquals("x${env:PERM_TEST_DB_PASSWORD}",
         NativePermissionConfig.load(partial, name -> "ignored").password(),
         "only a value that is exactly a placeholder is resolved, as in the extension");
@@ -90,7 +96,7 @@ class NativePermissionConfigTest {
 
   @Test
   void anAbsentVariableNamesItselfWithoutAnyValue() throws IOException {
-    final Path file = write(JDBC_URL, "${env:PERM_TEST_DB_PASSWORD}", "");
+    final Path file = write(JDBC_URL, "${env:PERM_TEST_DB_PASSWORD}", VALKEY_URI);
 
     final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
         () -> NativePermissionConfig.load(file, name -> null));
@@ -114,7 +120,7 @@ class NativePermissionConfigTest {
   void aJdbcUrlCarryingAPasswordIsRefusedWithoutEchoingIt() throws IOException {
     for (final String parameter : new String[] {"password=", "PASSWORD=", "Password="}) {
       final String url = JDBC_URL + "?user=reader&" + parameter + secret;
-      final Path file = write(url, "", "");
+      final Path file = write(url, "", VALKEY_URI);
 
       final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
           () -> NativePermissionConfig.load(file, name -> null));
@@ -148,7 +154,7 @@ class NativePermissionConfigTest {
   @Test
   void thePoolIsReadOnly() throws IOException {
     final NativePermissionConfig.Config config =
-        NativePermissionConfig.load(write(JDBC_URL, "", ""), name -> null);
+        NativePermissionConfig.load(write(JDBC_URL, "", VALKEY_URI), name -> null);
 
     final var hikari = NativePermissionService.hikariConfig(config);
     assertTrue(hikari.isReadOnly());
@@ -198,19 +204,48 @@ class NativePermissionConfigTest {
   }
 
   @Test
-  void theProviderStaysOffWhenAReferencedVariableIsMissing() throws IOException {
+  void anEmptyValkeyUriIsRefused() throws IOException {
+    final Path file = write(JDBC_URL, "", " ");
+
+    final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> NativePermissionConfig.load(file, name -> null));
+
+    assertTrue(error.getMessage().contains("valkey-uri"), error.getMessage());
+  }
+
+  /** H3: with the flag set, a configuration error refuses everything instead of Velocity's defaults. */
+  @Test
+  void aMissingVariableKeepsTheProviderAndRefusesEveryPlayerPermission() throws IOException {
     // A name no real environment defines, so the process environment is genuinely queried.
-    final Path file = write(JDBC_URL, "${env:BTC_PERM_TEST_NEVER_DEFINED_" + secret.replace('-', '_') + "}", "");
+    final Path file = write(JDBC_URL, "${env:BTC_PERM_TEST_NEVER_DEFINED_" + secret.replace('-', '_') + "}", VALKEY_URI);
+    assertRefusesEverythingWhenEnabledWith(file);
+  }
+
+  @Test
+  void anEmptyValkeyUriKeepsTheProviderAndRefusesEveryPlayerPermission() throws IOException {
+    assertRefusesEverythingWhenEnabledWith(write(JDBC_URL, "", ""));
+  }
+
+  private void assertRefusesEverythingWhenEnabledWith(final Path file) {
     System.setProperty("btc.permissions.enabled", "true");
     System.setProperty("btc.permissions.config", file.toString());
+    final Player player = mock(Player.class);
+    when(player.getUniqueId()).thenReturn(UUID.randomUUID());
+    when(player.isActive()).thenReturn(true);
 
-    assertFalse(new NativePermissionResolverProvider().isAvailable());
+    try (NativePermissionResolverProvider provider = new NativePermissionResolverProvider()) {
+      assertTrue(provider.isAvailable(), "Velocity's defaults would grant /server to everyone");
+      final var resolver = provider.createResolver(player, permission -> Tristate.TRUE);
+      assertEquals(Tristate.FALSE, resolver.getPermissionValue("velocity.command.server"));
+      assertNull(provider.createResolver(mock(PermissionSubject.class), null),
+          "the console keeps its own permission function");
+    }
   }
 
   @Test
   void theProviderIsOnWithAValidConfiguration() throws IOException {
     System.setProperty("btc.permissions.enabled", "true");
-    System.setProperty("btc.permissions.config", write(JDBC_URL, "", "").toString());
+    System.setProperty("btc.permissions.config", write(JDBC_URL, "", VALKEY_URI).toString());
 
     assertTrue(new NativePermissionResolverProvider().isAvailable());
   }
@@ -218,7 +253,7 @@ class NativePermissionConfigTest {
   @Test
   void theProviderStaysOffWithoutTheFlag() throws IOException {
     System.setProperty("btc.permissions.enabled", "false");
-    System.setProperty("btc.permissions.config", write(JDBC_URL, "", "").toString());
+    System.setProperty("btc.permissions.config", write(JDBC_URL, "", VALKEY_URI).toString());
 
     assertFalse(new NativePermissionResolverProvider().isAvailable());
   }

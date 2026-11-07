@@ -118,10 +118,13 @@ final class NativePermissionConfig {
     return found;
   }
 
-  /** Rejects an unparsable URI without chaining the parser's error: its message can quote the URI. */
+  /**
+   * Requires a parsable URI, without chaining the parser's error: its message can quote the URI.
+   * Without the bus no revocation would reach the proxy, so a missing URI is an error, not a mode.
+   */
   private static void validateValkeyUri(final String valkeyUri) {
     if (valkeyUri.isEmpty()) {
-      return;
+      throw new IllegalArgumentException("Missing native permissions setting: valkey-uri");
     }
     try {
       RedisURI.create(valkeyUri);

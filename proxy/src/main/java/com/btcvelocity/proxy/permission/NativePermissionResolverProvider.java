@@ -37,9 +37,13 @@ final class NativePermissionResolverProvider implements PermissionResolverProvid
   private final NativePermissionService service = new NativePermissionService();
 
   /**
-   * The provider stays off, leaving Velocity's default permissions, when the flag is absent or when
-   * the configuration is invalid (for instance a {@code ${env:NAME}} whose variable is unset). An
-   * unreadable file is not a verdict: the service retries it on demand.
+   * On exactly when the flag is set: only an absent flag leaves Velocity's default permissions.
+   *
+   * <p>An invalid configuration (an unset {@code ${env:NAME}}, a missing or invalid setting, an
+   * empty {@code valkey-uri}) keeps the provider, which then refuses every player permission, and
+   * says so in an ERROR (design decision 6). Velocity's defaults answer UNDEFINED, which
+   * {@code /server} and the queue commands treat as granted: a typo must not open every backend.
+   * The service re-reads the file on its next attempt, so fixing it needs no restart.
    */
   @Override
   public boolean isAvailable() {
@@ -49,11 +53,12 @@ final class NativePermissionResolverProvider implements PermissionResolverProvid
     try {
       NativePermissionConfig.load(NativePermissionConfig.configPath());
     } catch (IOException unreadable) {
-      // Retried on demand by the service.
+      LOGGER.warn("Native BTC permissions configuration is not readable yet ({}); player permissions are"
+          + " refused until the service can read it.", unreadable.toString());
     } catch (IllegalArgumentException invalid) {
       // The message names settings and variables, never values.
-      LOGGER.error("Native BTC permissions disabled, default permissions apply: {}", invalid.getMessage());
-      return false;
+      LOGGER.error("Native BTC permissions configuration is invalid; every player permission is refused"
+          + " until it is fixed: {}", invalid.getMessage());
     }
     return true;
   }
