@@ -53,6 +53,7 @@ import com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory;
 import com.btcvelocity.proxy.queue.RedisVelocityQueueManager;
 import com.btcvelocity.proxy.queue.VelocityQueueManager;
 import com.btcvelocity.proxy.redis.VelocityRedis;
+import com.btcvelocity.proxy.redis.depot.player.PlayerEntry;
 import com.btcvelocity.proxy.security.AdmissionStats;
 import com.btcvelocity.proxy.security.ConnectionAdmission;
 import com.btcvelocity.proxy.storage.PostgresConfiguration;
@@ -1081,6 +1082,12 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
       startedShutdown = true;
       LOGGER.info("Shutting down the proxy...");
 
+      // A drain keeps its mark and its refusal of logins, but its passes stop: the transfer below
+      // hands everyone over, and a pass beside it would release and send some players twice.
+      if (proxyDrain != null) {
+        proxyDrain.stopPasses();
+      }
+
       final ObservabilityService runningObservability = observability;
       if (runningObservability != null) {
         runningObservability.close();
@@ -1272,7 +1279,26 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
     return chooseTransferTarget(getConfiguration().getProxyAddresses(), getProxyId(),
         getConfiguration().getDynamicProxyFilter(),
         proxyId -> redis.getProxyService().isTransferTarget(proxyId),
-        proxyId -> redis.getPlayerService().getPlayerEntriesOnProxy(proxyId).size());
+        playersPerProxy(redis.getPlayerService().getCachedEntries(),
+            proxyId -> redis.getPlayerService().getPlayerEntriesOnProxy(proxyId).size()));
+  }
+
+  /**
+   * Counts players per proxy from the cluster snapshot, one pass for every candidate, instead of
+   * one Redis read each.
+   *
+   * @param cached the entries of the last snapshot, empty if it is missing or stale
+   * @param fromRedis counts one proxy's players in Redis, used only without a usable snapshot
+   * @return the count of a proxy's players
+   */
+  static ToIntFunction<String> playersPerProxy(final Optional<List<PlayerEntry>> cached,
+                                               final ToIntFunction<String> fromRedis) {
+    if (cached.isEmpty()) {
+      return fromRedis;
+    }
+    final Map<String, Long> counts = cached.get().stream().collect(Collectors.groupingBy(
+        entry -> entry.getProxyId().toLowerCase(Locale.ROOT), Collectors.counting()));
+    return proxyId -> counts.getOrDefault(proxyId.toLowerCase(Locale.ROOT), 0L).intValue();
   }
 
   /**
@@ -1294,6 +1320,18 @@ public class VelocityServer implements ProxyServer, ForwardingAudience {
         final ProxyAddress chosen = getConfiguration().isAcceptTransfers()
             ? getProxyAddressToUse() : null;
         return chosen == null ? null : new InetSocketAddress(chosen.ip(), chosen.port());
+      }
+
+      @Override
+      public boolean releasePlayers(final Collection<UUID> players) {
+        return redis == null || redis.getPlayerService().releaseForTransfer(players);
+      }
+
+      @Override
+      public void keepPlayers() {
+        if (redis != null) {
+          redis.getPlayerService().keepPlayers();
+        }
       }
     };
     return new ProxyDrain(cluster, () -> List.copyOf(connectionsByUuid.values()), task -> {

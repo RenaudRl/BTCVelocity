@@ -28,6 +28,9 @@ import net.kyori.adventure.text.minimessage.translation.Argument;
 /**
  * The branches of {@code /velocity drain}: {@code start}, {@code cancel} and {@code status}.
  *
+ * <p>Update the whole proxy fleet before the first drain: a proxy on an older version ignores the
+ * drain mark and keeps picking the drained proxy as a transfer target.</p>
+ *
  * @param server the proxy
  * @param action what this branch does
  */

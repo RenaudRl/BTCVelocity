@@ -17,8 +17,10 @@
 
 package com.btcvelocity.proxy.cluster;
 
+import com.btcvelocity.api.connection.ListenerOrigin;
 import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
+import com.velocitypowered.proxy.protocol.StateRegistry;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Collection;
@@ -27,6 +29,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -39,9 +42,13 @@ import org.jetbrains.annotations.Nullable;
  *
  * <p>Nothing happens until {@link #start()}. The drain can be {@link #cancel() cancelled}; players
  * already sent stay where they went. The server list status is left alone: the proxy keeps
- * answering pings. Players on a client older than 1.20.5 cannot be transferred and stay connected.
- * {@link #isDraining()} is a plain volatile read, safe on a Netty event loop; everything that
- * touches Redis runs on the command thread or the scheduler.</p>
+ * answering pings. Players on a client older than 1.20.5 and Bedrock players (Geyser has no host
+ * to give them) cannot be transferred and stay connected. {@link #isDraining()} is a plain
+ * volatile read, safe on a Netty event loop; everything that touches Redis runs on the command
+ * thread or the scheduler.</p>
+ *
+ * <p>Every proxy of the cluster must run a version that knows the drain mark before the first
+ * drain: an older one ignores it and keeps picking the drained proxy as a transfer target.</p>
  */
 public final class ProxyDrain {
 
@@ -71,6 +78,19 @@ public final class ProxyDrain {
      * @return the address, or {@code null} if no live proxy can take players
      */
     @Nullable InetSocketAddress pickTarget();
+
+    /**
+     * Frees the players' Redis entries so the peer's claim finds them unowned. Blocking, bounded.
+     *
+     * @param players the players about to be sent
+     * @return {@code false} if they could not be freed in time: they must not be sent yet
+     */
+    boolean releasePlayers(Collection<UUID> players);
+
+    /**
+     * Takes back the players released and not yet gone: the drain was cancelled. Not blocking.
+     */
+    void keepPlayers();
   }
 
   /**
@@ -92,7 +112,7 @@ public final class ProxyDrain {
    * What {@link #start()} did.
    *
    * @param transferable players that will be handed to a peer
-   * @param stayingHere players that cannot be transferred (client older than 1.20.5)
+   * @param stayingHere players that cannot be transferred (client older than 1.20.5, Bedrock)
    * @param hasTarget whether a live peer could take players at the start
    */
   public record Started(int transferable, int stayingHere, boolean hasTarget) {
@@ -112,7 +132,12 @@ public final class ProxyDrain {
   private final Supplier<Collection<ConnectedPlayer>> players;
   private final Repeater repeater;
   private final Set<UUID> sent = ConcurrentHashMap.newKeySet();
+  /** Players whose transfer was denied or failed: not tried again until the next start. */
+  private final Set<UUID> refused = ConcurrentHashMap.newKeySet();
+  /** Held by a pass, so a slow one is not overtaken by the next: both would pick the same batch. */
+  private final ReentrantLock passLock = new ReentrantLock();
   private volatile boolean draining;
+  private volatile boolean passesStopped;
   private @Nullable Runnable stopTask; // guarded by this
 
   /**
@@ -149,11 +174,14 @@ public final class ProxyDrain {
     }
     // Refuse first: from here no login gets in, whatever Redis does next.
     this.draining = true;
+    this.passesStopped = false;
     this.sent.clear();
+    this.refused.clear();
     publishMark(true);
     this.stopTask = this.repeater.repeat(this::transferBatch);
-    final int transferable = transferable().size();
-    return Optional.of(new Started(transferable, this.players.get().size() - transferable,
+    final Collection<ConnectedPlayer> online = this.players.get();
+    final int transferable = (int) online.stream().filter(ProxyDrain::canBeTransferred).count();
+    return Optional.of(new Started(transferable, online.size() - transferable,
         pickTarget() != null));
   }
 
@@ -168,12 +196,24 @@ public final class ProxyDrain {
       return false;
     }
     this.draining = false;
+    stopPasses();
+    // Players freed for a transfer that is not coming keep their entry from now on.
+    this.cluster.keepPlayers();
+    publishMark(false);
+    return true;
+  }
+
+  /**
+   * Stops the transfer passes and leaves the drain mark and the refusal of logins as they are.
+   * Called when the proxy shuts down: the shutdown hands the players over itself, and a pass
+   * running beside it would send some of them twice.
+   */
+  public synchronized void stopPasses() {
+    this.passesStopped = true;
     if (this.stopTask != null) {
       this.stopTask.run();
       this.stopTask = null;
     }
-    publishMark(false);
-    return true;
   }
 
   /**
@@ -190,32 +230,84 @@ public final class ProxyDrain {
    * picked again on every pass, so a peer that died meanwhile gets nobody more.
    */
   void transferBatch() {
-    if (!this.draining) {
+    // A pass still waiting on Redis is not overtaken: the next one would pick the same players.
+    if (!this.passLock.tryLock()) {
       return;
     }
-    final List<ConnectedPlayer> batch = transferable().stream().limit(BATCH_SIZE).toList();
+    try {
+      sendNextBatch();
+    } finally {
+      this.passLock.unlock();
+    }
+  }
+
+  private void sendNextBatch() {
+    if (!isRunning()) {
+      return;
+    }
+    final List<ConnectedPlayer> batch = this.players.get().stream()
+        .filter(ProxyDrain::canBeTransferred)
+        .filter(ProxyDrain::isInTransferableState)
+        .filter(player -> !this.sent.contains(player.getUniqueId()))
+        .filter(player -> !this.refused.contains(player.getUniqueId()))
+        .limit(BATCH_SIZE)
+        .toList();
     if (batch.isEmpty()) {
       return; // nothing to hand over: no Redis read either
     }
     final InetSocketAddress target = pickTarget();
-    if (target == null) {
+    // Read again: a cancel during the Redis read must not send anyone.
+    if (target == null || !isRunning()) {
       return; // retried at the next pass
     }
+    // Without their entries, the peer's claim cannot be refused as a duplicate of this proxy's.
+    if (!releasePlayers(batch.stream().map(ConnectedPlayer::getUniqueId).toList())) {
+      return; // retried at the next pass
+    }
+    if (!isRunning()) {
+      this.cluster.keepPlayers(); // cancelled while releasing: the entries go back
+      return;
+    }
     for (final ConnectedPlayer player : batch) {
-      this.sent.add(player.getUniqueId());
-      try {
-        player.transferToHost(target);
-      } catch (RuntimeException e) {
-        LOGGER.warn("Could not transfer {} while draining: {}", player.getUsername(), e.toString());
-      }
+      send(player, target);
     }
   }
 
-  private List<ConnectedPlayer> transferable() {
-    return this.players.get().stream()
-        .filter(player -> player.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_20_5))
-        .filter(player -> !this.sent.contains(player.getUniqueId()))
-        .toList();
+  private boolean isRunning() {
+    return this.draining && !this.passesStopped;
+  }
+
+  private void send(final ConnectedPlayer player, final InetSocketAddress target) {
+    final UUID uniqueId = player.getUniqueId();
+    this.sent.add(uniqueId);
+    try {
+      player.requestTransfer(target).whenComplete((accepted, failure) -> {
+        if (failure != null || !accepted) {
+          refuse(uniqueId);
+        }
+      });
+    } catch (RuntimeException e) {
+      LOGGER.warn("Could not transfer {} while draining: {}", player.getUsername(), e.toString());
+      refuse(uniqueId);
+    }
+  }
+
+  /** A player who was not sent stays here: not counted as sent, not tried again every pass. */
+  private void refuse(final UUID uniqueId) {
+    this.refused.add(uniqueId);
+    this.sent.remove(uniqueId);
+  }
+
+  /** Clients older than 1.20.5 have no transfer packet; Geyser has no Bedrock host to give. */
+  private static boolean canBeTransferred(final ConnectedPlayer player) {
+    return player.getProtocolVersion().noLessThan(ProtocolVersion.MINECRAFT_1_20_5)
+        && ListenerOrigin.of(player).filter(ListenerOrigin.GEYSER::equals).isEmpty();
+  }
+
+  /** A login still in progress does not take a transfer packet. */
+  private static boolean isInTransferableState(final ConnectedPlayer player) {
+    final StateRegistry state = player.getConnection().getState();
+    return state == StateRegistry.PLAY || state == StateRegistry.CONFIG;
   }
 
   private void publishMark(final boolean mark) {
@@ -225,6 +317,15 @@ public final class ProxyDrain {
       // Local state wins; the heartbeat publishes the mark once Redis answers, or lets it expire.
       LOGGER.warn("Could not {} the drain mark in Redis ({}); the local drain state is kept",
           mark ? "publish" : "clear", e.toString());
+    }
+  }
+
+  private boolean releasePlayers(final Collection<UUID> uniqueIds) {
+    try {
+      return this.cluster.releasePlayers(uniqueIds);
+    } catch (RuntimeException e) {
+      LOGGER.warn("Could not release the players of this batch in Redis: {}", e.toString());
+      return false;
     }
   }
 

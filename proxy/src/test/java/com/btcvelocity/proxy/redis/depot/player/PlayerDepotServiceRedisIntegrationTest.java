@@ -504,6 +504,45 @@ class PlayerDepotServiceRedisIntegrationTest {
     awaitTrue("the dead proxy's mark expired", () -> !a.provider.existsKey("draining:drain-a"));
   }
 
+  /**
+   * The drain transfers a player while this proxy still owns its entry: the peer's claim was
+   * refused as a duplicate. Released first (behind a slow worker), the claim goes through, and
+   * the repair of the sender, which still has the player connected, does not take it back.
+   */
+  @Test
+  void aPlayerReleasedForATransferIsClaimedByThePeerEvenBehindASlowWorker() throws Exception {
+    final Node a = liveNode("hand-a");
+    final Node b = liveNode("hand-b");
+    final ConnectedPlayer onA = a.join("alice", "lobby");
+    assertTrue(onLoop(() -> a.service.onPlayerConnect(onA)).get(5, TimeUnit.SECONDS));
+    final ConnectedPlayer onB = b.join("alice", "lobby");
+    final PlayerEntry refused = b.raw.claim(new PlayerEntry(onB, b.proxyId), b.proxyId, false)
+        .get(5, TimeUnit.SECONDS);
+    assertNotNull(refused, "without the release the peer is refused: A still owns the entry");
+    assertEquals(a.proxyId, refused.getProxyId());
+    b.online.remove(onB); // B's own repair would claim a free entry: not before the transfer
+
+    a.workerGate = new CountDownLatch(1); // A's worker waits on its next write
+    a.service.onPlayerSettingsChange(onA, mock(PlayerSettings.class));
+    final CompletableFuture<Boolean> released = CompletableFuture.supplyAsync(
+        () -> a.service.releaseForTransfer(List.of(onA.getUniqueId())), taskPool);
+    Thread.sleep(500);
+    assertFalse(released.isDone(), "the pass must wait for the removal behind the slow write");
+    a.workerGate.countDown();
+    assertTrue(released.get(5, TimeUnit.SECONDS));
+    assertNull(a.raw.get(onA.getUniqueId()), "the entry is still there after the barrier");
+
+    // A's repair runs every second and alice is still connected there: it must keep away.
+    Thread.sleep(2 * PlayerDepotService.REFRESH_INTERVAL.toMillis() + 500);
+    assertNull(a.raw.get(onA.getUniqueId()), "A wrote the handed-over player back");
+
+    b.online.add(onB); // the transferred client reaches B
+    final PlayerEntry holder = b.raw.claim(new PlayerEntry(onB, b.proxyId), b.proxyId, false)
+        .get(5, TimeUnit.SECONDS);
+    assertNull(holder, "the peer's claim was refused after the release");
+    assertEquals(b.proxyId, a.raw.get(onA.getUniqueId()).getProxyId());
+  }
+
   private void awaitTrue(final String what, final BooleanSupplier condition)
       throws InterruptedException {
     final long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CONVERGE_DEADLINE_MS);
@@ -651,6 +690,8 @@ class PlayerDepotServiceRedisIntegrationTest {
     volatile ProxyDepotService proxies;
     final Depot<UUID, PlayerEntry> raw;
     volatile boolean shutdown;
+    /** While closed, this proxy's Redis worker waits in its next player lookup. */
+    volatile CountDownLatch workerGate = new CountDownLatch(0);
 
     Node(final String proxyId, final String username, final boolean live) {
       this.proxyId = proxyId;
@@ -671,8 +712,12 @@ class PlayerDepotServiceRedisIntegrationTest {
       when(server.getProxyId()).thenReturn(proxyId);
       when(server.getConfiguration()).thenReturn(mock(VelocityConfiguration.class, RETURNS_DEEP_STUBS));
       when(server.getAllPlayers()).thenAnswer(inv -> List.copyOf(online));
-      when(server.getPlayer(any(UUID.class))).thenAnswer(inv -> online.stream()
-          .filter(p -> p.getUniqueId().equals(inv.getArgument(0))).findFirst());
+      when(server.getPlayer(any(UUID.class))).thenAnswer(inv -> {
+        if (Thread.currentThread().getName().equals("btc-redis-players")) {
+          workerGate.await(); // a slow write on this proxy's worker, when a test closes the gate
+        }
+        return online.stream().filter(p -> p.getUniqueId().equals(inv.getArgument(0))).findFirst();
+      });
       when(redis.getProvider()).thenReturn(provider);
       when(redis.getServer()).thenReturn(server);
       when(redis.getProxyId()).thenReturn(proxyId);
