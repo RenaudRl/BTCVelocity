@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -60,7 +61,7 @@ class NativePermissionRankingVectorsTest {
    * {@code BORNTOCRAFT-Typewriter/.../core/PermissionRankingVectorsTest.kt}.
    */
   private static final String EXPECTED_CONTRACT_SHA256 =
-      "14645d0042da78b1da4191ddbc14200572a704763d76d3425d759f22016060c4";
+      "44700c967b4c10d603e19b83a83d1101436e79894162d2358cdb7284d4a387a3";
 
   @Test
   void sharedRankingContractHasNotDrifted() throws IOException, NoSuchAlgorithmException {
@@ -111,6 +112,50 @@ class NativePermissionRankingVectorsTest {
     }
 
     assertTrue(failures.isEmpty(), "vecteurs en echec :\n" + String.join("\n", failures));
+  }
+
+  /**
+   * Merge vectors: a stored row and a group catalog go through {@code normalize} (the proxy side of
+   * the extension's {@code loaded.groups + groupCatalog}) before the decision is read.
+   */
+  @Test
+  void everySharedMergeVectorResolvesIdenticallyOnTheProxy() throws IOException {
+    final Gson gson = new Gson();
+    final JsonObject contract = gson.fromJson(contractText(), JsonObject.class);
+    final var vectors = contract.getAsJsonArray("mergeVectors");
+    assertTrue(vectors.size() >= 8,
+        "le contrat doit porter au moins huit vecteurs de fusion, obtenu " + vectors.size());
+
+    final List<String> failures = new ArrayList<>();
+    for (JsonElement element : vectors) {
+      final JsonObject vector = element.getAsJsonObject();
+      final String name = vector.get("name").getAsString();
+      final NativePermissionSnapshot row =
+          gson.fromJson(vector.getAsJsonObject("row"), NativePermissionSnapshot.class);
+      final Map<String, NativePermissionSnapshot.Group> catalog = new HashMap<>();
+      vector.getAsJsonObject("catalog").entrySet().forEach(entry -> catalog.put(
+          entry.getKey().toLowerCase(),
+          gson.fromJson(entry.getValue(), NativePermissionSnapshot.Group.class)));
+
+      NativePermissionService.normalize(row, UUID.randomUUID(), catalog);
+      final Tristate resolved = NativePermissionEvaluator.evaluate(
+          row,
+          vector.get("query").getAsString(),
+          readContext(vector.getAsJsonObject("context")),
+          vector.get("now").getAsLong());
+
+      final String actual = switch (resolved) {
+        case TRUE -> "ALLOW";
+        case FALSE -> "DENY";
+        case UNDEFINED -> "UNDEFINED";
+      };
+      final String expected = vector.get("expected").getAsString();
+      if (!actual.equals(expected)) {
+        failures.add(name + " : attendu " + expected + ", obtenu " + actual);
+      }
+    }
+
+    assertTrue(failures.isEmpty(), "vecteurs de fusion en echec :\n" + String.join("\n", failures));
   }
 
   private static Map<String, String> readContext(final JsonObject context) {

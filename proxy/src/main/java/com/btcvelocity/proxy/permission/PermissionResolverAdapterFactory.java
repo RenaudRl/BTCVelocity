@@ -22,7 +22,9 @@ import com.btcvelocity.api.permission.PermissionResolverFunctionAdapter;
 import com.btcvelocity.api.permission.PermissionResolverProvider;
 import com.velocitypowered.api.permission.PermissionFunction;
 import com.velocitypowered.api.permission.PermissionSubject;
+import com.velocitypowered.api.proxy.Player;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -75,6 +77,39 @@ public final class PermissionResolverAdapterFactory {
       return resolver;
     }
     return new PermissionResolverFunctionAdapter(delegate);
+  }
+
+  /**
+   * Starts reading a freshly authenticated player's permissions and returns the point a login may
+   * go on from: the snapshot is cached, or {@link NativePermissionService#LOAD_TIMEOUT} has passed.
+   *
+   * <p>Compose on the result; never {@code join} it on a connection event loop. It never fails, and
+   * a slow or broken source costs the player their rights, never the entry. With the native provider
+   * off it is already complete, so nothing waits.
+   */
+  public static CompletableFuture<Void> preloadPermissions(final Player player) {
+    try {
+      if (getLoadedProvider().orElse(null) instanceof NativePermissionResolverProvider nativeProvider) {
+        return nativeProvider.awaitLoaded(player);
+      }
+    } catch (RuntimeException error) {
+      // The provider's own message names settings and variables, never values.
+      LOGGER.error("Native BTC permissions preload could not start ({}); the player enters without rights.",
+          error.getClass().getSimpleName());
+    }
+    return CompletableFuture.completedFuture(null);
+  }
+
+  /**
+   * Ends the session {@code player} opened with {@link #preloadPermissions(Player)}; the native
+   * provider drops the account's cache when no other session of it is live, so the cache holds
+   * connected players only. Call it once per connection, at teardown. Does nothing with the
+   * provider off, nor for a connection that never preloaded.
+   */
+  public static void releasePermissions(final Player player) {
+    if (getLoadedProvider().orElse(null) instanceof NativePermissionResolverProvider nativeProvider) {
+      nativeProvider.release(player);
+    }
   }
 
   /** Stops the native provider's asynchronous resources during proxy shutdown. */

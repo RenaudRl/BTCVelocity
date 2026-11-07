@@ -22,16 +22,45 @@ import com.btcvelocity.api.permission.PermissionResolverProvider;
 import com.velocitypowered.api.permission.PermissionFunction;
 import com.velocitypowered.api.permission.PermissionSubject;
 import com.velocitypowered.api.proxy.Player;
+import java.io.IOException;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 /** Optional native BTC provider; disabled by default for public standalone proxies. */
 final class NativePermissionResolverProvider implements PermissionResolverProvider, AutoCloseable {
 
+  private static final Logger LOGGER = LogManager.getLogger(NativePermissionResolverProvider.class);
+
   private final NativePermissionService service = new NativePermissionService();
 
+  /**
+   * On exactly when the flag is set: only an absent flag leaves Velocity's default permissions.
+   *
+   * <p>An invalid configuration (an unset {@code ${env:NAME}}, a missing or invalid setting, an
+   * empty {@code valkey-uri}) keeps the provider, which then refuses every player permission, and
+   * says so in an ERROR (design decision 6). Velocity's defaults answer UNDEFINED, which
+   * {@code /server} and the queue commands treat as granted: a typo must not open every backend.
+   * The service re-reads the file on its next attempt, so fixing it needs no restart.
+   */
   @Override
   public boolean isAvailable() {
-    return NativePermissionConfig.isEnabled();
+    if (!NativePermissionConfig.isEnabled()) {
+      return false;
+    }
+    try {
+      NativePermissionConfig.load(NativePermissionConfig.configPath());
+    } catch (IOException unreadable) {
+      LOGGER.warn("Native BTC permissions configuration is not readable yet ({}); player permissions are"
+          + " refused until the service can read it.", unreadable.toString());
+    } catch (IllegalArgumentException invalid) {
+      // The message names settings and variables, never values.
+      LOGGER.error("Native BTC permissions configuration is invalid; every player permission is refused"
+          + " until it is fixed: {}", invalid.getMessage());
+    }
+    return true;
   }
 
   @Override
@@ -43,6 +72,16 @@ final class NativePermissionResolverProvider implements PermissionResolverProvid
       return null;
     }
     return new NativePermissionResolver(player, delegate, service);
+  }
+
+  /** See {@link NativePermissionService#awaitLoaded(Object, UUID)}. */
+  CompletableFuture<Void> awaitLoaded(final Player player) {
+    return service.awaitLoaded(player, player.getUniqueId());
+  }
+
+  /** See {@link NativePermissionService#release(Object, UUID)}. */
+  void release(final Player player) {
+    service.release(player, player.getUniqueId());
   }
 
   @Override

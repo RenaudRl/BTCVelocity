@@ -60,6 +60,8 @@ class NativePermissionServiceRecoveryTest {
   private static final String PG_USER = System.getenv("BTC_PERM_PG_USER");
   private static final String PG_PASSWORD =
       System.getenv().getOrDefault("BTC_PERM_PG_PASSWORD", "btc");
+  /** Required with the flag set (valkey-uri is mandatory), so the campaign needs a real Valkey too. */
+  private static final String VALKEY_URI = System.getenv("BTC_PERM_VALKEY_URI");
 
   /** Port réservé comme inutilisable : la connexion est refusée franchement, pas suspendue. */
   private static final String UNREACHABLE_URL = "jdbc:postgresql://127.0.0.1:1/absent";
@@ -75,8 +77,8 @@ class NativePermissionServiceRecoveryTest {
 
   @BeforeEach
   void setUp() throws SQLException, IOException {
-    assumeTrue(PG_URL != null && PG_USER != null,
-        "BTC_PERM_PG_URL/BTC_PERM_PG_USER absents : campagne PostgreSQL réelle ignorée");
+    assumeTrue(PG_URL != null && PG_USER != null && VALKEY_URI != null,
+        "BTC_PERM_PG_URL/BTC_PERM_PG_USER/BTC_PERM_VALKEY_URI absents : campagne réelle ignorée");
     tablePrefix =
         "perm_qa_proxy_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8) + "_";
     createSchema();
@@ -87,7 +89,7 @@ class NativePermissionServiceRecoveryTest {
 
   @AfterEach
   void tearDown() throws SQLException {
-    if (PG_URL == null || PG_USER == null) {
+    if (PG_URL == null || PG_USER == null || VALKEY_URI == null) {
       return;
     }
     if (previousConfigProperty == null) {
@@ -106,6 +108,7 @@ class NativePermissionServiceRecoveryTest {
           "une base injoignable ne peut produire aucun snapshot");
 
       writeConfig(PG_URL);
+      waitOutInitRetryBackoff();
 
       final NativePermissionSnapshot recovered = service.load(SUBJECT).join();
       assertNotNull(recovered,
@@ -136,6 +139,7 @@ class NativePermissionServiceRecoveryTest {
           "le motif ne doit porter aucune chaîne de connexion, obtenu : " + broken.lastFailureReason());
 
       writeConfig(PG_URL);
+      waitOutInitRetryBackoff();
       service.load(SUBJECT).join();
 
       assertTrue(service.health().backendAvailable(),
@@ -170,6 +174,11 @@ class NativePermissionServiceRecoveryTest {
 
   // --- banc ----------------------------------------------------------------------------------
 
+  /** Une tentative ratée n'est relancée qu'après ce délai documenté (revue 1.6 M5) : on l'attend. */
+  private static void waitOutInitRetryBackoff() throws InterruptedException {
+    Thread.sleep(NativePermissionService.INIT_RETRY_BACKOFF.toMillis());
+  }
+
   private void writeConfig(final String jdbcUrl) throws IOException {
     final Properties properties = new Properties();
     properties.setProperty("jdbc-url", jdbcUrl);
@@ -178,6 +187,7 @@ class NativePermissionServiceRecoveryTest {
     properties.setProperty("network-id", "btc-qa");
     properties.setProperty("server-id", "proxy-qa");
     properties.setProperty("table-prefix", tablePrefix);
+    properties.setProperty("valkey-uri", VALKEY_URI);
     final StringBuilder text = new StringBuilder();
     properties.forEach((key, value) -> text.append(key).append('=').append(value).append('\n'));
     Files.writeString(configPath, text.toString(), StandardCharsets.UTF_8);
