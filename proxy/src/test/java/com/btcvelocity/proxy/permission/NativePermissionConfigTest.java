@@ -163,6 +163,19 @@ class NativePermissionConfigTest {
     assertFalse(hikari.getJdbcUrl().contains("readOnlyMode"), "the property is not smuggled into the URL");
   }
 
+  @Test
+  void everyQueryIsBoundedOnTheServerAndOnTheSocket() throws IOException {
+    final NativePermissionConfig.Config config =
+        NativePermissionConfig.load(write(JDBC_URL, "", VALKEY_URI), name -> null);
+
+    final var properties = NativePermissionService.hikariConfig(config).getDataSourceProperties();
+
+    assertEquals("-c statement_timeout=" + NativePermissionService.QUERY_TIMEOUT.toMillis(),
+        properties.getProperty("options"));
+    assertEquals(String.valueOf(NativePermissionService.SOCKET_TIMEOUT.toSeconds()),
+        properties.getProperty("socketTimeout"), "pgjdbc reads socketTimeout in seconds");
+  }
+
   /** An invalid Valkey URI with a password must reach neither the log nor the thrown error. */
   @Test
   void aBadValkeyUriLeaksNeitherIntoTheLogNorIntoTheFailure() throws Exception {

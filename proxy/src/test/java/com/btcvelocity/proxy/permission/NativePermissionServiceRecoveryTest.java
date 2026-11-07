@@ -108,6 +108,7 @@ class NativePermissionServiceRecoveryTest {
           "une base injoignable ne peut produire aucun snapshot");
 
       writeConfig(PG_URL);
+      waitOutInitRetryBackoff();
 
       final NativePermissionSnapshot recovered = service.load(SUBJECT).join();
       assertNotNull(recovered,
@@ -138,6 +139,7 @@ class NativePermissionServiceRecoveryTest {
           "le motif ne doit porter aucune chaîne de connexion, obtenu : " + broken.lastFailureReason());
 
       writeConfig(PG_URL);
+      waitOutInitRetryBackoff();
       service.load(SUBJECT).join();
 
       assertTrue(service.health().backendAvailable(),
@@ -171,6 +173,11 @@ class NativePermissionServiceRecoveryTest {
   }
 
   // --- banc ----------------------------------------------------------------------------------
+
+  /** Une tentative ratée n'est relancée qu'après ce délai documenté (revue 1.6 M5) : on l'attend. */
+  private static void waitOutInitRetryBackoff() throws InterruptedException {
+    Thread.sleep(NativePermissionService.INIT_RETRY_BACKOFF.toMillis());
+  }
 
   private void writeConfig(final String jdbcUrl) throws IOException {
     final Properties properties = new Properties();

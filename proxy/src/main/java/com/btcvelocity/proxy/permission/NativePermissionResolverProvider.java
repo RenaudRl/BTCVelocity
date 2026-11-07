@@ -74,14 +74,14 @@ final class NativePermissionResolverProvider implements PermissionResolverProvid
     return new NativePermissionResolver(player, delegate, service);
   }
 
-  /** See {@link NativePermissionService#awaitLoaded(UUID)}. */
-  CompletableFuture<Void> awaitLoaded(final UUID subject) {
-    return service.awaitLoaded(subject);
+  /** See {@link NativePermissionService#awaitLoaded(Object, UUID)}. */
+  CompletableFuture<Void> awaitLoaded(final Player player) {
+    return service.awaitLoaded(player, player.getUniqueId());
   }
 
-  /** See {@link NativePermissionService#evict(UUID)}. */
-  void evict(final UUID subject) {
-    service.evict(subject);
+  /** See {@link NativePermissionService#release(Object, UUID)}. */
+  void release(final Player player) {
+    service.release(player, player.getUniqueId());
   }
 
   @Override

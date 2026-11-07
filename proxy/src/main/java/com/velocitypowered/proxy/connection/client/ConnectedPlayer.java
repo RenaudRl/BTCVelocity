@@ -18,7 +18,7 @@
 package com.velocitypowered.proxy.connection.client;
 
 import static com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory.createPermissionResolverAdapter;
-import static com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory.evictPermissions;
+import static com.btcvelocity.proxy.permission.PermissionResolverAdapterFactory.releasePermissions;
 import static com.velocitypowered.api.proxy.ConnectionRequestBuilder.Status.ALREADY_CONNECTED;
 import static com.velocitypowered.proxy.connection.util.ConnectionRequestResults.plainResult;
 import static java.util.Collections.emptyList;
@@ -1350,11 +1350,10 @@ public class ConnectedPlayer implements MinecraftConnectionAssociation, Player, 
 
     DisconnectEvent event = new DisconnectEvent(this, status);
     server.getEventManager().fire(event).whenComplete((val, ex) -> {
-      // After the listeners, which may still test permissions; and only when no other session of
-      // the account is live, so a refused duplicate login does not strip the one that is.
-      if (server.getPlayer(this.getUniqueId()).isEmpty()) {
-        evictPermissions(this.getUniqueId());
-      }
+      // After the listeners, which may still test permissions. The cache goes with the account's last
+      // preloaded session: a refused duplicate never preloaded, and a login racing this teardown holds
+      // its own session, so neither is stripped.
+      releasePermissions(this);
       if (ex == null) {
         this.teardownFuture.complete(null);
       } else {

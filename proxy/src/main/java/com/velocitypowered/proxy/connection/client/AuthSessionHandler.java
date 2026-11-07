@@ -159,7 +159,7 @@ public class AuthSessionHandler implements MinecraftSessionHandler {
 
       // Authenticated: read the permissions now, so the wait overlaps the plugins' setup handlers.
       final CompletableFuture<Void> permissionsLoaded =
-          PermissionResolverAdapterFactory.preloadPermissions(player.getUniqueId());
+          PermissionResolverAdapterFactory.preloadPermissions(player);
 
       return server.getEventManager()
           .fire(new PermissionsSetupEvent(player, ConnectedPlayer.DEFAULT_PERMISSIONS))

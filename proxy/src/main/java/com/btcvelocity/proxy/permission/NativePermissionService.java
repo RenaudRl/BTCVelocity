@@ -67,6 +67,21 @@ final class NativePermissionService implements AutoCloseable {
    * query per second, not one per permission test.
    */
   static final Duration CATALOG_RETRY_BACKOFF = Duration.ofSeconds(1);
+  /** Bound of a reconnect reload: past it, the snapshots not yet replaced are evicted, not served. */
+  static final Duration RECONCILE_DEADLINE = Duration.ofSeconds(10);
+  /** Least time between two initialization attempts: a broken setup costs one attempt per period. */
+  static final Duration INIT_RETRY_BACKOFF = Duration.ofSeconds(5);
+  /** Server-side bound of one query ({@code statement_timeout}). */
+  static final Duration QUERY_TIMEOUT = Duration.ofSeconds(2);
+  /**
+   * Client-side bound of one read on the socket, above {@link #QUERY_TIMEOUT} so the server cancels
+   * first; it still ends a read when the server or the network stops answering altogether.
+   */
+  static final Duration SOCKET_TIMEOUT = Duration.ofSeconds(5);
+  /** A few concurrent reads are enough: logins and reloads are short, and the proxy never writes. */
+  private static final int POOL_MAX_SIZE = 4;
+  private static final int POOL_MIN_IDLE = 1;
+  private static final Duration POOL_VALIDATION_TIMEOUT = Duration.ofSeconds(2);
   private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
   private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -84,6 +99,8 @@ final class NativePermissionService implements AutoCloseable {
    * them, so a read that began before it can no longer install the state it revoked.
    */
   private final ConcurrentHashMap<UUID, Long> revisionFloor = new ConcurrentHashMap<>();
+  /** Live sessions of each account; each set is only touched inside a compute on its key. */
+  private final ConcurrentHashMap<UUID, Set<Object>> sessions = new ConcurrentHashMap<>();
   /** Bumped after each catalog read, failed or not: a read that merged an older catalog is not cached. */
   private final AtomicLong catalogEpoch = new AtomicLong();
   private final AtomicLong nextCatalogRetryNanos = new AtomicLong(System.nanoTime());
@@ -93,6 +110,7 @@ final class NativePermissionService implements AutoCloseable {
   private final Object initializationLock = new Object();
   private final AtomicBoolean closed = new AtomicBoolean();
   private volatile CompletableFuture<Void> initialization;
+  private volatile long nextInitAttemptNanos;
   private volatile NativePermissionConfig.Config config;
   private volatile HikariDataSource dataSource;
   private volatile PermissionTables tables;
@@ -137,6 +155,36 @@ final class NativePermissionService implements AutoCloseable {
     return awaitLoaded(subject, LOAD_TIMEOUT);
   }
 
+  /**
+   * {@link #awaitLoaded(UUID)} for a session: {@code session} stands for one connection of the
+   * account and holds its snapshot until {@link #release} — the cache of an account lives as long
+   * as one of its sessions does.
+   */
+  CompletableFuture<Void> awaitLoaded(final Object session, final UUID subject) {
+    sessions.compute(subject, (key, live) -> {
+      final Set<Object> held = live == null ? new HashSet<>() : live;
+      held.add(session);
+      return held;
+    });
+    return awaitLoaded(subject);
+  }
+
+  /**
+   * Ends {@code session}, and evicts the account when it was its last (M4). A session that never
+   * loaded holds nothing, so a refused duplicate login evicts nothing. The eviction runs inside the
+   * same atomic step as {@link #awaitLoaded(Object, UUID)}, so a login racing a logout either keeps
+   * the account alive or starts after the eviction, never has its own read evicted.
+   */
+  void release(final Object session, final UUID subject) {
+    sessions.computeIfPresent(subject, (key, live) -> {
+      if (!live.remove(session) || !live.isEmpty()) {
+        return live;
+      }
+      evict(key);
+      return null;
+    });
+  }
+
   CompletableFuture<Void> awaitLoaded(final UUID subject, final Duration timeout) {
     return load(subject)
         .<Void>handle((snapshot, error) -> null)
@@ -149,20 +197,23 @@ final class NativePermissionService implements AutoCloseable {
   }
 
   CompletableFuture<NativePermissionSnapshot> load(final UUID subject) {
-    final Object session = tracked.computeIfAbsent(subject, key -> new Object());
+    final Object period = tracked.computeIfAbsent(subject, key -> new Object());
     final NativePermissionSnapshot cached = snapshots.get(subject);
     if (cached != null) {
       return CompletableFuture.completedFuture(cached);
     }
-    return inFlight.computeIfAbsent(subject, key -> ensureInitialized()
+    final CompletableFuture<NativePermissionSnapshot> pending = inFlight.computeIfAbsent(subject, key -> ensureInitialized()
         .handle((ignored, error) -> {
           if (error != null) {
             LOGGER.warn("Native BTC permissions initialization is unavailable; snapshot load will retry.", error);
           }
           return null;
         })
-        .thenComposeAsync(ignored -> readSnapshot(key, session), ioExecutor)
-        .whenComplete((ignored, error) -> inFlight.remove(key)));
+        .thenComposeAsync(ignored -> readSnapshot(key, period), ioExecutor));
+    // Outside the compute: a read already done would run this inline, a recursive update of the map.
+    // Conditional, so a finished read never removes the newer read of a returning player.
+    pending.whenComplete((ignored, error) -> inFlight.remove(subject, pending));
+    return pending;
   }
 
   NativePermissionSnapshot snapshot(final UUID subject) {
@@ -185,12 +236,14 @@ final class NativePermissionService implements AutoCloseable {
 
   /**
    * The bus confirmed its resubscription (see {@link NativePermissionBus}): invalidations published
-   * during the outage are lost, so nothing cached can be trusted. The catalog is read again and every cached snapshot is replaced by a fresh read.
+   * during the outage are lost, so nothing cached can be trusted. The catalog is read again and
+   * every cached snapshot is replaced by a fresh read.
    *
    * <p>Each player keeps the old snapshot until its new one arrives, so a connected player never
    * falls to "everything refused" for the length of the reload. What cannot be verified is dropped
-   * instead: if the catalog or a row cannot be read, the cache is emptied, since a right that cannot
-   * be confirmed must not outlive the outage; the next permission test loads again.
+   * instead: if the catalog or a row cannot be read, or {@link #RECONCILE_DEADLINE} passes first,
+   * what is not reloaded is evicted, since a right that cannot be confirmed must not outlive the
+   * outage; the next permission test loads again.
    *
    * <p>Called from the Valkey client's event loop, so it only schedules the reads.
    */
@@ -208,7 +261,14 @@ final class NativePermissionService implements AutoCloseable {
       return;
     }
     final Set<UUID> reloaded = new HashSet<>();
+    final long deadline = System.nanoTime() + RECONCILE_DEADLINE.toNanos();
     for (final UUID subject : List.copyOf(snapshots.keySet())) {
+      if (System.nanoTime() - deadline >= 0) {
+        LOGGER.warn("Native BTC permissions reconnect reload passed its {} ms deadline; dropping the snapshots"
+            + " not yet reloaded.", RECONCILE_DEADLINE.toMillis());
+        snapshots.keySet().removeIf(key -> !reloaded.contains(key));
+        return;
+      }
       try {
         reloadCached(source, subject);
         reloaded.add(subject);
@@ -225,8 +285,8 @@ final class NativePermissionService implements AutoCloseable {
   /** Replaces the cached snapshot of {@code subject} by a fresh read, or drops it if that cannot be cached. */
   private void reloadCached(final PermissionTables source, final UUID subject) throws SQLException {
     final NativePermissionSnapshot old = snapshots.get(subject);
-    final Object session = tracked.get(subject);
-    final Read read = session == null ? null : read(source, subject, session);
+    final Object period = tracked.get(subject);
+    final Read read = period == null ? null : read(source, subject, period);
     if (read == null || install(subject, read) != read.snapshot()) {
       // Only the unverified snapshot goes; one a concurrent load installed meanwhile stays.
       snapshots.remove(subject, old);
@@ -365,7 +425,8 @@ final class NativePermissionService implements AutoCloseable {
     }
     synchronized (initializationLock) {
       current = initialization;
-      if (current == null || current.isCompletedExceptionally()) {
+      // A failed attempt is answered as is until INIT_RETRY_BACKOFF has passed.
+      if (current == null || (current.isCompletedExceptionally() && System.nanoTime() - nextInitAttemptNanos >= 0)) {
         current = CompletableFuture.runAsync(this::initializeBlocking, ioExecutor);
         initialization = current;
       }
@@ -391,6 +452,7 @@ final class NativePermissionService implements AutoCloseable {
       LOGGER.error("Native BTC permissions backend could not initialize ({}); player permissions are refused until it recovers.",
           error.getClass().getSimpleName());
       lastFailureReason = describeFailure(error);
+      nextInitAttemptNanos = System.nanoTime() + INIT_RETRY_BACKOFF.toNanos();
       final HikariDataSource source = dataSource;
       dataSource = null;
       tables = null;
@@ -413,10 +475,13 @@ final class NativePermissionService implements AutoCloseable {
     // pgjdbc's default readOnlyMode=transaction sends nothing in autocommit, so setReadOnly alone
     // would not protect; "always" makes the driver enforce it. Set here, not in the user's URL.
     hikari.addDataSourceProperty("readOnlyMode", "always");
-    hikari.setMaximumPoolSize(4);
-    hikari.setMinimumIdle(1);
+    // Without these a query the server never answers holds a pool connection, and a reload, forever.
+    hikari.addDataSourceProperty("options", "-c statement_timeout=" + QUERY_TIMEOUT.toMillis());
+    hikari.addDataSourceProperty("socketTimeout", String.valueOf(SOCKET_TIMEOUT.toSeconds()));
+    hikari.setMaximumPoolSize(POOL_MAX_SIZE);
+    hikari.setMinimumIdle(POOL_MIN_IDLE);
     hikari.setConnectionTimeout(LOAD_TIMEOUT.toMillis());
-    hikari.setValidationTimeout(2_000);
+    hikari.setValidationTimeout(POOL_VALIDATION_TIMEOUT.toMillis());
     hikari.setPoolName("btc-velocity-permissions");
     return hikari;
   }
@@ -424,10 +489,16 @@ final class NativePermissionService implements AutoCloseable {
   private void startRedis(final NativePermissionConfig.Config loaded) {
     final RedisURI valkeyUri = RedisURI.create(loaded.valkeyUri());
     final RedisClient client = RedisClient.create(valkeyUri);
-    final StatefulRedisPubSubConnection<String, String> connection = client.connectPubSub();
-    bus(loaded.redisChannel()).attach(client, connection);
-    redisClient = client;
-    redisConnection = connection;
+    try {
+      final StatefulRedisPubSubConnection<String, String> connection = client.connectPubSub();
+      bus(loaded.redisChannel()).attach(client, connection);
+      redisClient = client;
+      redisConnection = connection;
+    } catch (RuntimeException error) {
+      // The client owns Netty threads: a failed attempt that kept it would leak them every retry.
+      client.shutdown();
+      throw error;
+    }
   }
 
   /**
@@ -439,14 +510,14 @@ final class NativePermissionService implements AutoCloseable {
         snapshots::clear, delays.apply(NativePermissionBus.RESUBSCRIBE_GRACE));
   }
 
-  private CompletableFuture<NativePermissionSnapshot> readSnapshot(final UUID subject, final Object session) {
+  private CompletableFuture<NativePermissionSnapshot> readSnapshot(final UUID subject, final Object period) {
     return CompletableFuture.supplyAsync(() -> {
       final PermissionTables source = tables;
       if (source == null || closed.get()) {
         return null;
       }
       try {
-        final Read read = read(source, subject, session);
+        final Read read = read(source, subject, period);
         return read == null ? null : install(subject, read);
       } catch (SQLException | RuntimeException error) {
         LOGGER.warn("Native BTC permissions snapshot load failed for subject {}; will retry asynchronously.", subject, error);
@@ -467,7 +538,7 @@ final class NativePermissionService implements AutoCloseable {
    * <p>The epoch is taken before the catalog and the catalog before the row, so whatever happens to
    * the catalog during the row read shows as a newer epoch at {@link #install}.
    */
-  private Read read(final PermissionTables source, final UUID subject, final Object session) throws SQLException {
+  private Read read(final PermissionTables source, final UUID subject, final Object period) throws SQLException {
     if (!catalogUsable()) {
       return null;
     }
@@ -479,10 +550,10 @@ final class NativePermissionService implements AutoCloseable {
     final Map<String, NativePermissionSnapshot.Group> catalog = groupCatalog;
     final NativePermissionSnapshot stored = source.readPlayer(subject);
     if (stored == null) {
-      return new Read(neverSeen(subject, catalog), session, epoch);
+      return new Read(neverSeen(subject, catalog), period, epoch);
     }
     normalize(stored, subject, catalog);
-    return new Read(stored, session, epoch);
+    return new Read(stored, period, epoch);
   }
 
   /**
@@ -493,7 +564,7 @@ final class NativePermissionService implements AutoCloseable {
   private NativePermissionSnapshot install(final UUID subject, final Read read) {
     final NativePermissionSnapshot fetched = read.snapshot();
     return snapshots.compute(subject, (key, previous) -> {
-      final boolean outdated = tracked.get(key) != read.session()
+      final boolean outdated = tracked.get(key) != read.period()
           || catalogEpoch.get() != read.catalogEpoch()
           || fetched.revision < revisionFloor.getOrDefault(key, Long.MIN_VALUE);
       if (outdated) {
@@ -503,8 +574,8 @@ final class NativePermissionService implements AutoCloseable {
     });
   }
 
-  /** A row merged with the catalog of {@code catalogEpoch}, read for the tracking period {@code session}. */
-  private record Read(NativePermissionSnapshot snapshot, Object session, long catalogEpoch) {
+  /** A row merged with the catalog of {@code catalogEpoch}, read for the tracking period {@code period}. */
+  private record Read(NativePermissionSnapshot snapshot, Object period, long catalogEpoch) {
   }
 
   private Map<String, NativePermissionSnapshot.Group> readGroups() throws SQLException {

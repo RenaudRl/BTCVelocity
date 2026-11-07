@@ -176,6 +176,6 @@ class NativePermissionLoginLoadTest {
 
   @Test
   void withTheProviderOffTheLoginWaitsForNothing() {
-    assertTrue(PermissionResolverAdapterFactory.preloadPermissions(SUBJECT).isDone());
+    assertTrue(PermissionResolverAdapterFactory.preloadPermissions(mock(Player.class)).isDone());
   }
 }

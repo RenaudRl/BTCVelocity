@@ -109,6 +109,30 @@ class NativePermissionCacheLifecycleTest {
     assertNull(service.snapshot(ALICE), "no one is left to evict it: it would stay until the proxy restarts");
   }
 
+  @Test
+  void aSessionEndingWhileAnotherOfTheSameAccountLogsInLeavesTheNewOneItsRights() throws Exception {
+    final Object leaving = new Object();
+    final Object arriving = new Object();
+    service.awaitLoaded(leaving, ALICE).get(BOUND_SECONDS, TimeUnit.SECONDS);
+
+    // The new session preloads before the old one's teardown ends.
+    service.awaitLoaded(arriving, ALICE).get(BOUND_SECONDS, TimeUnit.SECONDS);
+    service.release(leaving, ALICE);
+
+    assertNotNull(service.snapshot(ALICE), "the live session keeps its snapshot");
+    service.release(arriving, ALICE);
+    assertNull(service.snapshot(ALICE), "the last session takes the account's cache with it");
+  }
+
+  @Test
+  void aConnectionThatNeverPreloadedReleasesNothing() throws Exception {
+    service.awaitLoaded(new Object(), ALICE).get(BOUND_SECONDS, TimeUnit.SECONDS);
+
+    service.release(new Object(), ALICE);
+
+    assertNotNull(service.snapshot(ALICE), "a refused duplicate login must not strip the live session");
+  }
+
   // --- bus reconnection ----------------------------------------------------------------------
 
   @Test
