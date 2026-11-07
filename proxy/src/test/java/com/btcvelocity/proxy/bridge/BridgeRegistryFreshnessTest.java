@@ -23,7 +23,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.btcvelocity.api.bridge.BridgeMessage;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
@@ -32,8 +31,7 @@ import org.junit.jupiter.api.Test;
  * What a backend said stops being believed when it stops saying it.
  *
  * <p>The defect these tests pin down: a backend that dies silently keeps its last good report
- * forever, so the proxy goes on answering "healthy" about a dead server, and "this world is
- * loaded" about a world that no longer exists anywhere.</p>
+ * forever, so the proxy goes on answering "healthy" about a dead server.</p>
  */
 class BridgeRegistryFreshnessTest {
 
@@ -46,18 +44,6 @@ class BridgeRegistryFreshnessTest {
     final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
         UUID.randomUUID(), "health", SERVER, "btc-proxy", now.get(), now.get() + 30_000L);
     return new BridgeMessage.Health(envelope, SERVER, mspt, 20.0d, 3, worlds);
-  }
-
-  private BridgeMessage.WorldLoaded worldLoaded(final String world) {
-    final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
-        UUID.randomUUID(), "world_loaded", SERVER, "btc-proxy", now.get(), now.get() + 30_000L);
-    return new BridgeMessage.WorldLoaded(envelope, SERVER, world, 120L);
-  }
-
-  private BridgeMessage.WorldUnloaded worldUnloaded(final String world) {
-    final BridgeMessage.Envelope envelope = new BridgeMessage.Envelope(BridgeMessage.VERSION,
-        UUID.randomUUID(), "world_unloaded", SERVER, "btc-proxy", now.get(), now.get() + 30_000L);
-    return new BridgeMessage.WorldUnloaded(envelope, SERVER, world);
   }
 
   // --- health ------------------------------------------------------------------------------
@@ -123,69 +109,14 @@ class BridgeRegistryFreshnessTest {
     assertFalse(registry.isStale(SERVER));
   }
 
-  // --- worlds ------------------------------------------------------------------------------
-
-  @Test
-  void aLoadedWorldIsRememberedWhileTheBackendSpeaks() {
-    final WorldRegistry registry = new WorldRegistry(FRESHNESS, now::get);
-    registry.onWorldLoaded(worldLoaded("btc_skyblock"));
-
-    assertTrue(registry.isWorldLoaded(SERVER, "btc_skyblock"));
-    assertEquals(Set.of("btc_skyblock"), registry.getLoadedWorlds(SERVER));
-  }
-
-  @Test
-  void aSilentBackendHoldsNoWorld() {
-    final WorldRegistry registry = new WorldRegistry(FRESHNESS, now::get);
-    registry.onWorldLoaded(worldLoaded("btc_skyblock"));
-
-    now.addAndGet(FRESHNESS + 1L);
-
-    assertFalse(registry.isWorldLoaded(SERVER, "btc_skyblock"),
-        "a world nobody confirms any more is not loaded");
-    assertEquals(Set.of(), registry.getLoadedWorlds(SERVER));
-    assertTrue(registry.isStale(SERVER));
-  }
-
-  @Test
-  void theHealthReportKeepsTheWorldViewAliveAndReconcilesIt() {
-    // The health report lists every loaded world: it is a full statement, not an increment.
-    final WorldRegistry registry = new WorldRegistry(FRESHNESS, now::get);
-    registry.onWorldLoaded(worldLoaded("btc_skyblock"));
-    registry.onWorldLoaded(worldLoaded("disparu"));
-
-    now.addAndGet(FRESHNESS - 1L);
-    registry.onHealth(health(5.0d, List.of("btc_skyblock")));
-    now.addAndGet(FRESHNESS - 1L);
-
-    assertTrue(registry.isWorldLoaded(SERVER, "btc_skyblock"), "still alive, still believed");
-    assertFalse(registry.isWorldLoaded(SERVER, "disparu"),
-        "a world the backend no longer lists disappears, even if its unload message was lost");
-  }
-
-  @Test
-  void aServerWithNoWorldIsNotTheSameAsASilentServer() {
-    final WorldRegistry registry = new WorldRegistry(FRESHNESS, now::get);
-    registry.onWorldLoaded(worldLoaded("btc_skyblock"));
-    registry.onWorldUnloaded(worldUnloaded("btc_skyblock"));
-
-    assertFalse(registry.isStale(SERVER), "it just spoke: it holds no world, and that is fresh");
-    assertEquals(Set.of(), registry.getLoadedWorlds(SERVER));
-  }
-
   @Test
   void forgettingAServerIsNotTheSameAsWaitingForItToExpire() {
-    final BackendHealthRegistry healthRegistry = new BackendHealthRegistry(FRESHNESS, now::get);
-    final WorldRegistry worldRegistry = new WorldRegistry(FRESHNESS, now::get);
-    healthRegistry.update(health(5.0d, List.of()));
-    worldRegistry.onWorldLoaded(worldLoaded("btc_skyblock"));
+    final BackendHealthRegistry registry = new BackendHealthRegistry(FRESHNESS, now::get);
+    registry.update(health(5.0d, List.of()));
 
-    healthRegistry.forget(SERVER);
-    worldRegistry.forget(SERVER);
+    registry.forget(SERVER);
 
-    assertFalse(healthRegistry.isStale(SERVER), "nothing is left to grow old");
-    assertFalse(worldRegistry.isStale(SERVER));
-    assertEquals(BackendHealthRegistry.UNKNOWN_MSPT, healthRegistry.getMspt(SERVER));
-    assertEquals(Set.of(), worldRegistry.getLoadedWorlds(SERVER));
+    assertFalse(registry.isStale(SERVER), "nothing is left to grow old");
+    assertEquals(BackendHealthRegistry.UNKNOWN_MSPT, registry.getMspt(SERVER));
   }
 }
