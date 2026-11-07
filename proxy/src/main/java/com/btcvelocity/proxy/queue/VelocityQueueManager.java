@@ -405,7 +405,8 @@ public class VelocityQueueManager implements QueueManager {
    *
    * <p>Ephemeral services (CloudNet {@code Dungeon-7}) each leave a queue behind otherwise: the map
    * only ever grew. A queue with players in it is kept, so a service restarted under the same name
-   * finds its waiting players again.</p>
+   * finds its waiting players again. A dropped queue is {@link VelocityQueue#discard() discarded},
+   * which also removes its snapshot from the Redis depot.</p>
    *
    * @return the names of the dropped queues
    */
@@ -416,7 +417,7 @@ public class VelocityQueueManager implements QueueManager {
       final VelocityQueue queue = entry.getValue();
       if (queue.size() == 0 && !isRegistered.test(entry.getKey())
           && queues.remove(entry.getKey(), queue)) {
-        queue.teardown();
+        queue.discard();
         dropped.add(entry.getKey());
       }
     }

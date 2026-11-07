@@ -33,6 +33,8 @@ import org.jetbrains.annotations.Nullable;
 public final class VelocityQueueDepotService
     extends AbstractDepotService<String, VelocityQueueDepotEntry> {
 
+  private final VelocityRedis redis;
+
   /**
    * Constructs a new {@link VelocityQueueDepotService}.
    *
@@ -40,15 +42,27 @@ public final class VelocityQueueDepotService
    */
   public VelocityQueueDepotService(final @NotNull VelocityRedis redis) {
     super(VelocityQueueDepotEntry.class, redis.getProvider());
+    this.redis = redis;
   }
 
   /**
-   * Persists the current state of the given queue to Redis.
+   * Persists the current state of the given queue to Redis, as this proxy's snapshot.
    *
    * @param queue the queue to persist
    */
   public void upsertQueue(final @NotNull RedisVelocityQueue queue) {
-    this.depot.upsert(new VelocityQueueDepotEntry(queue));
+    this.depot.upsert(new VelocityQueueDepotEntry(queue, redis.getProxyId()));
+  }
+
+  /**
+   * Removes a server's snapshot, only if this proxy wrote it. A snapshot another proxy wrote (the
+   * master before a hand-over, say) or one that predates the owner field stays where it is.
+   *
+   * @param serverName the name of the server whose queue is gone
+   * @return {@code true} if the snapshot was removed
+   */
+  public boolean removeQueueIfOwner(final @NotNull String serverName) {
+    return this.depot.removeIfOwner(serverName, redis.getProxyId());
   }
 
   /**

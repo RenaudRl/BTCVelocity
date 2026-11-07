@@ -55,12 +55,22 @@ public final class VelocityQueueDepotEntry extends DepotEntry<String, VelocityQu
   private final QueueState state;
 
   /**
+   * The proxy that wrote this snapshot. The depot's owner-aware Lua scripts read this exact field
+   * name, so a proxy can remove only what it wrote itself; a snapshot written before this field
+   * existed has none, and belongs to nobody.
+   */
+  private final String proxyId;
+
+  /**
    * Constructs a {@link VelocityQueueDepotEntry} by capturing the current state of a queue.
    *
-   * @param queue the queue to snapshot
+   * @param queue   the queue to snapshot
+   * @param proxyId the proxy writing the snapshot
    */
-  public VelocityQueueDepotEntry(final @NotNull RedisVelocityQueue queue) {
+  public VelocityQueueDepotEntry(final @NotNull RedisVelocityQueue queue,
+                                 final @NotNull String proxyId) {
     super(queue.getName());
+    this.proxyId = proxyId;
 
     //noinspection unchecked
     this.entries = new ArrayList<>((List<RedisVelocityQueueEntry>) (List<?>) queue.getInternalEntries());

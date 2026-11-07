@@ -149,6 +149,14 @@ public class VelocityQueue implements Queue {
     playerList.clear();
   }
 
+  /**
+   * Called once the manager has dropped this queue for good (its server is gone and nobody waits).
+   * Unlike {@link #teardown()}, nothing of the queue is to outlive this call.
+   */
+  void discard() {
+    teardown();
+  }
+
   public void broadcastMessage(final @NotNull Function<VelocityQueueEntry, Component> componentFn) {
     for (VelocityQueueEntry entry : getEntries()) {
       final Component msg = componentFn.apply(entry);

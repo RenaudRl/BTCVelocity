@@ -47,7 +47,7 @@ class VelocityQueueManagerPruneTest {
 
     assertEquals(List.of("Dungeon-7"), dropped);
     assertTrue(queues.isEmpty());
-    verify(gone).teardown();
+    verify(gone).discard();
   }
 
   @Test
@@ -70,6 +70,6 @@ class VelocityQueueManagerPruneTest {
 
     assertTrue(dropped.isEmpty());
     assertEquals(Set.of("Dungeon-7"), queues.keySet());
-    verify(waiting, never()).teardown();
+    verify(waiting, never()).discard();
   }
 }
