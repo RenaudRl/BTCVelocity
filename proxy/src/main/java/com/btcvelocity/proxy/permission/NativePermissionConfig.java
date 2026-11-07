@@ -86,9 +86,15 @@ final class NativePermissionConfig {
       throw new IllegalArgumentException("Native permissions requires a PostgreSQL JDBC URL");
     }
     // The URL is never echoed: it is the very value that would carry the secret.
-    if (jdbcUrl.toLowerCase(Locale.ROOT).contains("password=")) {
+    final String lowerUrl = jdbcUrl.toLowerCase(Locale.ROOT);
+    if (lowerUrl.contains("password=")) {
       throw new IllegalArgumentException(
           "Native permissions jdbc-url must not carry a password; use the password setting");
+    }
+    // pgjdbc lets the URL override the readOnlyMode=always the pool sets, which would let writes in.
+    if (lowerUrl.contains("readonlymode=")) {
+      throw new IllegalArgumentException(
+          "Native permissions jdbc-url must not set readOnlyMode; the proxy forces it to always");
     }
     validateValkeyUri(valkeyUri);
 

@@ -79,6 +79,7 @@ class NativePermissionResolverPolicyTest {
     service = mock(NativePermissionService.class);
     player = mock(Player.class);
     when(player.getUniqueId()).thenReturn(SUBJECT);
+    when(player.isActive()).thenReturn(true);
     when(service.context()).thenReturn(CONTEXT);
     when(service.load(any(UUID.class))).thenReturn(new CompletableFuture<>());
   }
@@ -197,6 +198,7 @@ class NativePermissionResolverPolicyTest {
   void aMissingSnapshotRefusesTheSameWayWhateverTheUuidSpace() {
     final Player bedrockPlayer = mock(Player.class);
     when(bedrockPlayer.getUniqueId()).thenReturn(BEDROCK_SUBJECT);
+    when(bedrockPlayer.isActive()).thenReturn(true);
     when(service.snapshot(BEDROCK_SUBJECT)).thenReturn(null);
     final NativePermissionResolver resolver =
         new NativePermissionResolver(bedrockPlayer, permission -> Tristate.TRUE, service);
@@ -205,6 +207,18 @@ class NativePermissionResolverPolicyTest {
         "le refus pendant le chargement vaut pour toute identité : le traiter à part pour une"
             + " plateforme ferait de l'origine un critère de décision");
     verify(service).load(BEDROCK_SUBJECT);
+    verify(service, never()).load(SUBJECT);
+  }
+
+  @Test
+  void aCheckAfterTheConnectionClosedRefusesWithoutTrackingTheAccountAgain() {
+    when(player.isActive()).thenReturn(false);
+    when(service.snapshot(SUBJECT)).thenReturn(null);
+    final NativePermissionResolver resolver =
+        new NativePermissionResolver(player, permission -> Tristate.TRUE, service);
+
+    assertEquals(Tristate.FALSE, resolver.getPermissionValue("btc.proxy.join"));
+    assertEquals(Map.of(), resolver.getPermissionMap());
     verify(service, never()).load(SUBJECT);
   }
 

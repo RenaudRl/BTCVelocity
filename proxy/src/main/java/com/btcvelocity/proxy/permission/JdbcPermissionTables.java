@@ -23,6 +23,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import javax.sql.DataSource;
@@ -70,7 +71,7 @@ final class JdbcPermissionTables implements PermissionTables {
         final NativePermissionSnapshot.Group group =
             GSON.fromJson(result.getString("payload"), NativePermissionSnapshot.Group.class);
         if (group != null && group.name != null && !group.name.isBlank()) {
-          groups.put(result.getString("group_name").toLowerCase(), group);
+          groups.put(result.getString("group_name").toLowerCase(Locale.ROOT), group);
         }
       }
     }

@@ -72,6 +72,7 @@ import org.jetbrains.annotations.Unmodifiable;
  */
 final class NativePermissionResolver implements PermissionResolver {
 
+  private final Player player;
   private final UUID subject;
   private final PermissionFunction delegate;
   private final NativePermissionService service;
@@ -81,6 +82,7 @@ final class NativePermissionResolver implements PermissionResolver {
       final PermissionFunction delegate,
       final NativePermissionService service
   ) {
+    this.player = player;
     this.subject = player.getUniqueId();
     this.delegate = delegate;
     this.service = service;
@@ -90,7 +92,7 @@ final class NativePermissionResolver implements PermissionResolver {
   public @NonNull Tristate getPermissionValue(final String permission) {
     final NativePermissionSnapshot snapshot = service.snapshot(subject);
     if (snapshot == null) {
-      service.load(subject);
+      loadIfConnected();
       // Native mode is authoritative: deny while the asynchronous snapshot is loading.
       // Falling back to Velocity here would turn a transient I/O delay into an allow.
       return Tristate.FALSE;
@@ -104,12 +106,22 @@ final class NativePermissionResolver implements PermissionResolver {
   public @Nullable @Unmodifiable Map<String, Boolean> getPermissionMap() {
     final NativePermissionSnapshot snapshot = service.snapshot(subject);
     if (snapshot == null) {
-      service.load(subject);
+      loadIfConnected();
       // Native mode is authoritative while the asynchronous snapshot is loading.
       return Map.of();
     }
     return NativePermissionEvaluator.permissionMap(
         snapshot, service.context(), System.currentTimeMillis());
+  }
+
+  /**
+   * A check made after the session was released (a late event, a plugin holding the player) would
+   * otherwise start tracking an account nobody releases any more.
+   */
+  private void loadIfConnected() {
+    if (player.isActive()) {
+      service.load(subject);
+    }
   }
 
   private Tristate fallback(final String permission) {

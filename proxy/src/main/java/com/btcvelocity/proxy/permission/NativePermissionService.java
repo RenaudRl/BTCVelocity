@@ -29,6 +29,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -82,6 +83,10 @@ final class NativePermissionService implements AutoCloseable {
   private static final int POOL_MAX_SIZE = 4;
   private static final int POOL_MIN_IDLE = 1;
   private static final Duration POOL_VALIDATION_TIMEOUT = Duration.ofSeconds(2);
+  /** An invalidation is a few ids; anything larger is not one and is not parsed. */
+  private static final int MAX_PAYLOAD_BYTES = 8 * 1024;
+  /** Guards the walk to a root cause against a pathological cause chain. */
+  private static final int MAX_CAUSE_DEPTH = 16;
   private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
   private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -398,7 +403,7 @@ final class NativePermissionService implements AutoCloseable {
    */
   private static String describeFailure(final Throwable error) {
     Throwable root = error;
-    for (int depth = 0; root.getCause() != null && root.getCause() != root && depth < 16; depth++) {
+    for (int depth = 0; root.getCause() != null && root.getCause() != root && depth < MAX_CAUSE_DEPTH; depth++) {
       root = root.getCause();
     }
     final String message = root.getMessage();
@@ -621,7 +626,7 @@ final class NativePermissionService implements AutoCloseable {
     // copy each stored row embeds, so a node removed from a grade is removed here too. An embedded
     // copy of a group the catalog does not hold is kept, exactly as the extension keeps it.
     final Map<String, NativePermissionSnapshot.Group> merged = new HashMap<>();
-    snapshot.groups.forEach((key, value) -> merged.put(key.toLowerCase(), value));
+    snapshot.groups.forEach((key, value) -> merged.put(key.toLowerCase(Locale.ROOT), value));
     merged.putAll(catalog);
     snapshot.groups = merged;
   }
@@ -633,21 +638,23 @@ final class NativePermissionService implements AutoCloseable {
   /** Entry point of every bus message; package-private so tests feed it real payloads. */
   void handleInvalidation(final String payload) {
     try {
-      if (payload == null || payload.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 8 * 1024) {
+      if (payload == null
+          || payload.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_PAYLOAD_BYTES) {
         return;
       }
       final Invalidation invalidation = GSON.fromJson(payload, Invalidation.class);
       final NativePermissionConfig.Config current = config;
+      // No filter on the sender: the proxy never publishes, so a backend sharing its server id is
+      // still another publisher whose change must apply here.
       if (invalidation == null || current == null || invalidation.version != 1
           || invalidation.revision < 0 || !current.networkId().equals(invalidation.networkId)
-          || current.serverId().equals(invalidation.serverId)
           || ((invalidation.subject == null) == (invalidation.group == null))) {
         return;
       }
       if (invalidation.subject != null) {
         invalidateSubject(invalidation.subject, invalidation.revision);
       } else {
-        requestGroupRefresh(invalidation.group.toLowerCase());
+        requestGroupRefresh(invalidation.group.toLowerCase(Locale.ROOT));
       }
     } catch (RuntimeException error) {
       LOGGER.warn("Invalid native BTC permissions Redis payload ignored.", error);
@@ -678,7 +685,17 @@ final class NativePermissionService implements AutoCloseable {
   private void scheduleGroupRefresh(final Set<String> groups, final Duration delay) {
     pendingGroups.addAll(groups);
     if (groupRefreshScheduled.compareAndSet(false, true)) {
-      delays.apply(delay).execute(this::refreshQueuedGroups);
+      delays.apply(delay).execute(this::refreshQueuedGroupsOrEmpty);
+    }
+  }
+
+  /** The delayed executor drops what a task throws: an unknown failure is logged and refuses all. */
+  private void refreshQueuedGroupsOrEmpty() {
+    try {
+      refreshQueuedGroups();
+    } catch (RuntimeException error) {
+      LOGGER.error("Native BTC permissions group refresh failed; the cache is emptied.", error);
+      snapshots.clear();
     }
   }
 

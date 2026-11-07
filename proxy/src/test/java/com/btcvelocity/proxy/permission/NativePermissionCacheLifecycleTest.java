@@ -288,6 +288,14 @@ class NativePermissionCacheLifecycleTest {
   }
 
   @Test
+  void aBackendSharingTheProxyServerIdIsStillHeard() {
+    service.handleInvalidation("{\"version\":1,\"networkId\":\"btc\",\"serverId\":\"proxy-1\",\"subject\":\""
+        + ALICE + "\",\"revision\":5}");
+
+    assertNull(service.snapshot(ALICE), "the proxy never publishes: no message on the bus is its own");
+  }
+
+  @Test
   void anInvalidationAfterTheWindowStartsTheNextBurst() {
     service.handleInvalidation(groupInvalidation("staff"));
     refreshWindow.runAll();
@@ -429,7 +437,7 @@ class NativePermissionCacheLifecycleTest {
         + subject + "\",\"revision\":" + revision + "}";
   }
 
-  /** A message a backend would publish; {@code proxy-1} is this proxy, so the sender is another. */
+  /** A message a backend would publish. */
   private static String groupInvalidation(final String group) {
     return "{\"version\":1,\"networkId\":\"btc\",\"serverId\":\"backend-1\",\"group\":\""
         + group + "\",\"revision\":1}";

@@ -131,6 +131,18 @@ class NativePermissionConfigTest {
   }
 
   @Test
+  void aJdbcUrlOverridingTheReadOnlyModeIsRefused() throws IOException {
+    for (final String parameter : new String[] {"readOnlyMode=ignore", "readonlymode=transaction"}) {
+      final Path file = write(JDBC_URL + "?" + parameter, "", VALKEY_URI);
+
+      final IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+          () -> NativePermissionConfig.load(file, name -> null));
+
+      assertTrue(error.getMessage().contains("readOnlyMode"), error.getMessage());
+    }
+  }
+
+  @Test
   void anInvalidValkeyUriIsRefusedWithoutEchoingItNorChainingItsParserError() throws IOException {
     final String invalid = "no-such-scheme://:" + secret + "@cache.invalid:notaport";
     final Path file = write(JDBC_URL, "", invalid);

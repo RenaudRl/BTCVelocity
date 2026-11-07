@@ -67,6 +67,7 @@ class NativePermissionLoginLoadTest {
     tables = new FakePermissionTables();
     final Player player = mock(Player.class);
     when(player.getUniqueId()).thenReturn(SUBJECT);
+    when(player.isActive()).thenReturn(true);
     service = new NativePermissionService(tables, CONFIG, new ManualExecutor());
     resolver = new NativePermissionResolver(player, null, service);
     eventLoop = Executors.newSingleThreadExecutor(task -> new Thread(task, "event-loop-under-test"));
