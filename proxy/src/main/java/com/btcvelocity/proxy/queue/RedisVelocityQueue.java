@@ -153,9 +153,9 @@ public final class RedisVelocityQueue extends VelocityQueue {
         server.getRedis().getQueueService().removeQueueIfEmpty(name);
       }
     }).exceptionally(error -> {
-          LOGGER.warn("Could not remove the Redis snapshot of the dropped queue '{}'", name, error);
-          return null;
-        });
+      LOGGER.warn("Could not remove the Redis snapshot of the dropped queue '{}'", name, error);
+      return null;
+    });
   }
 
   @Override
