@@ -67,7 +67,7 @@ class NativePermissionLoginLoadTest {
     tables = new FakePermissionTables();
     final Player player = mock(Player.class);
     when(player.getUniqueId()).thenReturn(SUBJECT);
-    service = new NativePermissionService(tables, CONFIG);
+    service = new NativePermissionService(tables, CONFIG, new ManualExecutor());
     resolver = new NativePermissionResolver(player, null, service);
     eventLoop = Executors.newSingleThreadExecutor(task -> new Thread(task, "event-loop-under-test"));
   }
@@ -142,7 +142,7 @@ class NativePermissionLoginLoadTest {
   void anUnknownPlayerIsNotCachedWhileTheCatalogCouldNotBeRead() throws Exception {
     service.close();
     tables.groupReadsFail = true;
-    service = new NativePermissionService(tables, CONFIG);
+    service = new NativePermissionService(tables, CONFIG, new ManualExecutor());
 
     assertNull(service.load(SUBJECT).get(BOUND_SECONDS, TimeUnit.SECONDS));
     assertNull(service.load(SUBJECT).get(BOUND_SECONDS, TimeUnit.SECONDS));

@@ -100,6 +100,16 @@ public final class PermissionResolverAdapterFactory {
     return CompletableFuture.completedFuture(null);
   }
 
+  /**
+   * Drops what the native provider caches for an account whose last session has ended, so the cache
+   * holds connected players only. Does nothing with the provider off.
+   */
+  public static void evictPermissions(final UUID subject) {
+    if (getLoadedProvider().orElse(null) instanceof NativePermissionResolverProvider nativeProvider) {
+      nativeProvider.evict(subject);
+    }
+  }
+
   /** Stops the native provider's asynchronous resources during proxy shutdown. */
   public static void shutdown() {
     final PermissionResolverProvider provider = loadedProvider;

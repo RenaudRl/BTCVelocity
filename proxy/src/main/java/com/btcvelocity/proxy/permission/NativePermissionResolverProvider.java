@@ -74,6 +74,11 @@ final class NativePermissionResolverProvider implements PermissionResolverProvid
     return service.awaitLoaded(subject);
   }
 
+  /** See {@link NativePermissionService#evict(UUID)}. */
+  void evict(final UUID subject) {
+    service.evict(subject);
+  }
+
   @Override
   public void close() {
     service.close();

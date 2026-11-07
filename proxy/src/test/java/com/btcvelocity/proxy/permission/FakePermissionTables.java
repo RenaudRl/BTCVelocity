@@ -41,8 +41,10 @@ final class FakePermissionTables implements PermissionTables {
   /** Every thread that ran a read, to prove no read ever ran on the caller's thread. */
   final Set<Thread> readers = ConcurrentHashMap.newKeySet();
 
-  /** Nodes granted to a player, by player; a player absent from the map has no row. */
+  /** Nodes granted to a player, by player; a player in neither map has no row. */
   final Map<UUID, Set<String>> grants = new ConcurrentHashMap<>();
+  /** Groups a player is directly in, by player. */
+  final Map<UUID, Set<String>> memberships = new ConcurrentHashMap<>();
   volatile Map<String, NativePermissionSnapshot.Group> groups = Map.of();
   volatile boolean playerReadsFail;
   volatile boolean groupReadsFail;
@@ -68,7 +70,11 @@ final class FakePermissionTables implements PermissionTables {
       throw new SQLException("simulated read failure");
     }
     final Set<String> nodes = grants.get(subject);
-    return nodes == null ? null : row(nodes);
+    final Set<String> groupNames = memberships.get(subject);
+    if (nodes == null && groupNames == null) {
+      return null;
+    }
+    return row(nodes == null ? Set.of() : nodes, groupNames == null ? Set.of() : groupNames);
   }
 
   @Override
@@ -82,9 +88,10 @@ final class FakePermissionTables implements PermissionTables {
   }
 
   /** A new object per read, as a real read would: the service mutates what it receives. */
-  private static NativePermissionSnapshot row(final Set<String> nodes) {
+  private static NativePermissionSnapshot row(final Set<String> nodes, final Set<String> groupNames) {
     final NativePermissionSnapshot snapshot = new NativePermissionSnapshot();
     snapshot.revision = 1L;
+    snapshot.directGroups = new HashSet<>(groupNames);
     for (final String name : new HashSet<>(nodes)) {
       final NativePermissionSnapshot.Node node = new NativePermissionSnapshot.Node();
       node.node = name;

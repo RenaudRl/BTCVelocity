@@ -21,17 +21,24 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.lettuce.core.RedisChannelHandler;
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisConnectionStateListener;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.pubsub.RedisPubSubAdapter;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
+import java.net.SocketAddress;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -51,10 +58,25 @@ final class NativePermissionService implements AutoCloseable {
    * than the pool would have.
    */
   static final Duration LOAD_TIMEOUT = Duration.ofSeconds(3);
+  /**
+   * Quiet time before a burst of group invalidations is served by one catalog read. Short enough to
+   * keep a revocation well inside the two seconds the network promises, long enough to merge the
+   * invalidations one grade edit publishes.
+   */
+  static final Duration GROUP_REFRESH_WINDOW = Duration.ofMillis(250);
   private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
 
   private final ExecutorService ioExecutor = Executors.newVirtualThreadPerTaskExecutor();
+  /** Runs a task after {@link #GROUP_REFRESH_WINDOW}, on {@link #ioExecutor}; a manual one in tests. */
+  private final Executor groupRefreshDelay;
   private final ConcurrentHashMap<UUID, NativePermissionSnapshot> snapshots = new ConcurrentHashMap<>();
+  /**
+   * Players whose snapshot may be cached: asked for since their last eviction. Without it a read
+   * still in flight when a player disconnects would put the snapshot back, with no one left to evict it.
+   */
+  private final Set<UUID> tracked = ConcurrentHashMap.newKeySet();
+  private final Set<String> pendingGroups = ConcurrentHashMap.newKeySet();
+  private final AtomicBoolean groupRefreshScheduled = new AtomicBoolean();
   private final ConcurrentHashMap<UUID, CompletableFuture<NativePermissionSnapshot>> inFlight = new ConcurrentHashMap<>();
   private final Object initializationLock = new Object();
   private final AtomicBoolean closed = new AtomicBoolean();
@@ -70,13 +92,21 @@ final class NativePermissionService implements AutoCloseable {
   private volatile long groupCatalogStaleSince;
 
   NativePermissionService() {
+    this.groupRefreshDelay = CompletableFuture.delayedExecutor(
+        GROUP_REFRESH_WINDOW.toMillis(), TimeUnit.MILLISECONDS, ioExecutor);
   }
 
   /**
    * A service already wired to {@code tables}, with no pool and no bus: the seam the cache-lifecycle
-   * tests use. The catalog is read here, on the calling thread, exactly as initialization reads it.
+   * tests use, with {@code groupRefreshDelay} standing for the refresh window so a test decides when
+   * it ends. The catalog is read here, on the calling thread, exactly as initialization reads it.
    */
-  NativePermissionService(final PermissionTables tables, final NativePermissionConfig.Config config) {
+  NativePermissionService(
+      final PermissionTables tables,
+      final NativePermissionConfig.Config config,
+      final Executor groupRefreshDelay
+  ) {
+    this.groupRefreshDelay = groupRefreshDelay;
     this.tables = tables;
     this.config = config;
     this.initialization = CompletableFuture.completedFuture(null);
@@ -108,6 +138,7 @@ final class NativePermissionService implements AutoCloseable {
   }
 
   CompletableFuture<NativePermissionSnapshot> load(final UUID subject) {
+    tracked.add(subject);
     final NativePermissionSnapshot cached = snapshots.get(subject);
     if (cached != null) {
       return CompletableFuture.completedFuture(cached);
@@ -125,6 +156,62 @@ final class NativePermissionService implements AutoCloseable {
 
   NativePermissionSnapshot snapshot(final UUID subject) {
     return snapshots.get(subject);
+  }
+
+  /**
+   * Forgets {@code subject}: its cached snapshot goes, and a read still in flight no longer caches
+   * its result. Called when the player's last session ends; a later test of the same account loads
+   * it again.
+   */
+  void evict(final UUID subject) {
+    // Untrack first: a read finishing between the two lines then finds the subject untracked.
+    tracked.remove(subject);
+    snapshots.remove(subject);
+  }
+
+  /**
+   * The bus is connected again: invalidations published during the outage are lost, so nothing cached
+   * can be trusted. The catalog is read again and every cached snapshot is replaced by a fresh read.
+   *
+   * <p>Each player keeps the old snapshot until its new one arrives, so a connected player never
+   * falls to "everything refused" for the length of the reload. What cannot be verified is dropped
+   * instead: if the catalog or a row cannot be read, the cache is emptied, since a right that cannot
+   * be confirmed must not outlive the outage; the next permission test loads again.
+   *
+   * <p>Called from the Valkey client's event loop, so it only schedules the reads.
+   */
+  CompletableFuture<Void> reconcileAfterReconnect() {
+    return CompletableFuture.runAsync(this::reconcileBlocking, ioExecutor);
+  }
+
+  private void reconcileBlocking() {
+    final PermissionTables source = tables;
+    if (source == null || closed.get()) {
+      return;
+    }
+    if (!refreshCatalogBlocking()) {
+      snapshots.clear();
+      return;
+    }
+    final Set<UUID> reloaded = new HashSet<>();
+    for (final UUID subject : List.copyOf(snapshots.keySet())) {
+      try {
+        final NativePermissionSnapshot fresh = fetch(source, subject);
+        if (fresh == null) {
+          snapshots.remove(subject);
+        } else {
+          // computeIfPresent: a player who left meanwhile is not brought back.
+          snapshots.computeIfPresent(subject, (key, old) -> fresh);
+        }
+        reloaded.add(subject);
+      } catch (SQLException | RuntimeException error) {
+        LOGGER.warn("Native BTC permissions reconnect reload failed; dropping the snapshots not yet reloaded.", error);
+        lastFailureReason = describeFailure(error);
+        // One failure stops the pass: the next reads would each wait out the pool timeout.
+        snapshots.keySet().removeIf(key -> !reloaded.contains(key));
+        return;
+      }
+    }
   }
 
   /** Evaluation context of every proxy-side decision; empty while the backend has no configuration. */
@@ -165,17 +252,19 @@ final class NativePermissionService implements AutoCloseable {
    * transport Valkey qui la déclenche en production.
    */
   CompletableFuture<Boolean> refreshGroupCatalog() {
-    return CompletableFuture.supplyAsync(() -> {
-      try {
-        groupCatalog = readGroups();
-        markGroupCatalogFresh();
-        return true;
-      } catch (SQLException | RuntimeException error) {
-        LOGGER.warn("Native BTC permissions group refresh failed; keeping the last valid catalog.", error);
-        markGroupCatalogStale(error);
-        return false;
-      }
-    }, ioExecutor);
+    return CompletableFuture.supplyAsync(this::refreshCatalogBlocking, ioExecutor);
+  }
+
+  private boolean refreshCatalogBlocking() {
+    try {
+      groupCatalog = readGroups();
+      markGroupCatalogFresh();
+      return true;
+    } catch (SQLException | RuntimeException error) {
+      LOGGER.warn("Native BTC permissions group refresh failed; keeping the last valid catalog.", error);
+      markGroupCatalogStale(error);
+      return false;
+    }
   }
 
   private void markGroupCatalogFresh() {
@@ -315,8 +404,20 @@ final class NativePermissionService implements AutoCloseable {
       }
     });
     connection.sync().subscribe(loaded.redisChannel());
+    // After the first connection on purpose: only a reconnection has anything to reconcile.
+    client.addListener(onReconnect(this::reconcileAfterReconnect));
     redisClient = client;
     redisConnection = connection;
+  }
+
+  /** Lettuce reconnects and resubscribes by itself; this is the one place the proxy learns of it. */
+  static RedisConnectionStateListener onReconnect(final Runnable reconcile) {
+    return new RedisConnectionStateListener() {
+      @Override
+      public void onRedisConnected(final RedisChannelHandler<?, ?> connection, final SocketAddress address) {
+        reconcile.run();
+      }
+    };
   }
 
   private CompletableFuture<NativePermissionSnapshot> readSnapshot(final UUID subject) {
@@ -330,9 +431,13 @@ final class NativePermissionService implements AutoCloseable {
         if (fetched == null) {
           return null;
         }
-        // The revision guard keeps a concurrent load that already holds a newer row.
-        return snapshots.compute(subject, (key, previous) ->
-            previous == null || fetched.revision >= previous.revision ? fetched : previous);
+        return snapshots.compute(subject, (key, previous) -> {
+          if (!tracked.contains(key)) {
+            return previous;
+          }
+          // The revision guard keeps a concurrent load that already holds a newer row.
+          return previous == null || fetched.revision >= previous.revision ? fetched : previous;
+        });
       } catch (SQLException | RuntimeException error) {
         LOGGER.warn("Native BTC permissions snapshot load failed for subject {}; will retry asynchronously.", subject, error);
         lastFailureReason = describeFailure(error);
@@ -411,7 +516,8 @@ final class NativePermissionService implements AutoCloseable {
     return group != null && group.isDefault;
   }
 
-  private void handleInvalidation(final String payload) {
+  /** Entry point of every bus message; package-private so tests feed it real payloads. */
+  void handleInvalidation(final String payload) {
     try {
       if (payload == null || payload.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 8 * 1024) {
         return;
@@ -428,21 +534,42 @@ final class NativePermissionService implements AutoCloseable {
         snapshots.computeIfPresent(invalidation.subject, (key, existing) ->
             invalidation.revision > existing.revision ? null : existing);
       } else {
-        final String group = invalidation.group.toLowerCase();
-        // L'éviction n'a lieu que si le catalogue a réellement été rafraîchi : évincer les snapshots
-        // après un rafraîchissement échoué les ferait recharger contre le catalogue périmé.
-        refreshGroupCatalog().thenAccept(refreshed -> {
-          if (refreshed) {
-            // A group that just became the base grade is in no cached snapshot yet, yet applies to all.
-            final boolean becameDefault = isDefaultGroup(groupCatalog.get(group));
-            snapshots.entrySet().removeIf(entry ->
-                becameDefault || NativePermissionEvaluator.usesGroup(entry.getValue(), group));
-          }
-        });
+        requestGroupRefresh(invalidation.group.toLowerCase());
       }
     } catch (RuntimeException error) {
       LOGGER.warn("Invalid native BTC permissions Redis payload ignored.", error);
     }
+  }
+
+  /**
+   * Queues {@code group} for the next catalog read. The first request of a burst schedules that read
+   * {@link #GROUP_REFRESH_WINDOW} later; the others only join it, so a burst costs one read.
+   */
+  private void requestGroupRefresh(final String group) {
+    pendingGroups.add(group);
+    if (groupRefreshScheduled.compareAndSet(false, true)) {
+      groupRefreshDelay.execute(this::refreshQueuedGroups);
+    }
+  }
+
+  private void refreshQueuedGroups() {
+    // Reopen the window before draining: a request landing meanwhile schedules the next read.
+    groupRefreshScheduled.set(false);
+    final Set<String> groups = new HashSet<>();
+    for (final String group : pendingGroups) {
+      if (pendingGroups.remove(group)) {
+        groups.add(group);
+      }
+    }
+    // L'éviction n'a lieu que si le catalogue a réellement été rafraîchi : évincer les snapshots
+    // après un rafraîchissement échoué les ferait recharger contre le catalogue périmé.
+    if (groups.isEmpty() || closed.get() || !refreshCatalogBlocking()) {
+      return;
+    }
+    // A group that just became the base grade is in no cached snapshot yet, yet applies to all.
+    final boolean becameDefault = groups.stream().anyMatch(group -> isDefaultGroup(groupCatalog.get(group)));
+    snapshots.entrySet().removeIf(entry -> becameDefault
+        || groups.stream().anyMatch(group -> NativePermissionEvaluator.usesGroup(entry.getValue(), group)));
   }
 
   @Override
