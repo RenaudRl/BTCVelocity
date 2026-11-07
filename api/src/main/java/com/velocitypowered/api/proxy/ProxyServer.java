@@ -275,9 +275,10 @@ public interface ProxyServer extends Audience {
    * Registers a hook that is called for every new client channel, to add Netty handlers to its
    * pipeline. See {@link ClientChannelHook} for when and how it is called.
    *
-   * @param plugin the instance of the plugin that owns the hook, named when it fails
+   * @param plugin the plugin that owns the hook, named when it fails: its instance or its
+   *     {@link com.velocitypowered.api.plugin.PluginContainer}
    * @param hook the hook; registering the same instance twice calls it twice
-   * @throws IllegalArgumentException if {@code plugin} is not the instance of a loaded plugin
+   * @throws IllegalArgumentException if {@code plugin} is not a loaded plugin
    */
   void addClientChannelHook(Object plugin, ClientChannelHook hook);
 
@@ -286,9 +287,10 @@ public interface ProxyServer extends Audience {
    * is not registered. Channels already passed to the hook keep what it installed, and a channel
    * being set up on another event loop may still call it once.
    *
-   * @param plugin the instance of the plugin that registered the hook
+   * @param plugin the plugin that registered the hook: its instance or its
+   *     {@link com.velocitypowered.api.plugin.PluginContainer}
    * @param hook the hook to remove
-   * @throws IllegalArgumentException if {@code plugin} is not the instance of a loaded plugin
+   * @throws IllegalArgumentException if {@code plugin} is not a loaded plugin
    */
   void removeClientChannelHook(Object plugin, ClientChannelHook hook);
 

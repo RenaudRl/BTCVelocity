@@ -35,14 +35,16 @@ import org.apache.logging.log4j.Logger;
 /**
  * The {@link ClientChannelHook}s plugins registered, run for each new client channel.
  *
- * <p>A hook that throws is logged and skipped, and the handlers it added are removed: a plugin
- * must not be able to refuse a connection, stop the hooks after it, or leave half a setup behind.
+ * <p>A hook that throws is logged and skipped, and the handlers it added under a new name are
+ * removed: a plugin must not be able to refuse a connection, stop the hooks after it, or leave
+ * half a setup behind. Only a {@link VirtualMachineError} is rethrown.
  */
 public final class ClientChannelHooks {
 
   /**
    * A hook only adds handlers, which takes microseconds: above this it is doing I/O or waiting on a
-   * lock on the event loop (AD-092). The first call of a hook may include its class loading.
+   * lock on the event loop (AD-092). The first call of each registered hook is not measured: it
+   * includes the class loading.
    */
   static final long SLOW_HOOK_NANOS = TimeUnit.MILLISECONDS.toNanos(10);
 
@@ -86,16 +88,22 @@ public final class ClientChannelHooks {
     final ChannelPipeline pipeline = channel.pipeline();
     for (final Registration registration : this.hooks) {
       final List<String> before = pipeline.names();
+      final boolean firstCall = registration.markCalled();
       final long start = System.nanoTime();
       try {
         registration.hook.initChannel(channel);
-      } catch (final Exception | LinkageError e) {
-        // a plugin built for another API (NoSuchMethodError) must not close the channel either
+      } catch (final VirtualMachineError e) {
+        throw e; // out of memory, stack overflow: the JVM is in no state to go on
+      } catch (final Throwable e) {
+        // a plugin built for another API (NoSuchMethodError) or a failed assert must not close
+        // the channel either
         removeAddedHandlers(pipeline, before);
         registration.failed(channel, e);
         continue;
       }
-      registration.checkDuration(System.nanoTime() - start);
+      if (!firstCall) {
+        registration.checkDuration(System.nanoTime() - start);
+      }
     }
   }
 
@@ -116,6 +124,7 @@ public final class ClientChannelHooks {
 
     private final String owner;
     private final ClientChannelHook hook;
+    private final AtomicBoolean calledOnce = new AtomicBoolean();
     private final AtomicBoolean failedOnce = new AtomicBoolean();
     private final LogThrottle failures = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
     private final LogThrottle slowCalls = new LogThrottle(LogThrottle.DEFAULT_INTERVAL);
@@ -123,6 +132,11 @@ public final class ClientChannelHooks {
     private Registration(final String owner, final ClientChannelHook hook) {
       this.owner = owner;
       this.hook = hook;
+    }
+
+    // true only for the first call of this registration: its time includes the class loading
+    private boolean markCalled() {
+      return !this.calledOnce.getAndSet(true);
     }
 
     // the stack once per hook, then a counted line per interval: a broken hook fails on every join

@@ -44,12 +44,16 @@ import io.netty.channel.Channel;
  *   connections the proxy opens to backend servers.</li>
  * </ul>
  *
- * <p><b>Order and failures.</b> Hooks run in the order they were registered. A hook that throws an
- * {@link Exception} or a {@link LinkageError} is logged and skipped, and the handlers it added
- * before failing are removed: the other hooks and the connection go on. Any other {@link Error}
- * (out of memory, stack overflow) is not caught: Netty closes that connection. A hook that was
- * just removed may still be called once, by a channel that was being set up on another event loop.
- * A hook must not block nor do I/O, as it runs on the event loop: the proxy warns when one is slow.
+ * <p><b>Order and failures.</b> Hooks run in the order they were registered. A hook that throws
+ * anything but a {@link VirtualMachineError} (an {@link Exception}, a {@link LinkageError}, an
+ * {@link AssertionError}...) is logged and skipped, and the handlers it added under a new name
+ * before failing are removed: the other hooks and the connection go on. A handler that the hook
+ * removed or replaced (same name as an existing one) is not restored. A
+ * {@link VirtualMachineError} (out of memory, stack overflow) is not caught: Netty closes that
+ * connection. A hook that was just removed may still be called once, by a channel that was being
+ * set up on another event loop. A hook must not block nor do I/O, as it runs on the event loop: the
+ * proxy warns when one is slow (the first call of each registered hook, which loads its classes,
+ * is not measured).
  */
 @FunctionalInterface
 public interface ClientChannelHook {
@@ -80,7 +84,8 @@ public interface ClientChannelHook {
    * Called for a new client channel.
    *
    * @param channel the channel, with the proxy's pipeline already built
-   * @throws Exception if the hook cannot do its work; the proxy logs it and keeps the connection
+   * @throws Exception if the hook cannot do its work; the proxy logs it, removes the handlers the
+   *     hook added under a new name, and keeps the connection
    */
   void initChannel(Channel channel) throws Exception;
 }

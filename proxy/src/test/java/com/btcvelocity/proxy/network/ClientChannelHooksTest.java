@@ -19,6 +19,7 @@ package com.btcvelocity.proxy.network;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.btcvelocity.api.connection.ClientChannelHook;
@@ -136,17 +137,63 @@ class ClientChannelHooksTest {
   }
 
   @Test
+  void anAssertionErrorIsolatesTheHookLikeAnyOtherFailure() {
+    final List<String> calls = new ArrayList<>();
+    final EmbeddedChannel channel = new EmbeddedChannel();
+    final List<LogEvent> events = withWarnings(captured -> {
+      final ClientChannelHooks hooks = new ClientChannelHooks();
+      hooks.add(OWNER, seen -> {
+        seen.pipeline().addLast("half", new ChannelInboundHandlerAdapter());
+        throw new AssertionError("plugin assert");
+      });
+      hooks.add(OWNER, seen -> calls.add("after"));
+      hooks.run(channel);
+    });
+
+    assertEquals(List.of("after"), calls);
+    assertTrue(channel.isOpen(), "an AssertionError must not close the connection");
+    assertNull(channel.pipeline().get("half"));
+    assertEquals(1, events.size());
+    assertEquals(AssertionError.class, events.get(0).getThrown().getClass());
+  }
+
+  @Test
+  void aVirtualMachineErrorIsNotSwallowed() {
+    final ClientChannelHooks hooks = new ClientChannelHooks();
+    hooks.add(OWNER, seen -> {
+      throw new OutOfMemoryError("test");
+    });
+
+    assertThrows(OutOfMemoryError.class, () -> hooks.run(new EmbeddedChannel()));
+  }
+
+  @Test
   void aSlowHookIsReported() {
     final List<LogEvent> events = withWarnings(captured -> {
       final ClientChannelHooks hooks = new ClientChannelHooks();
       hooks.add(OWNER, seen -> Thread.sleep(TimeUnit.NANOSECONDS.toMillis(
           ClientChannelHooks.SLOW_HOOK_NANOS) + 5));
+      hooks.run(new EmbeddedChannel()); // first call: class loading, not measured
       hooks.run(new EmbeddedChannel());
       hooks.run(new EmbeddedChannel());
     });
 
     assertEquals(1, events.size(), "a slow hook is reported once per interval");
     assertTrue(events.get(0).getMessage().getFormattedMessage().contains("must not block"));
+  }
+
+  @Test
+  void theFirstCallOfEachHookIsNotMeasured() {
+    final List<LogEvent> events = withWarnings(captured -> {
+      final ClientChannelHooks hooks = new ClientChannelHooks();
+      final ClientChannelHook slow = seen -> Thread.sleep(TimeUnit.NANOSECONDS.toMillis(
+          ClientChannelHooks.SLOW_HOOK_NANOS) + 5);
+      hooks.add(OWNER, slow);
+      hooks.add("otherplugin", slow);
+      hooks.run(new EmbeddedChannel());
+    });
+
+    assertTrue(events.isEmpty(), "the first call of each registered hook loads its classes");
   }
 
   /**
