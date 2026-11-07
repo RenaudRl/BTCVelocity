@@ -49,8 +49,9 @@ class ConnectionAdmissionPacketLimitTest {
     final ConnectionAdmission admission = new ConnectionAdmission(
         HandshakeHosts.of(HandshakeHosts.Mode.OFF, List.of(), List.of()), stats);
 
-    admission.recordPacketLimit(client("203.0.113.9"), "Steve");
-    admission.recordPacketLimit(client("203.0.113.9"), null);
+    // another range than the log test: async log events of this test may reach its appender late
+    admission.recordPacketLimit(client("198.51.100.9"), "Steve");
+    admission.recordPacketLimit(client("198.51.100.9"), null);
 
     assertEquals(2, stats.count(AdmissionStats.Result.PACKET_LIMIT));
     assertEquals(0, stats.count(AdmissionStats.Result.RATE_LIMITED));
@@ -63,7 +64,9 @@ class ConnectionAdmissionPacketLimitTest {
         Property.EMPTY_ARRAY) {
       @Override
       public void append(final LogEvent event) {
-        events.add(event.toImmutable());
+        if (event.getMessage().getFormattedMessage().contains("203.0.113.0/24")) {
+          events.add(event.toImmutable());
+        }
       }
     };
     appender.start();
