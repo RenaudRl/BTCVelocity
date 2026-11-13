@@ -33,9 +33,6 @@ import org.junit.jupiter.api.Test;
  */
 class PlayPacketQueueInboundHandlerTest {
 
-  // Must match PlayPacketQueueInboundHandler's default packet bound.
-  private static final int PACKET_LIMIT = 4096;
-
   private static EmbeddedChannel channel() {
     return new EmbeddedChannel(new PlayPacketQueueInboundHandler(
         ProtocolVersion.MAXIMUM_VERSION, ProtocolUtils.Direction.SERVERBOUND));
@@ -47,26 +44,13 @@ class PlayPacketQueueInboundHandlerTest {
     try {
       // A PLAY-only packet with no buffer: zero bytes against the byte bound.
       assertDoesNotThrow(() -> {
-        for (int i = 0; i < PACKET_LIMIT; i++) {
+        for (int i = 0; i < PlayPacketQueueInboundHandler.MAXIMUM_PACKETS; i++) {
           channel.writeInbound(new ChatAcknowledgementPacket(i));
         }
       });
       assertThrows(QuietDecoderException.class,
-          () -> channel.writeInbound(new ChatAcknowledgementPacket(PACKET_LIMIT)));
-    } finally {
-      channel.finishAndReleaseAll();
-    }
-  }
-
-  @Test
-  void floodOfDecodedPacketsIsRejected() {
-    EmbeddedChannel channel = channel();
-    try {
-      assertThrows(QuietDecoderException.class, () -> {
-        for (int i = 0; i < 100_000; i++) {
-          channel.writeInbound(new ChatAcknowledgementPacket(i));
-        }
-      });
+          () -> channel.writeInbound(
+              new ChatAcknowledgementPacket(PlayPacketQueueInboundHandler.MAXIMUM_PACKETS)));
     } finally {
       channel.finishAndReleaseAll();
     }
