@@ -32,9 +32,20 @@ public interface BanLookup {
    * One account's network ban in force.
    *
    * @param id the id of one of its bans in force
-   * @param createdAt when the latest of them was pronounced
+   * @param earliest when the oldest of them was pronounced: an account first seen after it is new
+   * @param latest when the latest of them was pronounced: the strong window runs from it
    */
-  record ActiveBan(long id, Instant createdAt) {
+  record ActiveBan(long id, Instant earliest, Instant latest) {
+
+    /**
+     * A single ban in force.
+     *
+     * @param id its id
+     * @param createdAt when it was pronounced
+     */
+    public ActiveBan(final long id, final Instant createdAt) {
+      this(id, createdAt, createdAt);
+    }
   }
 
   /**

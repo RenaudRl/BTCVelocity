@@ -72,17 +72,18 @@ class LinkStorageSqlTest {
 
   @Test
   void aBanInForceIsANetworkBanOfThisNetworkNeitherRevokedNorExpired() throws SQLException {
+    final Instant first = NOW.minusSeconds(86_400);
     final Instant pronounced = NOW.minusSeconds(3600);
-    final FakeJdbc db = new FakeJdbc()
-        .answer(new Object[] {BANNED.toString(), 42L, pronounced.toEpochMilli()});
+    final FakeJdbc db = new FakeJdbc().answer(
+        new Object[] {BANNED.toString(), 42L, first.toEpochMilli(), pronounced.toEpochMilli()});
 
     final Map<UUID, BanLookup.ActiveBan> bans =
         new JdbcBanLookup(db.dataSource(), "btc_", "borntocraft")
             .activeNetworkBans(Set.of(BANNED), NOW);
 
-    assertEquals(Map.of(BANNED, new BanLookup.ActiveBan(42L, pronounced)), bans);
+    assertEquals(Map.of(BANNED, new BanLookup.ActiveBan(42L, first, pronounced)), bans);
     final FakeJdbc.Call call = db.calls.getFirst();
-    for (String predicate : List.of("MAX(created_at)", "FROM btc_sanctions",
+    for (String predicate : List.of("MIN(created_at), MAX(created_at)", "FROM btc_sanctions",
         "player_uuid = ANY (?)", "type = 'BAN'",
         "scope = 'NETWORK'", "network_id = ?", "revoked_at IS NULL",
         "(expires_at IS NULL OR expires_at > ?)")) {

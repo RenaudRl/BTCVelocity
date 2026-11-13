@@ -35,7 +35,7 @@ import javax.sql.DataSource;
  * <p>A ban in force is the predicate of Sentinel's own {@code SanctionService}: {@code type} is
  * {@code BAN}, {@code scope} is {@code NETWORK}, {@code network_id} is this network,
  * {@code revoked_at} is null and {@code expires_at} (epoch millis) is null or later than now.
- * {@code created_at} (epoch millis) dates the latest of them.
+ * {@code created_at} (epoch millis) dates the oldest and the latest of them.
  */
 public final class JdbcBanLookup implements BanLookup {
 
@@ -56,7 +56,8 @@ public final class JdbcBanLookup implements BanLookup {
     }
     this.database = database;
     this.networkId = networkId;
-    this.sql = "SELECT player_uuid, MAX(id), MAX(created_at) FROM " + prefix + "sanctions"
+    this.sql = "SELECT player_uuid, MAX(id), MIN(created_at), MAX(created_at) FROM " + prefix
+        + "sanctions"
         + " WHERE player_uuid = ANY (?) AND type = 'BAN' AND scope = 'NETWORK'"
         + " AND network_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)"
         + " GROUP BY player_uuid";
@@ -79,7 +80,8 @@ public final class JdbcBanLookup implements BanLookup {
       try (ResultSet rows = query.executeQuery()) {
         while (rows.next()) {
           banned.put(UUID.fromString(rows.getString(1)),
-              new ActiveBan(rows.getLong(2), Instant.ofEpochMilli(rows.getLong(3))));
+              new ActiveBan(rows.getLong(2), Instant.ofEpochMilli(rows.getLong(3)),
+                  Instant.ofEpochMilli(rows.getLong(4))));
         }
       } finally {
         uuids.free();

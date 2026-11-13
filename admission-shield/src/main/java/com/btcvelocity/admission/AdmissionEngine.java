@@ -504,7 +504,7 @@ public final class AdmissionEngine {
    * on ITS address or ITS network are linked: there is no transitivity.
    *
    * <p>A banned account stops being seen the day it is banned, so its strong window runs from the
-   * later of its last sighting and its ban. An address of a refused or signalled class, or whose
+   * later of its last sighting and its latest ban in force. An address of a refused or signalled class, or whose
    * autonomous system names a hosting keyword, is shared by strangers: it links WEAKLY at most.
    *
    * @param self the entering account
@@ -528,7 +528,7 @@ public final class AdmissionEngine {
       if (!account.equals(self) && !seen.isBefore(addressSince)) {
         final BanLookup.ActiveBan ban = bans.get(account);
         final Instant anchor =
-            ban != null && ban.createdAt().isAfter(seen) ? ban.createdAt() : seen;
+            ban != null && ban.latest().isAfter(seen) ? ban.latest() : seen;
         links.put(account, facts.household().contains(account) ? Link.Strength.HOUSEHOLD
             : !shared && !anchor.isBefore(strongSince) ? Link.Strength.STRONG
                 : Link.Strength.WEAK);
@@ -582,8 +582,9 @@ public final class AdmissionEngine {
       }
       final LinkEvidence evidence =
           new LinkEvidence(link.strength(), link.account(), ban.id(), accounts);
-      // Only an account born after the ban can be its way back in; one known before is told only.
-      final boolean newcomer = firstSeen == null || !firstSeen.isBefore(ban.createdAt());
+      // Only an account born after the first ban can be its way back in; one known before is told
+      // only. Not the latest ban: a second one must not turn an alt made in between into a sister.
+      final boolean newcomer = firstSeen == null || !firstSeen.isBefore(ban.earliest());
       if (link.strength() == Link.Strength.STRONG && newcomer) {
         final Action action = this.config.linksMode() == AdmissionConfig.Mode.ENFORCE
             ? Action.REFUSE : Action.OBSERVE;

@@ -204,6 +204,22 @@ class AccountLinkRuleTest {
   }
 
   @Test
+  void anAccountMadeBetweenTwoBansIsNewToTheFirstOne() {
+    // Banned 20 days ago and again yesterday, last seen 25 days ago; the entrant appeared 10 days
+    // ago: after the first ban, so it is not a sibling who played before it.
+    final LinkFacts betweenTheBans = new LinkFacts(Map.of(BANNED, daysAgo(25)),
+        Map.of(BANNED, daysAgo(25)), Set.of(), daysAgo(10));
+    final Map<UUID, BanLookup.ActiveBan> twoBans =
+        Map.of(BANNED, new BanLookup.ActiveBan(43L, daysAgo(20), daysAgo(1)));
+
+    final Verdict verdict = engine("enforce").decideLinks(login(NEWCOMER), HOME, betweenTheBans,
+        twoBans, NOW);
+
+    assertEquals(Action.REFUSE, verdict.action(), "first seen between the two bans");
+    assertEquals(Link.Strength.STRONG, verdict.links().strength(), "window from the latest ban");
+  }
+
+  @Test
   void aVpnOrHostingAddressNeverLinksStrongly() {
     final IpClassifier vpnList =
         address -> Optional.of(new IpClassifier.Match(IpClass.VPN, "test:vpn"));

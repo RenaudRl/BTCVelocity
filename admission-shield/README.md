@@ -36,7 +36,8 @@ joueur comptent, jamais ceux qu'ils ont croisés ailleurs) :
   signalé pour un membre banni.
 
 **Seul refus** : un lien FORT avec un compte sous **ban réseau actif** de Sentinel, depuis un compte
-**vu pour la première fois après ce ban**, en `enforce`, code **`ADM-ALT-BAN`** (texte
+**vu pour la première fois après ce ban** (le plus ancien de ses bans actifs ; la fenêtre FORTE part
+du plus récent), en `enforce`, code **`ADM-ALT-BAN`** (texte
 `messages.linked-ban`, bilingue). Un compte déjà connu avant le ban (la sœur qui jouait déjà) est
 seulement signalé, même sans foyer déclaré. En `observe` (le mode à l'allumage, et toujours si le
 module entier est en `observe`) la même situation est journalisée `decision=observed`. Un lien
