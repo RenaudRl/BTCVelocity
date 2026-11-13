@@ -68,8 +68,10 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
   `ip_digest`, `net_digest`, `first_seen`, `last_seen`) et `<prefix>admission_households`. Les
   adresses n'y sont **jamais en clair** : HMAC-SHA256 avec la clé de `BTC_ADMISSION_LINK_KEY`
   (base64, 32 octets au moins ; absente ou courte : fonction coupée avec une erreur, le proxy
-  démarre ; une clé triviale, tous octets identiques, est refusée). Changer la clé efface de fait
-  l'historique. **La clé et la table ensemble rendent toutes les IPv4 en quelques minutes** (2^32
+  démarre ; une clé de moins de 16 valeurs d'octet distinctes est refusée). La générer par un
+  générateur aléatoire (32 octets en base64, par exemple `openssl rand -base64 32`), jamais une
+  phrase. Changer la clé efface de fait l'historique : une rotation impose de **vider la table des
+  passages** (`<prefix>admission_sightings`), dont les empreintes ne correspondent plus. **La clé et la table ensemble rendent toutes les IPv4 en quelques minutes** (2^32
   essais) : ne jamais sauvegarder la clé avec la base ni dans ses sauvegardes. Une session n'est
   enregistrée qu'une fois acceptée par un serveur (`ServerPostConnectEvent`), purgée 180 jours
   (`retention-days`) après son dernier passage ; un foyer déclaré avant ce délai et dont aucun

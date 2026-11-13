@@ -44,6 +44,12 @@ public final class LinkKey {
   /** The shortest key accepted, in bytes. */
   public static final int MIN_BYTES = 32;
 
+  /**
+   * The fewest distinct byte values a key must hold: 32 random bytes hold about 30, a typed
+   * phrase or a repeated pattern holds far fewer.
+   */
+  public static final int MIN_DISTINCT_VALUES = 16;
+
   private static final String ALGORITHM = "HmacSHA256";
   private static final int ADDRESS_V4 = 32;
   // An IPv6 subscriber holds a whole /64 and picks a new address in it at will.
@@ -65,7 +71,8 @@ public final class LinkKey {
    * @param variable the name of the variable, for the messages
    * @param value its value (base64), or {@code null} when it is not set
    * @param errors receives one sentence when the key is unusable; it never contains the value
-   * @return the key, or empty when it is absent, not base64 or shorter than {@link #MIN_BYTES}
+   * @return the key, or empty when it is absent, not base64, shorter than {@link #MIN_BYTES} or
+   *     of fewer than {@link #MIN_DISTINCT_VALUES} distinct byte values
    */
   public static Optional<LinkKey> fromEnvironment(final String variable,
       final @Nullable String value, final Consumer<String> errors) {
@@ -86,21 +93,25 @@ public final class LinkKey {
           + MIN_BYTES + "; account links are DISABLED");
       return Optional.empty();
     }
-    if (trivial(secret)) {
-      errors.accept("links: " + variable + " holds the same byte repeated; generate a random key."
+    if (distinctValues(secret) < MIN_DISTINCT_VALUES) {
+      errors.accept("links: " + variable + " holds fewer than " + MIN_DISTINCT_VALUES
+          + " distinct byte values, so it is not random; generate 32 random bytes (base64)."
           + " Account links are DISABLED");
       return Optional.empty();
     }
     return Optional.of(new LinkKey(secret));
   }
 
-  private static boolean trivial(final byte[] secret) {
+  private static int distinctValues(final byte[] secret) {
+    final boolean[] seen = new boolean[256];
+    int distinct = 0;
     for (byte each : secret) {
-      if (each != secret[0]) {
-        return false;
+      if (!seen[each & 0xFF]) {
+        seen[each & 0xFF] = true;
+        distinct++;
       }
     }
-    return true;
+    return distinct;
   }
 
   /**

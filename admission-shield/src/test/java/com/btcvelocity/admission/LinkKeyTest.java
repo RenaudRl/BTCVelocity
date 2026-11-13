@@ -35,8 +35,8 @@ import org.junit.jupiter.api.Test;
 class LinkKeyTest {
 
   /** An obvious test key, 32 bytes: never a real one. */
-  static final String TEST_KEY = base64("test-only-key-test-only-key-0001");
-  private static final String OTHER_TEST_KEY = base64("test-only-key-test-only-key-0002");
+  static final String TEST_KEY = base64("tk-0123456789abcdefghij-test-001");
+  private static final String OTHER_TEST_KEY = base64("tk-0123456789abcdefghij-test-002");
   private static final UUID ACCOUNT = UUID.fromString("33333333-3333-3333-3333-333333333333");
   private static final Instant NOW = Instant.parse("2026-11-13T12:00:00Z");
 
@@ -112,6 +112,27 @@ class LinkKeyTest {
     assertTrue(LinkKey.fromEnvironment("K", base64("0".repeat(LinkKey.MIN_BYTES)), errors::add)
         .isEmpty(), "32 times the same byte");
     assertTrue(errors.getFirst().contains("DISABLED"), errors.toString());
+  }
+
+  @Test
+  void aKeyOfTooFewDistinctBytesIsRefusedWithoutEchoingIt() {
+    final List<String> errors = new ArrayList<>();
+    final String weak = Base64.getEncoder().encodeToString(bytesOfVariety(15, 48));
+    final String enough = Base64.getEncoder().encodeToString(bytesOfVariety(16, 48));
+
+    assertTrue(LinkKey.fromEnvironment("K", weak, errors::add).isEmpty(), "15 distinct values");
+    assertTrue(LinkKey.fromEnvironment("K", enough, errors::add).isPresent(), "16 distinct values");
+    assertEquals(1, errors.size(), errors.toString());
+    assertTrue(errors.getFirst().contains("DISABLED"), errors.getFirst());
+    assertFalse(errors.getFirst().contains(weak), "the value is never echoed");
+  }
+
+  private static byte[] bytesOfVariety(final int distinct, final int length) {
+    final byte[] bytes = new byte[length];
+    for (int i = 0; i < length; i++) {
+      bytes[i] = (byte) (i % distinct);
+    }
+    return bytes;
   }
 
   @Test
