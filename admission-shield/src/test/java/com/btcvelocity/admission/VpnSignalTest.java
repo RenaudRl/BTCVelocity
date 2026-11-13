@@ -85,16 +85,67 @@ class VpnSignalTest {
 
     for (String yaml : new String[] {"", "mode: observe"}) {
       final AdmissionEngine engine = new AdmissionEngine(config(yaml), store);
-      for (Phase phase : Phase.values()) {
-        final Verdict verdict = engine.decide(Attempt.claimed("Steve", VPN_ONLY), phase);
+      final Verdict verdict = engine.decide(Attempt.claimed("Steve", VPN_ONLY)
+          .authenticated("Steve", UUID.randomUUID(), false, null), Phase.LOGIN);
 
-        assertEquals(Action.ADMIT, verdict.action(), yaml + " " + phase);
-        assertEquals(Basis.VPN_SIGNAL, verdict.basis());
-        assertEquals(IpClass.VPN, verdict.ipClass());
-        assertEquals("vpn", verdict.sourceId());
-        assertTrue(verdict.isJournaled(), "the signal is written down");
-      }
+      assertEquals(Action.ADMIT, verdict.action(), yaml);
+      assertEquals(Basis.VPN_SIGNAL, verdict.basis());
+      assertEquals(IpClass.VPN, verdict.ipClass());
+      assertEquals("vpn", verdict.sourceId());
+      assertTrue(verdict.isJournaled(), "the signal is written down");
     }
+  }
+
+  @Test
+  void theSignalWaitsForTheAuthenticatedNameNotTheTypedOne() throws IOException {
+    final AdmissionEngine engine =
+        new AdmissionEngine(config(""), store("192.0.2.0/24\n", null));
+
+    final Verdict preLogin = engine.decidePreLogin(Attempt.claimed("AnyNameABotTypes", VPN_ONLY));
+    final Optional<Verdict> login = engine.decideAtLogin(Attempt.claimed("Steve", VPN_ONLY)
+        .authenticated("Steve", UUID.randomUUID(), false, null));
+
+    assertEquals(Action.DEFER, preLogin.action());
+    assertFalse(preLogin.isJournaled(), "nothing is written under a typed name");
+    assertEquals(Basis.VPN_SIGNAL, login.orElseThrow().basis());
+  }
+
+  @Test
+  void anExemptedAddressFromTheGeyserListenerWithoutFloodgateStaysAnAnomaly() throws IOException {
+    final AdmissionEngine engine = new AdmissionEngine(config("""
+        exemptions:
+          networks:
+            - network: 192.0.2.0/24
+              expires: 2099-12-31
+        """), store("192.0.2.0/24\n", null));
+
+    final Verdict verdict = engine.decide(Attempt.claimed("Steve", VPN_ONLY, true)
+        .authenticated("Steve", UUID.randomUUID(), false, null), Phase.LOGIN);
+
+    assertEquals(Action.ADMIT, verdict.action());
+    assertEquals(Basis.GEYSER_ADDRESS_NOT_FLOODGATE, verdict.basis());
+    assertTrue(verdict.isJournaled());
+  }
+
+  @Test
+  void aSignalIsJournaledInObserveModeSinceItNeverRefuses() {
+    final AdmissionConfig enforce = config("");
+    final Verdict vpn = new Verdict(Action.ADMIT, Basis.VPN_SIGNAL, Verdict.Origin.DIRECT,
+        VPN_ONLY, IpClass.VPN, "vpn");
+    final Verdict keyword = new Verdict(Action.ADMIT, Basis.ASN_KEYWORD, Verdict.Origin.DIRECT,
+        VPN_ONLY, null, null);
+
+    assertEquals(AdmissionConfig.Mode.ENFORCE, enforce.mode());
+    assertEquals(AdmissionConfig.Mode.OBSERVE, enforce.modeFor(vpn));
+    assertEquals(AdmissionConfig.Mode.OBSERVE, enforce.modeFor(keyword));
+  }
+
+  @Test
+  void whyNamesTheSignalsAmongWhatIsRemembered() {
+    final List<String> lines = WhyReport.explain("Nobody", new AdmissionJournal(
+        new RecordingLogger().logger(), Clock.systemUTC()), address -> Optional.empty());
+
+    assertTrue(lines.get(0).contains("signaux"), lines.get(0));
   }
 
   @Test

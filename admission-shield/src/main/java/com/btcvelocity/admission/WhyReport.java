@@ -82,7 +82,8 @@ public final class WhyReport {
       lines.add(last.get().line());
     } else {
       lines.add("Aucune décision mémorisée pour " + query + ". Seuls les refus, les"
-          + " observations et les exemptions sont gardés ; un pseudo n'est retrouvable"
+          + " observations, les exemptions et les signaux (VPN connu, mot-clé ASN) sont gardés ;"
+          + " un pseudo n'est retrouvable"
           + " qu'une fois authentifié (au login) : un refus de pré-login se cherche par IP."
           + " La mémoire est bornée et vidée au redémarrage.");
     }

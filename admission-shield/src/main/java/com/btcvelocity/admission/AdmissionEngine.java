@@ -266,17 +266,10 @@ public final class AdmissionEngine {
       return signalOf(attempt, phase, judged, origin, ipClass, sourceId);
     }
 
-    if (this.config.exemptions().coversAddress(judged)) {
-      return new Verdict(Action.ADMIT, Basis.EXEMPT_NETWORK, origin, judged, ipClass, sourceId);
-    }
-    if (phase == Phase.PRE_LOGIN) {
-      if (this.config.exemptions().mayCoverLater(attempt.username())) {
-        return new Verdict(Action.DEFER, Basis.AWAITING_IDENTITY, origin, judged, ipClass,
-            sourceId);
-      }
-    } else if (attempt.uuid() != null
-        && this.config.exemptions().coversPlayer(attempt.username(), attempt.uuid())) {
-      return new Verdict(Action.ADMIT, Basis.EXEMPT_PLAYER, origin, judged, ipClass, sourceId);
+    final Exemption exemption = exemptionOf(attempt, phase, judged);
+    if (exemption != Exemption.NONE) {
+      final Action action = exemption == Exemption.AWAITING_IDENTITY ? Action.DEFER : Action.ADMIT;
+      return new Verdict(action, exemption.basis, origin, judged, ipClass, sourceId);
     }
 
     final AdmissionConfig.Mode mode =
@@ -285,25 +278,56 @@ public final class AdmissionEngine {
     return new Verdict(action, Basis.LISTED, origin, judged, ipClass, sourceId);
   }
 
+  /** What the exemptions say about a connection, in the order they are applied. */
+  private enum Exemption {
+    /** The judged address is in an exempted network. */
+    NETWORK(Basis.EXEMPT_NETWORK),
+    /** The authenticated player is exempted (login only). */
+    PLAYER(Basis.EXEMPT_PLAYER),
+    /** At the pre-login, a nominative exemption might cover the name once authenticated. */
+    AWAITING_IDENTITY(Basis.AWAITING_IDENTITY),
+    /** No exemption applies. */
+    NONE(Basis.CLEAN);
+
+    private final Basis basis;
+
+    Exemption(final Basis basis) {
+      this.basis = basis;
+    }
+  }
+
+  private Exemption exemptionOf(final Attempt attempt, final Phase phase,
+      final InetAddress judged) {
+    if (this.config.exemptions().coversAddress(judged)) {
+      return Exemption.NETWORK;
+    }
+    if (phase == Phase.PRE_LOGIN) {
+      return this.config.exemptions().mayCoverLater(attempt.username())
+          ? Exemption.AWAITING_IDENTITY : Exemption.NONE;
+    }
+    return attempt.uuid() != null
+        && this.config.exemptions().coversPlayer(attempt.username(), attempt.uuid())
+        ? Exemption.PLAYER : Exemption.NONE;
+  }
+
   /**
    * An address of a class that is only a signal ({@link IpClass#VPN}): admitted whatever the mode,
-   * journaled and told to the staff. An exempted network or player is not signalled; for a name an
-   * exemption might cover, the pre-login waits for the login like it does for a listed address.
+   * journaled and told to the staff, but only once the account is authenticated: at the pre-login
+   * the name is only typed, and a bot behind a VPN would otherwise write a journal line and a staff
+   * message under any name it likes. An exempted network or player is not signalled.
    */
   private Verdict signalOf(final Attempt attempt, final Phase phase, final InetAddress judged,
       final Origin origin, final IpClass ipClass, final String sourceId) {
-    final Verdict silent = new Verdict(Action.ADMIT, Basis.CLEAN, origin, judged, null, null);
-    if (this.config.exemptions().coversAddress(judged)) {
-      return silent;
+    final Exemption exemption = exemptionOf(attempt, phase, judged);
+    if (exemption == Exemption.NETWORK || exemption == Exemption.PLAYER) {
+      // An anomaly stays one: an exempted address reaching the Geyser listener unannounced.
+      final Basis basis = origin == Origin.GEYSER_ADDRESS_NOT_FLOODGATE
+          ? Basis.GEYSER_ADDRESS_NOT_FLOODGATE : Basis.CLEAN;
+      return new Verdict(Action.ADMIT, basis, origin, judged, null, null);
     }
     if (phase == Phase.PRE_LOGIN) {
-      if (this.config.exemptions().mayCoverLater(attempt.username())) {
-        return new Verdict(Action.DEFER, Basis.AWAITING_IDENTITY, origin, judged, ipClass,
-            sourceId);
-      }
-    } else if (attempt.uuid() != null
-        && this.config.exemptions().coversPlayer(attempt.username(), attempt.uuid())) {
-      return silent;
+      return new Verdict(Action.DEFER, Basis.AWAITING_IDENTITY, origin, judged, ipClass,
+          sourceId);
     }
     return new Verdict(Action.ADMIT, Basis.VPN_SIGNAL, origin, judged, ipClass, sourceId);
   }

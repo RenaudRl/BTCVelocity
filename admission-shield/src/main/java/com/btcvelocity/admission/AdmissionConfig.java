@@ -342,12 +342,18 @@ public record AdmissionConfig(
    * The mode in force for the rule behind a verdict, as the journal states it.
    *
    * @param verdict the verdict
-   * @return the network bound's mode for a rate verdict, the denied systems' mode for one of them,
-   *     the module's otherwise
+   * @return the network bound's mode for a rate verdict, {@code observe} for a signal (vpn list,
+   *     ASN keyword) since it never refuses, the denied systems' mode for one of them, the
+   *     module's otherwise
    */
   public Mode modeFor(final Verdict verdict) {
     if (verdict.basis() == Verdict.Basis.RATE_NETWORK) {
       return rateMode();
+    }
+    if (verdict.basis() == Verdict.Basis.VPN_SIGNAL
+        || verdict.basis() == Verdict.Basis.ASN_KEYWORD) {
+      // A signal never refuses, in any mode: "enforce" next to "admitted" would read as a lie.
+      return Mode.OBSERVE;
     }
     return verdict.ipClass() == IpClass.ASN ? asnMode() : this.mode;
   }
