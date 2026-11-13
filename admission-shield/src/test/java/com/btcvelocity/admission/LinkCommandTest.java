@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.velocitypowered.api.command.CommandSource;
 import java.lang.reflect.Proxy;
 import java.net.InetAddress;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -47,6 +48,7 @@ class LinkCommandTest {
   private final List<String> told = new ArrayList<>();
   private final List<String> staff = new ArrayList<>();
   private final Set<UUID> banned = new HashSet<>();
+  private boolean sanctionsDown;
   private final CommandSource console = source(true);
 
   private CommandSource source(final boolean permitted) {
@@ -70,6 +72,9 @@ class LinkCommandTest {
     final AccountLinks links = new AccountLinks(new AdmissionEngine(config,
         address -> Optional.empty()), config.links(), LinkKeyTest.key(LinkKeyTest.TEST_KEY),
         over, (accounts, now) -> {
+          if (this.sanctionsDown) {
+            throw new SQLException("sanctions unreachable");
+          }
           final Map<UUID, BanLookup.ActiveBan> found = new HashMap<>();
           accounts.stream().filter(this.banned::contains)
               .forEach(account -> found.put(account, new BanLookup.ActiveBan(7L, now)));
@@ -114,6 +119,49 @@ class LinkCommandTest {
     assertEquals(1, this.staff.size(), this.staff.toString());
     assertTrue(this.staff.getFirst().contains(BROTHER.toString()), this.staff.getFirst());
     assertTrue(this.logger.has("WARN", "under a network ban"), this.logger.lines().toString());
+  }
+
+  @Test
+  void aHouseholdWhoseBanCheckFailedSaysSoInsteadOfBlamingTheDatabase() {
+    final LinkCommand command = command();
+    this.sanctionsDown = true;
+
+    command.execute(this.console, new String[] {"household", "add", SISTER.toString(),
+        BROTHER.toString()}).join();
+
+    assertEquals(this.store.households.get(SISTER), this.store.households.get(BROTHER));
+    assertTrue(this.logger.has("INFO", "console declared one household, ban check failed"),
+        this.logger.lines().toString());
+    assertTrue(this.told.getFirst().contains("vérification des bans réseau a échoué"),
+        this.told.toString());
+    assertTrue(this.told.stream().noneMatch(text -> text.contains("ne répond pas")),
+        this.told.toString());
+    assertTrue(this.staff.isEmpty(), "nothing is known to tell");
+  }
+
+  @Test
+  void forgetOnAnAccountUnderABanIsToldToTheStaffAndStillErases() {
+    final LinkCommand command = command();
+    this.banned.add(SISTER);
+
+    command.execute(this.console, new String[] {"forget", SISTER.toString()}).join();
+
+    assertTrue(this.store.rows.isEmpty(), "the erasure is not refused");
+    assertEquals(1, this.staff.size(), this.staff.toString());
+    assertTrue(this.staff.getFirst().contains(SISTER.toString()), this.staff.getFirst());
+    assertTrue(this.logger.has("WARN", "under a network ban"), this.logger.lines().toString());
+  }
+
+  @Test
+  void forgetErasesEvenWhenTheBanCheckFails() {
+    final LinkCommand command = command();
+    this.sanctionsDown = true;
+
+    command.execute(this.console, new String[] {"forget", SISTER.toString()}).join();
+
+    assertTrue(this.store.rows.isEmpty());
+    assertTrue(this.told.getFirst().startsWith("1 ligne(s) effacée(s)"), this.told.toString());
+    assertTrue(this.staff.isEmpty());
   }
 
   @Test

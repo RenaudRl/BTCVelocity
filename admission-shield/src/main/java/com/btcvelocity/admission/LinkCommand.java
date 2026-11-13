@@ -19,6 +19,7 @@ package com.btcvelocity.admission;
 
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.proxy.Player;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.util.Arrays;
 import java.util.List;
@@ -98,11 +99,20 @@ final class LinkCommand {
     if (subcommand.equals("forget") && arguments.length == 2) {
       return withAccount(source, arguments[1], account -> {
         audit(source, "asks to erase what is kept about", account);
-        return current.run(store -> store.forget(account)).thenAccept(removed -> {
-          audit(source, "erased " + removed + " row(s) about", account);
-          tell(source, removed + " ligne(s) effacée(s) pour " + account + ".",
-              NamedTextColor.GRAY);
-        });
+        // The erasure is never refused for a ban, nor held up by a sanctions base that fails.
+        return current.run(store -> new Erased(store.forget(account), bannedAmong(current,
+            Set.of(account)))).thenAccept(erased -> {
+              audit(source, "erased " + erased.removed() + " row(s) about", account);
+              if (!erased.banned().isEmpty()) {
+                // Erasing the links of a banned account leaves no trace of its alts: the staff must know.
+                this.logger.warn("links: {} erased the links of {} under a network ban.",
+                    who(source), erased.banned());
+                this.staff.accept("[Admission] Liens effacés par " + who(source)
+                    + " pour un compte sous ban réseau actif : " + erased.banned() + ".");
+              }
+              tell(source, erased.removed() + " ligne(s) effacée(s) pour " + account + ".",
+                  NamedTextColor.GRAY);
+            });
       });
     }
     if (subcommand.equals("household") && action.equals("remove") && arguments.length == 3) {
@@ -147,26 +157,62 @@ final class LinkCommand {
       return CompletableFuture.completedFuture(null);
     }
     audit(source, "asks to declare one household: " + second + " and", first);
-    // Empty when not declared; otherwise the members under a network ban in force.
-    return current.run(store -> store.declareHousehold(first, second, who(source), reason,
-        this.clock.instant()) ? Optional.of(current.bannedAmong(Set.of(first, second)))
-            : Optional.<Set<UUID>>empty()).thenAccept(declared -> {
-              audit(source, declared.isPresent() ? "declared one household: " + second + " and"
-                  : "was refused one household (two households already): " + second + " and",
-                  first);
-              declared.filter(banned -> !banned.isEmpty()).ifPresent(banned -> {
-                // A household is never refused for its banned member: the staff must know.
-                final String alert = "[Admission] Foyer déclaré par " + who(source)
-                    + " avec un compte sous ban réseau actif : " + banned + ".";
-                this.logger.warn("links: {} declared a household with {} under a network ban.",
-                    who(source), banned);
-                this.staff.accept(alert);
-              });
-              tell(source, declared.isPresent() ? first + " et " + second + " forment un foyer :"
-                  + " jamais refusés l'un pour l'autre." : "Ces deux comptes sont déjà dans deux"
-                  + " foyers différents : retirez d'abord l'un des deux (household remove).",
-                  NamedTextColor.GRAY);
-            });
+    return current.run(store -> {
+      if (!store.declareHousehold(first, second, who(source), reason, this.clock.instant())) {
+        return new Declaration(false, null);
+      }
+      // Once the household exists, a failing ban check must not read as a failed declaration.
+      return new Declaration(true, bannedAmongOrNull(current, Set.of(first, second)));
+    }).thenAccept(declaration -> {
+      final Set<UUID> banned = declaration.banned();
+      audit(source, !declaration.declared()
+          ? "was refused one household (two households already): " + second + " and"
+          : banned == null ? "declared one household, ban check failed: " + second + " and"
+              : "declared one household: " + second + " and", first);
+      if (declaration.declared() && banned == null) {
+        tell(source, first + " et " + second + " forment un foyer, mais la vérification des bans"
+            + " réseau a échoué : vérifiez à la main qu'aucun des deux n'est sous ban réseau actif.",
+            NamedTextColor.YELLOW);
+        return;
+      }
+      if (banned != null && !banned.isEmpty()) {
+        // A household is never refused for its banned member: the staff must know.
+        this.logger.warn("links: {} declared a household with {} under a network ban.",
+            who(source), banned);
+        this.staff.accept("[Admission] Foyer déclaré par " + who(source)
+            + " avec un compte sous ban réseau actif : " + banned + ".");
+      }
+      tell(source, declaration.declared() ? first + " et " + second + " forment un foyer :"
+          + " jamais refusés l'un pour l'autre." : "Ces deux comptes sont déjà dans deux"
+          + " foyers différents : retirez d'abord l'un des deux (household remove).",
+          NamedTextColor.GRAY);
+    });
+  }
+
+  /** What a household declaration did; {@code banned} is null when the ban check failed. */
+  private record Declaration(boolean declared, @Nullable Set<UUID> banned) {
+  }
+
+  /** What an erasure did, and which of its accounts are under a network ban in force. */
+  private record Erased(int removed, Set<UUID> banned) {
+  }
+
+  /** The accounts under a network ban in force, or {@code null} when the sanctions cannot be read. */
+  private @Nullable Set<UUID> bannedAmongOrNull(final AccountLinks current,
+      final Set<UUID> accounts) {
+    try {
+      return current.bannedAmong(accounts);
+    } catch (SQLException | RuntimeException failed) {
+      this.logger.warn("links: the ban check of a staff request failed ({}).",
+          failed.getClass().getSimpleName());
+      return null;
+    }
+  }
+
+  /** As {@link #bannedAmongOrNull}, an unreadable base counting as no ban to tell. */
+  private Set<UUID> bannedAmong(final AccountLinks current, final Set<UUID> accounts) {
+    final Set<UUID> banned = bannedAmongOrNull(current, accounts);
+    return banned == null ? Set.of() : banned;
   }
 
   private CompletableFuture<Void> withAccount(final CommandSource source, final String given,

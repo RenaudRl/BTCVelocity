@@ -36,7 +36,10 @@ joueur comptent, jamais ceux qu'ils ont croisés ailleurs) :
   /48 (IPv6) sous `weak-window-days` ;
 - **FOYER** : déclaré par le staff (`/admission household add <a> <b> [raison]`) ; jamais refusé ni
   signalé pour un membre banni ; le staff en ligne est alerté (et un WARN écrit) quand un foyer est
-  déclaré avec un compte sous ban réseau actif.
+  déclaré avec un compte sous ban réseau actif, ou quand `forget` en efface les liens (l'effacement
+  est exécuté quand même). Si la base des sanctions ne répond pas à cet instant, le foyer reste
+  créé et la commande le dit (« vérification des bans réseau a échoué »), l'audit portant
+  « ban check failed ».
 
 `alts`, `household` et `forget` demandent **`btc.admission.links`** en plus de
 `btc.admission.staff` ; chaque usage est journalisé avant l'appel à la base, puis son résultat.
