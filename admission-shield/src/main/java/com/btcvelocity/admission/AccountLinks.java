@@ -105,7 +105,8 @@ public final class AccountLinks {
       final Supplier<@Nullable AccountLinks> start, final Logger logger, final Runnable undo) {
     try {
       return start.get();
-    } catch (RuntimeException failed) {
+    } catch (RuntimeException | LinkageError failed) {
+      // LinkageError: a JDBC driver or pool class absent from the proxy's classpath.
       undo.run();
       logger.error("links: could not start ({}); account links are DISABLED, the rest of the"
           + " admission shield runs.", failed.getClass().getSimpleName());

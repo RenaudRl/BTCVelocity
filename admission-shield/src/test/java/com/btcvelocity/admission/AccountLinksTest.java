@@ -393,6 +393,20 @@ class AccountLinksTest {
     assertFalse(this.logger.lines().toString().contains("db.invalid"), "no URL in the log");
   }
 
+  @Test
+  void aMissingDriverLeavesOnlyTheLinksOff() {
+    final AtomicBoolean undone = new AtomicBoolean();
+
+    final AccountLinks none = AccountLinks.startOrDisable(() -> {
+      throw new NoClassDefFoundError("org/postgresql/Driver");
+    }, this.logger.logger(), () -> undone.set(true));
+
+    assertNull(none);
+    assertTrue(undone.get(), "what was opened is closed");
+    assertTrue(this.logger.has("ERROR", "NoClassDefFoundError"), this.logger.lines().toString());
+    assertTrue(this.logger.has("ERROR", "DISABLED"), this.logger.lines().toString());
+  }
+
   private static void await(final CountDownLatch latch) {
     try {
       latch.await(5, TimeUnit.SECONDS);
