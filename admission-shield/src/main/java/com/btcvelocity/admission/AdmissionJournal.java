@@ -324,8 +324,10 @@ public final class AdmissionJournal {
       return true;
     }
     final String network = Networks.of(judged, Networks.AGGREGATE_V4, Networks.AGGREGATE_V6);
+    // The linked account is part of the key: two banned accounts around one network stay apart.
+    final LinkEvidence evidence = entry.verdict().links();
     final String key = entry.decision() + '|' + basis.label() + '|' + entry.verdict().sourceId()
-        + '|' + network;
+        + '|' + network + '|' + (evidence == null ? "" : evidence.linked());
     String closed = null;
     boolean full = true;
     synchronized (this.burstLock) {

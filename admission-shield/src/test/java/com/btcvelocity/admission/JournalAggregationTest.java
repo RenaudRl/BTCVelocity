@@ -48,19 +48,30 @@ class JournalAggregationTest {
         Phase.PRE_LOGIN, AdmissionConfig.Mode.ENFORCE);
   }
 
-  @Test
-  void aWaveOfLinkSignalsFromOneNetworkIsOneLine() {
-    for (int host = 1; host <= 3; host++) {
+  private void linkSignals(final UUID linked, final int from, final int to) {
+    for (int host = from; host <= to; host++) {
       final InetAddress address = ip("198.51.100." + host);
       this.journal.record(Attempt.claimed("Alt" + host, address)
               .authenticated("Alt" + host, UUID.randomUUID(), false, null),
           new Verdict(Verdict.Action.ADMIT, Verdict.Basis.LINKED_ACCOUNT, Verdict.Origin.DIRECT,
-              address, null, null, null,
-              new LinkEvidence(Link.Strength.WEAK, UUID.randomUUID(), 42L, 2)),
+              address, null, null, null, new LinkEvidence(Link.Strength.WEAK, linked, 42L, 2)),
           Phase.LOGIN, AdmissionConfig.Mode.OBSERVE);
     }
+  }
+
+  @Test
+  void aWaveOfLinkSignalsAroundOneBannedAccountFromOneNetworkIsOneLine() {
+    linkSignals(UUID.randomUUID(), 1, 3);
 
     assertEquals(1, this.log.lines().size(), this.log.lines().toString());
+  }
+
+  @Test
+  void linkSignalsAroundTwoBannedAccountsAreNeverFoldedTogether() {
+    linkSignals(UUID.randomUUID(), 1, 2);
+    linkSignals(UUID.randomUUID(), 3, 4);
+
+    assertEquals(2, this.log.lines().size(), "one full line per linked account");
   }
 
   @Test
