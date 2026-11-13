@@ -240,12 +240,13 @@ public final class ListStore implements IpClassifier {
   }
 
   /**
-   * Whether at least one list is in memory.
+   * Whether at least one list that may refuse an address is in memory. A list whose class is only
+   * a signal does not count: nothing is filtered with it.
    *
-   * @return {@code false} while the module cannot judge anything
+   * @return {@code false} while the module cannot refuse anything
    */
   public boolean hasAnyList() {
-    return !this.loaded.isEmpty();
+    return this.loaded.stream().anyMatch(list -> list.source().ipClass().refusable());
   }
 
   @Override

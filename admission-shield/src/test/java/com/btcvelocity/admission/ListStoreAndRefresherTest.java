@@ -110,6 +110,20 @@ class ListStoreAndRefresherTest {
   }
 
   @Test
+  void onlyVpnListsLoadedMeansNothingIsRefused() throws IOException {
+    // Arrange - a list that only signals, never refuses, is loaded
+    final ListSource vpn = new ListSource("vpn", IpClass.VPN,
+        URI.create("https://lists.invalid/vpn.txt"), "vpn.txt");
+    Files.writeString(this.directory.resolve("vpn.txt"), "203.0.113.0/24\n");
+
+    // Act
+    this.store.loadAll(List.of(vpn));
+
+    // Assert - loaded, but the module still refuses nothing
+    assertFalse(this.store.hasAnyList());
+  }
+
+  @Test
   void invalidLinesInALoadedFileAreLoggedAndCountedNotFatal() throws IOException {
     Files.writeString(this.directory.resolve("dc.txt"), "203.0.113.0/24\ngarbage\n");
 

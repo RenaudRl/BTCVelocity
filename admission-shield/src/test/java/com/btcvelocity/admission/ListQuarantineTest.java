@@ -186,6 +186,29 @@ class ListQuarantineTest {
     assertTrue(Files.exists(this.directory.resolve("dc.txt")));
   }
 
+  @Test
+  void aVpnSignalInUseDoesNotHideAWaitingDatacenterRefusal() throws IOException {
+    // Arrange - the VPN list is loaded first and in use; the datacenter version waits
+    final ListSource vpn = new ListSource("vpn", IpClass.VPN,
+        URI.create("https://lists.invalid/vpn.txt"), "vpn.txt");
+    Files.writeString(this.directory.resolve("vpn.txt"), "192.0.2.0/24\n");
+    this.store = new ListStore(this.directory, this.log.logger(), this.clock,
+        AdmissionConfig.DEFAULT_MAX_ENTRIES);
+    this.store.loadAll(List.of(vpn, SOURCE));
+    refresherServing(NEW, new ArrayList<>()).refresh(SOURCE);
+    final Attempt listed = Attempt.claimed("Steve", ip("192.0.2.5"))
+        .authenticated("Steve", PLAYER, false, null);
+
+    // Act
+    final IpClassifier shadow = this.store.quarantine().shadow();
+
+    // Assert - the waiting refusal wins over the in-use signal, and counts as one in addition
+    assertEquals(new IpClassifier.Match(IpClass.DATACENTER, "dc"),
+        shadow.classify(ip("192.0.2.5")).orElseThrow());
+    assertTrue(new AdmissionEngine(AdmissionConfig.defaults(), this.store, shadow)
+        .wouldRefuseInAddition(listed).isPresent());
+  }
+
   // --- the engine: who would be refused in addition -------------------------------------------
 
   private static final IpClassifier DC = address -> Optional.of(
