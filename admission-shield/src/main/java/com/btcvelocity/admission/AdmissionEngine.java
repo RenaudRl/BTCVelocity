@@ -475,9 +475,10 @@ public final class AdmissionEngine {
   /**
    * The address the account links judge an authenticated login on, or empty when that rule stays
    * silent: links off, an address that is not public, a Bedrock player whose real address is
-   * unknown, a connection from Geyser that is not a Floodgate player (an anomaly the other rules
-   * report; Geyser's address links nobody), an exempted network or player. A Floodgate player is
-   * judged on its real address.
+   * unknown, a connection seen from an address of {@code geyser-addresses} that is not a Floodgate
+   * player (Geyser's address links nobody), an exempted network or player. A Floodgate player is
+   * judged on its real address; a non-Floodgate client on the Geyser listener, whose address is not
+   * a listed one, is judged on the address it shows.
    *
    * @param authenticated the login
    * @return the address, unwrapped like the lists read it
@@ -487,11 +488,15 @@ public final class AdmissionEngine {
       return Optional.empty();
     }
     InetAddress judged = authenticated.remote();
-    if (fromGeyser(authenticated)) {
-      judged = authenticated.floodgatePlayer() ? bedrockReal(authenticated) : null;
+    if (fromGeyser(authenticated) && authenticated.floodgatePlayer()) {
+      judged = bedrockReal(authenticated);
       if (judged == null) {
         return Optional.empty();
       }
+    } else if (this.config.geyserAddresses().contains(judged)
+        || this.config.geyserAddresses().contains(AddressPolicy.unwrap(judged))) {
+      // Geyser's own address links nobody; any other address of a non-Floodgate client is its own.
+      return Optional.empty();
     }
     if (exemptionOf(authenticated, Phase.LOGIN, judged) != Exemption.NONE) {
       return Optional.empty();

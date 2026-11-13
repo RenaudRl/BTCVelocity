@@ -54,7 +54,8 @@ FAIBLE avec un banni, ou plus de `max-accounts-per-household` comptes sur une ad
 compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ban automatique.
 
 - **Une connexion Java venue d'une adresse Geyser** (`geyser-addresses`) n'est jamais jugée ni
-  enregistrée ici : l'adresse de Geyser ne lie personne.
+  enregistrée ici : l'adresse de Geyser ne lie personne. Un client non-Floodgate vu d'une autre
+  adresse, même sur l'écoute Geyser (PROXY protocol : son adresse réelle), est jugé comme un autre.
 - **Comptes admis en `observe`** : un compte qui aurait été refusé en `enforce` entre, est
   enregistré, et compte ensuite parmi les comptes de l'adresse (« adresse partagée »,
   `max-accounts-per-household`). Un essai à blanc prolongé peut donc rendre une adresse partagée,

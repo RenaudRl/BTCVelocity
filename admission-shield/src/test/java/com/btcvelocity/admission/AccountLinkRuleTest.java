@@ -304,6 +304,22 @@ class AccountLinkRuleTest {
   }
 
   @Test
+  void aNonFloodgateClientOnTheGeyserListenerIsJudgedOnItsOwnAddress() {
+    // With the PROXY protocol the address seen on the Geyser listener is the player's own: a Java
+    // client that picked that port must not escape the links. Only a listed address is skipped.
+    final AdmissionEngine withGeyser = new AdmissionEngine(
+        config("geyser-addresses: ['198.51.100.9']\n" + ON.formatted("enforce")),
+        address -> Optional.empty());
+    final Attempt viaListener = Attempt.claimed("Java", HOME, true)
+        .authenticated("Java", NEWCOMER, false, null);
+    final Attempt fromTheGeyserHost = Attempt.claimed("Java", InetAddress.ofLiteral("198.51.100.9"),
+        true).authenticated("Java", NEWCOMER, false, null);
+
+    assertEquals(Optional.of(HOME), withGeyser.linkSubject(viaListener));
+    assertTrue(withGeyser.linkSubject(fromTheGeyserHost).isEmpty(), "Geyser's own address");
+  }
+
+  @Test
   void theRuleIsSilentWhenOffForBedrockWithoutRealAddressAndForExemptions() {
     final AdmissionEngine on = engine("enforce");
     final UUID staff = UUID.fromString("11111111-1111-1111-1111-111111111111");
