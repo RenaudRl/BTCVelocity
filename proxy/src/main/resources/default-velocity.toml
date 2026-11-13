@@ -390,14 +390,14 @@ forward-commands-if-rate-limited = true
 
 # How many commands are allowed to be sent after the rate limit is hit before the player is kicked?
 # Setting this to 0 or lower will disable this feature.
-kick-after-rate-limited-commands = 0
+kick-after-rate-limited-commands = 20
 
 # How fast (in milliseconds) are clients allowed to send tab completions after the last tab completion.
 tab-complete-rate-limit = 10
 
 # How many tab completions are allowed to be sent after the rate limit is hit before the player is kicked?
 # Setting this to 0 or lower will disable this feature.
-kick-after-rate-limited-tab-completes = 0
+kick-after-rate-limited-tab-completes = 40
 
 # Enables the execution of illegal characters in chat and only allows
 # or denies illegal characters that are executed through the proxy.
