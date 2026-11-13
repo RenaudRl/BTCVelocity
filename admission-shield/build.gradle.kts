@@ -13,6 +13,9 @@ dependencies {
     // real address of a Bedrock player. Same arrangement as platform-resolver.
     compileOnly(libs.floodgate.api) { isTransitive = false }
 
+    // The account links' pool: HikariCP and the PostgreSQL driver ship with the proxy itself.
+    compileOnly(libs.hikari)
+
     testImplementation(project(":velocity-api"))
     compileOnly(libs.jspecify)
 }

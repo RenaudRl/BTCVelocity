@@ -19,11 +19,13 @@ package com.btcvelocity.admission;
 
 import com.btcvelocity.api.connection.ListenerOrigin;
 import com.google.inject.Inject;
+import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.ResultedEvent;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
+import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Dependency;
@@ -33,20 +35,28 @@ import com.velocitypowered.api.proxy.InboundConnection;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.scheduler.ScheduledTask;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.minimessage.MiniMessage;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -100,6 +110,10 @@ public final class BtcAdmissionShieldPlugin {
   private static final Duration SETTLE_PERIOD = Duration.ofMinutes(1);
   private static final Duration ASN_MIN_TIMEOUT = Duration.ofSeconds(120);
   private static final String LOGGING_FRAGMENT = "log4j2-admission-journal.xml";
+  /** HikariCP refuses a shorter connection timeout. */
+  private static final long MIN_POOL_TIMEOUT_MS = 250;
+  /** Lookups waiting for a connection beyond this are admitted unjudged, with a warning. */
+  private static final int LINK_QUEUE = 256;
 
   private final ProxyServer proxy;
   private final Logger logger;
@@ -119,6 +133,11 @@ public final class BtcAdmissionShieldPlugin {
   private volatile StaffAlerts alerts;
   private volatile StaffAlerts asnAlerts;
   private volatile StaffAlerts vpnAlerts;
+  private volatile StaffAlerts linkAlerts;
+  private volatile @Nullable AccountLinks links;
+  private volatile @Nullable HikariDataSource linkPool;
+  private volatile @Nullable ExecutorService linkExecutor;
+  private volatile @Nullable ScheduledTask purgeTask;
 
   /**
    * Creates the plugin.
@@ -167,6 +186,7 @@ public final class BtcAdmissionShieldPlugin {
     this.alerts = new StaffAlerts(this.clock, this::tellStaff);
     this.asnAlerts = StaffAlerts.forAsnKeywords(this.clock, this::tellStaff);
     this.vpnAlerts = StaffAlerts.forVpnSignals(this.clock, this::tellStaff);
+    this.linkAlerts = StaffAlerts.forAccountLinks(this.clock, this::tellStaff);
     this.store = store;
     final AsnStore asn = new AsnStore(this.dataDirectory.resolve("lists"), this.logger, this.clock,
         settings.asn(), settings.embeddedBaseline(),
@@ -179,14 +199,18 @@ public final class BtcAdmissionShieldPlugin {
         store.quarantine().shadow(), this.clock, asn, asn.shadow(), this.logger);
     this.engine = admission;
     this.config = settings;
+    this.links = startLinks(settings.links(), admission);
     this.proxy.getCommandManager().register(
         this.proxy.getCommandManager().metaBuilder(COMMAND).plugin(this).build(),
-        new AdmissionCommand(this.journal, store, settings, admission.rateLimiter(), asn));
+        new AdmissionCommand(this.journal, store, settings, admission.rateLimiter(), asn,
+            new LinkCommand(this.links, this.logger, this.clock, name -> this.proxy.getPlayer(name)
+                .map(Player::getUniqueId))));
     this.alertTask = this.proxy.getScheduler()
         .buildTask(this, () -> {
           this.alerts.flushIfDue();
           this.asnAlerts.flushIfDue();
           this.vpnAlerts.flushIfDue();
+          this.linkAlerts.flushIfDue();
           this.journal.flushExpired();
         })
         .delay(StaffAlerts.WINDOW)
@@ -209,11 +233,81 @@ public final class BtcAdmissionShieldPlugin {
   @Subscribe
   public void onProxyShutdown(final ProxyShutdownEvent event) {
     for (ScheduledTask task :
-        new ScheduledTask[] {this.refreshTask, this.alertTask, this.settleTask}) {
+        new ScheduledTask[] {this.refreshTask, this.alertTask, this.settleTask, this.purgeTask}) {
       if (task != null) {
         task.cancel();
       }
     }
+    final ExecutorService executor = this.linkExecutor;
+    if (executor != null) {
+      executor.shutdownNow();
+    }
+    final HikariDataSource pool = this.linkPool;
+    if (pool != null) {
+      pool.close();
+    }
+  }
+
+  /**
+   * Opens the account links when they are enabled and their key is usable; otherwise the proxy
+   * runs without them, and says why.
+   */
+  private @Nullable AccountLinks startLinks(final LinkSettings settings,
+      final AdmissionEngine admission) {
+    if (!settings.enabled()) {
+      return null;
+    }
+    final Optional<LinkKey> key = LinkKey.fromEnvironment(settings.keyEnv(),
+        System.getenv(settings.keyEnv()), this.logger::error);
+    if (key.isEmpty()) {
+      return null;
+    }
+    final String password = System.getenv(settings.passwordEnv());
+    if (password == null) {
+      this.logger.warn("links: {} is not set; connecting to the database without a password.",
+          settings.passwordEnv());
+    }
+    final HikariConfig pool = new HikariConfig();
+    pool.setPoolName("btc-admission-links");
+    pool.setJdbcUrl(settings.jdbcUrl());
+    pool.setUsername(settings.username());
+    pool.setPassword(password);
+    pool.setMaximumPoolSize(settings.maxPoolSize());
+    pool.setConnectionTimeout(Math.max(MIN_POOL_TIMEOUT_MS, settings.lookupTimeout().toMillis()));
+    // A database down at start must not stop the proxy: the logins are admitted until it is back.
+    pool.setInitializationFailTimeout(-1);
+    final HikariDataSource database = new HikariDataSource(pool);
+    final ExecutorService executor = new ThreadPoolExecutor(settings.maxPoolSize(),
+        settings.maxPoolSize(), 0, TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<>(LINK_QUEUE), Thread.ofPlatform().daemon().name(
+            "btc-admission-links-", 0).factory());
+    this.linkPool = database;
+    this.linkExecutor = executor;
+    final JdbcLinkStore linkStore = new JdbcLinkStore(database, settings.tablePrefix());
+    final AccountLinks accountLinks = new AccountLinks(admission, settings, key.get(), linkStore,
+        new JdbcBanLookup(database, settings.tablePrefix(), settings.networkId()), executor,
+        this.clock, this.logger);
+    this.purgeTask = this.proxy.getScheduler()
+        .buildTask(this, () -> {
+          try {
+            linkStore.createTables();
+          } catch (SQLException failed) {
+            this.logger.warn("links: the tables could not be created ({}); logins are admitted"
+                + " unjudged until they exist.", failed.getMessage());
+            return;
+          }
+          final int purged = accountLinks.purge();
+          if (purged > 0) {
+            this.logger.info("links: {} sighting(s) older than {} days deleted.", purged,
+                settings.retention().toDays());
+          }
+        })
+        .repeat(Duration.ofDays(1))
+        .schedule();
+    this.logger.info("Account links up: mode {}, database {} (table prefix {}), lookup timeout"
+        + " {} ms.", this.config.linksMode(), settings.jdbcUrl(), settings.tablePrefix(),
+        settings.lookupTimeout().toMillis());
+    return accountLinks;
   }
 
   /**
@@ -254,20 +348,17 @@ public final class BtcAdmissionShieldPlugin {
    * @param event the login
    */
   @Subscribe(priority = LOGIN_PRIORITY, async = false)
-  public void onLogin(final LoginEvent event) {
+  public @Nullable EventTask onLogin(final LoginEvent event) {
     final AdmissionEngine current = this.engine;
     if (current == null || !event.getResult().isAllowed()) {
-      return;
+      return null;
     }
     final Player player = event.getPlayer();
-    final InetAddress remote = player.getRemoteAddress().getAddress();
-    if (remote == null) {
-      return;
+    final Attempt attempt = attemptOf(player);
+    if (attempt == null) {
+      return null;
     }
     final UUID uuid = player.getUniqueId();
-    final Attempt attempt = Attempt.claimed(player.getUsername(), remote, viaGeyserListener(player))
-        .authenticated(player.getUsername(), uuid, this.bedrock.isFloodgatePlayer(uuid),
-            this.bedrock.realAddressOf(uuid).orElse(null));
     current.wouldRefuseInAddition(attempt).ifPresent(extra -> {
       final boolean counted = extra.ipClass() == IpClass.ASN
           ? this.asnStore.noteWouldRefuse(uuid)
@@ -276,17 +367,24 @@ public final class BtcAdmissionShieldPlugin {
         this.journal.recordWouldRefuse(attempt, extra, this.config.modeFor(extra));
       }
     });
-    final Optional<Verdict> settled = current.decideAtLogin(attempt);
-    if (settled.isEmpty()) {
-      return;
+    current.decideAtLogin(attempt).ifPresent(verdict -> settle(event, attempt, verdict));
+    final AccountLinks accountLinks = this.links;
+    if (accountLinks == null || !event.getResult().isAllowed()) {
+      return null;
     }
-    final Verdict verdict = settled.get();
+    // The database is waited on off the network thread, at most lookup-timeout-ms; it fails open.
+    return EventTask.resumeWhenComplete(accountLinks.judge(attempt)
+        .thenAccept(found -> found.ifPresent(verdict -> settle(event, attempt, verdict))));
+  }
+
+  private void settle(final LoginEvent event, final Attempt attempt, final Verdict verdict) {
+    final Player player = event.getPlayer();
     final Optional<AdmissionJournal.Entry> entry = this.journal.record(
         attempt, verdict, Phase.LOGIN, this.config.modeFor(verdict));
     if (verdict.origin() == Verdict.Origin.GEYSER_ADDRESS_NOT_FLOODGATE) {
       this.logger.warn("{} connected from Geyser address {} without being a Floodgate player;"
           + " judged on that address like anyone ({}).",
-          AdmissionJournal.value(player.getUsername()), remote.getHostAddress(),
+          AdmissionJournal.value(player.getUsername()), attempt.remote().getHostAddress(),
           Verdict.Basis.GEYSER_ADDRESS_NOT_FLOODGATE.label());
     }
     if (verdict.action() == Verdict.Action.REFUSE) {
@@ -297,7 +395,37 @@ public final class BtcAdmissionShieldPlugin {
       entry.ifPresent(this.asnAlerts::onRefusal);
     } else if (verdict.basis() == Verdict.Basis.VPN_SIGNAL) {
       entry.ifPresent(this.vpnAlerts::onRefusal);
+    } else if (verdict.links() != null) {
+      entry.ifPresent(this.linkAlerts::onRefusal);
     }
+  }
+
+  /**
+   * Records the session once a server has accepted it: the first server of the connection only.
+   *
+   * @param event the server connection
+   */
+  @Subscribe
+  public void onServerPostConnect(final ServerPostConnectEvent event) {
+    final AccountLinks accountLinks = this.links;
+    if (accountLinks == null || event.getPreviousServer() != null) {
+      return;
+    }
+    final Attempt attempt = attemptOf(event.getPlayer());
+    if (attempt != null) {
+      accountLinks.recordAccepted(attempt);
+    }
+  }
+
+  private @Nullable Attempt attemptOf(final Player player) {
+    final InetAddress remote = player.getRemoteAddress().getAddress();
+    if (remote == null) {
+      return null;
+    }
+    final UUID uuid = player.getUniqueId();
+    return Attempt.claimed(player.getUsername(), remote, viaGeyserListener(player))
+        .authenticated(player.getUsername(), uuid, this.bedrock.isFloodgatePlayer(uuid),
+            this.bedrock.realAddressOf(uuid).orElse(null));
   }
 
   /**

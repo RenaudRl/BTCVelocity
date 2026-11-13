@@ -1,0 +1,177 @@
+/*
+ * Copyright (C) 2026 Velocity Contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.btcvelocity.admission;
+
+import com.velocitypowered.api.command.CommandSource;
+import com.velocitypowered.api.proxy.Player;
+import java.time.Clock;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+
+/**
+ * The staff side of the account links: {@code alts}, {@code household add|remove} and
+ * {@code forget}. Every use is logged with who asked, never with an address (none is stored).
+ */
+final class LinkCommand {
+
+  static final List<String> SUBCOMMANDS = List.of("alts", "household", "forget");
+  static final String USAGE = "/admission alts <uuid|pseudo en ligne> | household add <a> <b>"
+      + " [raison] | household remove <a> | forget <uuid>";
+
+  private final @Nullable AccountLinks links;
+  private final Logger logger;
+  private final Clock clock;
+  private final Function<String, Optional<UUID>> online;
+
+  /**
+   * Creates the subcommands.
+   *
+   * @param links the account links, or {@code null} when they are off
+   * @param logger where each use is logged
+   * @param clock the time
+   * @param online the UUID of a player online by name
+   */
+  LinkCommand(final @Nullable AccountLinks links, final Logger logger, final Clock clock,
+      final Function<String, Optional<UUID>> online) {
+    this.links = links;
+    this.logger = logger;
+    this.clock = clock;
+    this.online = online;
+  }
+
+  /**
+   * Runs one of the subcommands; the answer comes once the database has answered.
+   *
+   * @param source who asked
+   * @param arguments the arguments, the subcommand first
+   * @return the answer, done when it has been sent
+   */
+  CompletableFuture<Void> execute(final CommandSource source, final String[] arguments) {
+    final AccountLinks current = this.links;
+    if (current == null) {
+      tell(source, "Comptes liés : désactivés (links.enabled: false, ou clé absente au"
+          + " démarrage).", NamedTextColor.YELLOW);
+      return CompletableFuture.completedFuture(null);
+    }
+    final String subcommand = arguments[0].toLowerCase(Locale.ROOT);
+    final String action = arguments.length > 1 ? arguments[1].toLowerCase(Locale.ROOT) : "";
+    if (subcommand.equals("alts") && arguments.length == 2) {
+      return withAccount(source, arguments[1], account -> alts(source, current, account));
+    }
+    if (subcommand.equals("forget") && arguments.length == 2) {
+      return withAccount(source, arguments[1], account -> current.run(store -> store.forget(account))
+          .thenAccept(removed -> {
+            audit(source, "erased what is kept about", account);
+            tell(source, removed + " ligne(s) effacée(s) pour " + account + ".",
+                NamedTextColor.GRAY);
+          }));
+    }
+    if (subcommand.equals("household") && action.equals("remove") && arguments.length == 3) {
+      return withAccount(source, arguments[2], account -> current.run(store ->
+          store.leaveHousehold(account)).thenAccept(left -> {
+            audit(source, "took out of its household", account);
+            tell(source, left ? account + " ne fait plus partie d'un foyer."
+                : account + " n'avait pas de foyer.", NamedTextColor.GRAY);
+          }));
+    }
+    if (subcommand.equals("household") && action.equals("add") && arguments.length >= 4) {
+      final String reason = arguments.length > 4
+          ? String.join(" ", Arrays.copyOfRange(arguments, 4, arguments.length)) : null;
+      return withAccount(source, arguments[2], first -> withAccount(source, arguments[3],
+          second -> household(source, current, first, second, reason)));
+    }
+    tell(source, "Usage : " + USAGE, NamedTextColor.YELLOW);
+    return CompletableFuture.completedFuture(null);
+  }
+
+  private CompletableFuture<Void> alts(final CommandSource source, final AccountLinks current,
+      final UUID account) {
+    return current.run(store -> store.sharingAddressWith(account,
+        this.clock.instant().minus(LinkSettings.ADDRESS_HISTORY))).thenAccept(others -> {
+          audit(source, "looked up the accounts sharing an address with", account);
+          tell(source, others.size() + " compte(s) vu(s) sur une adresse de " + account + " en "
+              + LinkSettings.ADDRESS_HISTORY.toDays() + " jours :", NamedTextColor.GRAY);
+          others.forEach((other, seen) -> tell(source, "  " + other + " (vu le " + seen + ")",
+              NamedTextColor.GRAY));
+        });
+  }
+
+  private CompletableFuture<Void> household(final CommandSource source,
+      final AccountLinks current, final UUID first, final UUID second,
+      final @Nullable String reason) {
+    if (first.equals(second)) {
+      tell(source, "Un foyer réunit deux comptes différents.", NamedTextColor.YELLOW);
+      return CompletableFuture.completedFuture(null);
+    }
+    return current.run(store -> store.declareHousehold(first, second, who(source), reason,
+        this.clock.instant())).thenAccept(declared -> {
+          if (declared) {
+            audit(source, "declared one household: " + second + " and", first);
+          }
+          tell(source, declared ? first + " et " + second + " forment un foyer : jamais refusés"
+              + " l'un pour l'autre." : "Ces deux comptes sont déjà dans deux foyers différents :"
+              + " retirez d'abord l'un des deux (household remove).", NamedTextColor.GRAY);
+        });
+  }
+
+  private CompletableFuture<Void> withAccount(final CommandSource source, final String given,
+      final Function<UUID, CompletableFuture<Void>> then) {
+    final Optional<UUID> account = account(given);
+    if (account.isEmpty()) {
+      tell(source, "Compte inconnu : " + AdmissionJournal.value(given) + " (un UUID, ou le pseudo"
+          + " d'un joueur en ligne).", NamedTextColor.YELLOW);
+      return CompletableFuture.completedFuture(null);
+    }
+    return then.apply(account.get()).exceptionally(failure -> {
+      this.logger.warn("links: a staff request failed: {}", failure.toString());
+      tell(source, "La base des comptes liés ne répond pas ; réessayez plus tard.",
+          NamedTextColor.RED);
+      return null;
+    });
+  }
+
+  private Optional<UUID> account(final String given) {
+    try {
+      return Optional.of(UUID.fromString(given));
+    } catch (IllegalArgumentException notAUuid) {
+      return this.online.apply(given);
+    }
+  }
+
+  private void audit(final CommandSource source, final String what, final UUID account) {
+    this.logger.info("links: {} {} {}.", who(source), what, account);
+  }
+
+  private static String who(final CommandSource source) {
+    return source instanceof Player player ? player.getUniqueId().toString() : "console";
+  }
+
+  private static void tell(final CommandSource source, final String text,
+      final NamedTextColor color) {
+    source.sendMessage(Component.text(text, color));
+  }
+}

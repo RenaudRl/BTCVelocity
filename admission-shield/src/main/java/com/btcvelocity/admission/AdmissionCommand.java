@@ -25,22 +25,26 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 
 /**
- * {@code /admission why <pseudo|ip>} and {@code /admission status}, for the staff.
+ * {@code /admission why <pseudo|ip>} and {@code /admission status}, for the staff, and the
+ * account-link subcommands of {@link LinkCommand}.
  *
- * <p>Read-only: the command explains decisions, it cannot change one.
+ * <p>{@code why} and {@code status} only explain decisions; the account-link subcommands declare or
+ * remove a household and erase what is kept about an account.
  */
 public final class AdmissionCommand implements SimpleCommand {
 
   /** The permission that opens the command. The console always passes. */
   public static final String PERMISSION = "btc.admission.staff";
 
-  private static final List<String> SUBCOMMANDS = List.of("why", "status");
+  private static final List<String> SUBCOMMANDS =
+      List.of("why", "status", "alts", "household", "forget");
 
   private final AdmissionJournal journal;
   private final ListStore store;
   private final AdmissionConfig config;
   private final NetworkRateLimiter rate;
   private final AsnStore asn;
+  private final LinkCommand links;
 
   /**
    * Creates the command.
@@ -50,14 +54,17 @@ public final class AdmissionCommand implements SimpleCommand {
    * @param config the settings in force
    * @param rate the per-network bound on connection attempts
    * @param asn the IP-to-ASN database in memory
+   * @param links the account-link subcommands
    */
   public AdmissionCommand(final AdmissionJournal journal, final ListStore store,
-      final AdmissionConfig config, final NetworkRateLimiter rate, final AsnStore asn) {
+      final AdmissionConfig config, final NetworkRateLimiter rate, final AsnStore asn,
+      final LinkCommand links) {
     this.journal = journal;
     this.store = store;
     this.config = config;
     this.rate = rate;
     this.asn = asn;
+    this.links = links;
   }
 
   @Override
@@ -75,9 +82,12 @@ public final class AdmissionCommand implements SimpleCommand {
       for (String line : status()) {
         invocation.source().sendMessage(Component.text(line, NamedTextColor.GRAY));
       }
+    } else if (LinkCommand.SUBCOMMANDS.contains(subcommand)) {
+      this.links.execute(invocation.source(), arguments);
     } else {
       invocation.source().sendMessage(Component.text(
-          "Usage : /admission why <pseudo|ip> | /admission status", NamedTextColor.YELLOW));
+          "Usage : /admission why <pseudo|ip> | /admission status | " + LinkCommand.USAGE,
+          NamedTextColor.YELLOW));
     }
   }
 
@@ -113,6 +123,7 @@ public final class AdmissionCommand implements SimpleCommand {
     lines.addAll(asnStatus(this.config, this.asn));
     lines.add(rateStatus(this.config, this.rate));
     lines.addAll(exemptionStatus(this.config.exemptions()));
+    lines.add(linkStatus(this.config));
     return lines;
   }
 
@@ -182,6 +193,19 @@ public final class AdmissionCommand implements SimpleCommand {
           + " (à dater avec 'expires: AAAA-MM-JJ')");
     }
     return lines;
+  }
+
+  /** One line on the account links. */
+  static String linkStatus(final AdmissionConfig config) {
+    final LinkSettings links = config.links();
+    if (!links.enabled()) {
+      return "Comptes liés : désactivés.";
+    }
+    return "Comptes liés (" + config.linksMode().name().toLowerCase(Locale.ROOT) + ") : lien FORT"
+        + " = même adresse sous " + links.strongWindow().toDays() + " j, adresse partagée au-delà"
+        + " de " + links.sharedAddressAccounts() + " comptes ; seul un lien FORT avec un ban réseau"
+        + " actif refuse (code " + Verdict.LINKED_BAN_CODE + ") ; conservation "
+        + links.retention().toDays() + " j.";
   }
 
   /** One line on the per-network bound; the refusals themselves are read with {@code why <ip>}. */

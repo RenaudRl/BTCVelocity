@@ -17,6 +17,43 @@ trafic sortant est le téléchargement périodique des listes (X4BNet `lists_vpn
 | Geyser | `geyser-addresses` **vide par défaut** tant que 13.1 n'a pas mesuré l'adresse vue au proxy. Une connexion venue d'une de ces adresses sans être joueur Floodgate est journalisée `geyser-address-not-floodgate`, signalée en WARN et jugée normalement. Une connexion de l'écoute `geyser` du proxy (`advanced.geyser-listener` de `velocity.toml`) est traitée comme venant de Geyser même si la liste est vide. Avec le PROXY protocol son adresse est l'IP réelle du joueur : un joueur Floodgate y est jugé sur l'adresse que Floodgate a retenue, à défaut sur celle de la connexion, au lieu d'être admis en `bedrock, ip réelle inconnue` ; elle entre dans le plafond par réseau comme toute autre. Seule une adresse de `geyser-addresses` (mode à adresse partagée) garde l'exemption et l'admission sans jugement |
 | Journal | une ligne `key=value` par refus, observation ou exemption, sur le logger `btc.admission.journal` ; `identity=declared` au pré-login, `authenticated` au login |
 | Staff | `/admission why <pseudo\|ip>`, `/admission status` (`btc.admission.staff`) ; alerte en jeu à chaque refus, au plus un message toutes les 10 s |
+| Comptes liés | **coupés par défaut** (`links.enabled: false`) ; voir « Comptes liés » |
+
+## Comptes liés (Sentinel 16.2, `links`)
+
+Rapproche les comptes vus depuis la même adresse pour repérer le contournement d'un ban réseau,
+sans gêner une fratrie. Trois niveaux, **sans transitivité** (seuls les comptes de l'adresse du
+joueur comptent, jamais ceux qu'ils ont croisés ailleurs) :
+
+- **FORT** : même adresse exacte vue sous `strong-window-days` (7 j), adresse non partagée (au plus
+  `shared-address-accounts` = 4 comptes en 30 j) ;
+- **FAIBLE** : même adresse plus ancienne ou partagée, ou même /24 (IPv4) ou /64 (IPv6) sous
+  `weak-window-days` ;
+- **FOYER** : déclaré par le staff (`/admission household add <a> <b> [raison]`) ; jamais refusé ni
+  signalé pour un membre banni.
+
+**Seul refus** : un lien FORT avec un compte sous **ban réseau actif** de Sentinel, en `enforce`,
+code **`ADM-ALT-BAN`** (texte `messages.linked-ban`, bilingue). En `observe` (le mode à l'allumage,
+et toujours si le module entier est en `observe`) la même situation est journalisée
+`decision=observed`. Un lien FAIBLE avec un banni, ou plus de `max-accounts-per-household` comptes
+sur une adresse (un foyer compté une fois), est **admis**, journalisé et signalé au staff. Jamais
+de ban automatique.
+
+- **Ban réseau actif** : lu en LECTURE SEULE dans `<prefix>sanctions` de Sentinel : `type = 'BAN'`,
+  `scope = 'NETWORK'`, `network_id` = `links.database.network-id`, `revoked_at IS NULL`,
+  `expires_at IS NULL OR expires_at > maintenant` (millisecondes).
+- **Stockage** : deux tables à lui dans la base Sentinel, `<prefix>admission_sightings` (uuid,
+  `ip_digest`, `net_digest`, `first_seen`, `last_seen`) et `<prefix>admission_households`. Les
+  adresses n'y sont **jamais en clair** : HMAC-SHA256 avec la clé de `BTC_ADMISSION_LINK_KEY`
+  (base64, 32 octets au moins ; absente ou courte : fonction coupée avec une erreur, le proxy
+  démarre). Changer la clé efface de fait l'historique. Une session n'est enregistrée qu'une fois
+  acceptée par un serveur (`ServerPostConnectEvent`), purgée 180 jours après son dernier passage ;
+  `/admission forget <uuid>` efface un compte.
+- **Échec ouvert** : la recherche attend au plus `lookup-timeout-ms` (1,5 s) ; base lente, absente
+  ou saturée : le joueur est admis sans jugement, un WARN par minute au plus.
+- **Exploitation** : un rôle PostgreSQL limité à `SELECT` sur `<prefix>sanctions` et propriétaire de
+  ses deux tables ; mot de passe dans la variable nommée par `password-env`, jamais dans l'URL
+  (refusée sinon) ; une fiche au registre RGPD avant `enabled: true`.
 
 ## Borne de débit par réseau (13.4, `network-rate`)
 

@@ -14,6 +14,8 @@
 # Each refusal is also told to the staff online, at most one message every 10 seconds.
 #
 # Staff command: /admission why <pseudo|ip>   and   /admission status
+#   account links (section links, off by default): /admission alts <uuid|online name>,
+#   /admission household add <a> <b> [reason] | remove <a>,  /admission forget <uuid>
 # Permission: btc.admission.staff (the console always has it).
 
 # enforce : refuse listed addresses.  observe : only journal them (dry run), let everybody in.
