@@ -84,7 +84,9 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
   Un échec au démarrage des liens (pilote, pool) les coupe seuls, avec une ERROR sans l'URL.
   Un compte sous ban réseau actif n'est jamais enregistré.
 - **Exploitation** : un rôle PostgreSQL limité à `SELECT` sur `<prefix>sanctions` et propriétaire de
-  ses deux tables ; mot de passe dans la variable nommée par `password-env`, jamais dans l'URL
+  ses deux tables (un rôle sans droit `CREATE` sur le schéma fonctionne si les deux tables existent
+  déjà : le premier accès le constate par `to_regclass`, sinon la fonction reste en échec ouvert avec
+  un WARN ; `forget` et la purge ne dépendent jamais de la création des tables) ; mot de passe dans la variable nommée par `password-env`, jamais dans l'URL
   (refusée sinon) ; une fiche au registre RGPD avant `enabled: true`.
 
 ## Borne de débit par réseau (13.4, `network-rate`)

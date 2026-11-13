@@ -106,8 +106,39 @@ public final class JdbcLinkStore implements LinkStore {
       for (String ddl : schema()) {
         statement.execute(ddl);
       }
+    } catch (SQLException refused) {
+      // A role without CREATE on the schema can still use tables that exist (made by hand).
+      final boolean present;
+      try {
+        present = tablesExist(connection);
+      } catch (SQLException unreadable) {
+        refused.addSuppressed(unreadable);
+        throw refused;
+      }
+      if (!present) {
+        throw refused;
+      }
     }
     this.tablesReady = true;
+  }
+
+  private boolean tablesExist(final Connection connection) throws SQLException {
+    try (PreparedStatement query = connection.prepareStatement("SELECT to_regclass(?),"
+        + " to_regclass(?)")) {
+      query.setString(1, this.sightings);
+      query.setString(2, this.households);
+      try (ResultSet rows = query.executeQuery()) {
+        return rows.next() && rows.getString(1) != null && rows.getString(2) != null;
+      }
+    }
+  }
+
+  /**
+   * A connection that does not wait for the schema: the erasure and the purge must work whatever
+   * the role may create.
+   */
+  private Connection openWithoutSchema() throws SQLException {
+    return this.database.getConnection();
   }
 
   /** A connection on which the two tables exist. */
@@ -204,7 +235,7 @@ public final class JdbcLinkStore implements LinkStore {
 
   @Override
   public int forget(final UUID account) throws SQLException {
-    try (Connection connection = open()) {
+    try (Connection connection = openWithoutSchema()) {
       connection.setAutoCommit(false);
       try {
         final int removed = delete(connection, this.sightings, account)
@@ -231,7 +262,7 @@ public final class JdbcLinkStore implements LinkStore {
 
   @Override
   public int purgeOlderThan(final Instant cutoff) throws SQLException {
-    try (Connection connection = open();
+    try (Connection connection = openWithoutSchema();
         PreparedStatement sightings = connection.prepareStatement("DELETE FROM " + this.sightings
             + " WHERE last_seen < ?");
         // A household declared before the cutoff with no member seen since then is kept no longer.

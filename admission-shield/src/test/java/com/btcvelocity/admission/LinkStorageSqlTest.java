@@ -64,10 +64,66 @@ class LinkStorageSqlTest {
     store.record(SEEN);
     store.record(SEEN);
 
-    assertEquals(6 + 2, db.calls.size(), "the schema once, then the two sightings");
-    assertTrue(db.calls.get(0).sql().startsWith("CREATE TABLE IF NOT EXISTS"),
-        db.calls.get(0).sql());
-    assertTrue(db.calls.get(6).sql().startsWith("INSERT INTO"), db.calls.get(6).sql());
+    assertEquals(1 + 6 + 2, db.calls.size(),
+        "the tables looked for once after the refusal, the schema once, then the two sightings");
+    assertTrue(db.calls.get(0).sql().contains("to_regclass"), db.calls.get(0).sql());
+    assertTrue(db.calls.get(1).sql().startsWith("CREATE TABLE IF NOT EXISTS"),
+        db.calls.get(1).sql());
+    assertTrue(db.calls.get(7).sql().startsWith("INSERT INTO"), db.calls.get(7).sql());
+  }
+
+  private static final Object[] BOTH_TABLES =
+      {"btc_admission_sightings", "btc_admission_households"};
+
+  @Test
+  void aRoleThatCannotCreateButOwnsTheTablesStillReadsAndWrites() throws SQLException {
+    final FakeJdbc db = new FakeJdbc().answer(BOTH_TABLES);
+    db.failingExecutes = 100;
+    final JdbcLinkStore store = new JdbcLinkStore(db.dataSource(), "btc_");
+
+    final LinkFacts facts = store.factsFor(SEEN, NOW.minusSeconds(60), NOW.minusSeconds(60));
+    store.record(SEEN);
+
+    assertTrue(facts.onAddress().isEmpty());
+    assertTrue(db.calls.getFirst().sql().contains("to_regclass(?)"), db.calls.getFirst().sql());
+    assertEquals("btc_admission_sightings", db.calls.getFirst().params().get(1));
+    assertEquals("btc_admission_households", db.calls.getFirst().params().get(2));
+    assertEquals(1, db.calls.stream().filter(call -> call.sql().contains("to_regclass")).count(),
+        "the tables are found once, then the store is ready");
+  }
+
+  @Test
+  void aRefusedSchemaWithMissingTablesFailsAndIsTriedAgain() throws SQLException {
+    final FakeJdbc none = new FakeJdbc();
+    none.failingExecutes = 100;
+    final FakeJdbc oneOfTwo = new FakeJdbc().answer(new Object[] {"btc_admission_sightings", null});
+    oneOfTwo.failingExecutes = 100;
+
+    assertThrows(SQLException.class, () -> new JdbcLinkStore(none.dataSource(), "btc_")
+        .record(SEEN), "no table, no right to create it");
+    assertThrows(SQLException.class, () -> new JdbcLinkStore(oneOfTwo.dataSource(), "btc_")
+        .record(SEEN), "one table of the two is not enough");
+    final FakeJdbc later = new FakeJdbc().answer();
+    later.failingExecutes = 1;
+    final JdbcLinkStore store = new JdbcLinkStore(later.dataSource(), "btc_");
+    assertThrows(SQLException.class, () -> store.record(SEEN));
+    store.record(SEEN);
+
+    assertTrue(later.calls.getLast().sql().startsWith("INSERT INTO"), "ready once the DDL ran");
+  }
+
+  @Test
+  void forgetAndPurgeNeverWaitForTheSchema() throws SQLException {
+    final FakeJdbc db = new FakeJdbc();
+    db.failingExecutes = 100;
+    final JdbcLinkStore store = new JdbcLinkStore(db.dataSource(), "btc_");
+
+    store.forget(ENTRANT);
+    store.purgeOlderThan(NOW);
+
+    assertEquals(4, db.calls.size(), db.calls.toString());
+    assertTrue(db.calls.stream().allMatch(call -> call.sql().startsWith("DELETE FROM")),
+        db.calls.toString());
   }
 
   @Test

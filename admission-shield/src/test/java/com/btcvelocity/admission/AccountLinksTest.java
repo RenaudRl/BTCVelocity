@@ -368,6 +368,18 @@ class AccountLinksTest {
   }
 
   @Test
+  void aRoleThatCannotCreateTheTablesAdmitsUnjudgedWithAWarningAndNoSecret() {
+    final FakeJdbc db = new FakeJdbc();
+    db.failingExecutes = 100;
+    final AccountLinks links = links("enforce", new JdbcLinkStore(db.dataSource(), "btc_"));
+
+    assertEquals(Optional.empty(), now(links, login(NEWCOMER, HOME)));
+
+    assertTrue(this.logger.has("WARN", "admitted unjudged"), this.logger.lines().toString());
+    assertFalse(this.logger.lines().toString().contains("jdbc:"), "no URL in the log");
+  }
+
+  @Test
   void aFailedStartLeavesOnlyTheLinksOffAndNeverLogsTheUrl() {
     final AtomicBoolean undone = new AtomicBoolean();
 
