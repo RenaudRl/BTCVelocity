@@ -39,6 +39,7 @@ class MemoryLinkStore implements LinkStore {
 
   final List<Row> rows = new ArrayList<>();
   final Map<UUID, String> households = new HashMap<>();
+  final Map<UUID, Instant> declaredAt = new HashMap<>();
 
   @Override
   public synchronized LinkFacts factsFor(final Sighting entering, final Instant addressSince,
@@ -91,9 +92,17 @@ class MemoryLinkStore implements LinkStore {
 
   @Override
   public synchronized int purgeOlderThan(final Instant cutoff) throws SQLException {
-    final int before = this.rows.size();
+    final int before = this.rows.size() + this.households.size();
     this.rows.removeIf(row -> row.last().isBefore(cutoff));
-    return before - this.rows.size();
+    final Set<String> seen = new HashSet<>();
+    this.rows.forEach(row -> {
+      if (this.households.containsKey(row.account())) {
+        seen.add(this.households.get(row.account()));
+      }
+    });
+    this.households.entrySet().removeIf(member -> !seen.contains(member.getValue())
+        && this.declaredAt.get(member.getKey()).isBefore(cutoff));
+    return before - this.rows.size() - this.households.size();
   }
 
   @Override
@@ -108,6 +117,12 @@ class MemoryLinkStore implements LinkStore {
         : ofSecond != null ? ofSecond : UUID.randomUUID().toString();
     this.households.put(first, id);
     this.households.put(second, id);
+    if (ofFirst == null) {
+      this.declaredAt.put(first, at);
+    }
+    if (ofSecond == null) {
+      this.declaredAt.put(second, at);
+    }
     return true;
   }
 

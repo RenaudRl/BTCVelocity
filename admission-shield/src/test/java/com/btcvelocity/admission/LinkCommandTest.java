@@ -24,8 +24,12 @@ import com.velocitypowered.api.command.CommandSource;
 import java.lang.reflect.Proxy;
 import java.net.InetAddress;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -41,26 +45,75 @@ class LinkCommandTest {
   private final MemoryLinkStore store = new MemoryLinkStore();
   private final RecordingLogger logger = new RecordingLogger();
   private final List<String> told = new ArrayList<>();
-  private final CommandSource console = (CommandSource) Proxy.newProxyInstance(
-      CommandSource.class.getClassLoader(), new Class<?>[] {CommandSource.class},
-      (self, method, args) -> {
-        if (method.getName().equals("sendMessage") && args[0] instanceof Component text) {
-          this.told.add(PlainTextComponentSerializer.plainText().serialize(text));
-        }
-        return method.getReturnType() == boolean.class ? true : null;
-      });
+  private final List<String> staff = new ArrayList<>();
+  private final Set<UUID> banned = new HashSet<>();
+  private final CommandSource console = source(true);
+
+  private CommandSource source(final boolean permitted) {
+    return (CommandSource) Proxy.newProxyInstance(
+        CommandSource.class.getClassLoader(), new Class<?>[] {CommandSource.class},
+        (self, method, args) -> {
+          if (method.getName().equals("sendMessage") && args[0] instanceof Component text) {
+            this.told.add(PlainTextComponentSerializer.plainText().serialize(text));
+          }
+          return method.getReturnType() == boolean.class ? permitted : null;
+        });
+  }
 
   private LinkCommand command() {
+    return command(this.store);
+  }
+
+  private LinkCommand command(final LinkStore over) {
     final AdmissionConfig config = AccountLinkRuleTest.config(AccountLinkRuleTest.ON
         .formatted("observe"));
     final AccountLinks links = new AccountLinks(new AdmissionEngine(config,
         address -> Optional.empty()), config.links(), LinkKeyTest.key(LinkKeyTest.TEST_KEY),
-        this.store, (accounts, now) -> java.util.Map.of(), Runnable::run, this.clock,
-        this.logger.logger());
+        over, (accounts, now) -> {
+          final Map<UUID, BanLookup.ActiveBan> found = new HashMap<>();
+          accounts.stream().filter(this.banned::contains)
+              .forEach(account -> found.put(account, new BanLookup.ActiveBan(7L, now)));
+          return found;
+        }, Runnable::run, this.clock, this.logger.logger());
     links.recordAccepted(Attempt.claimed("Sister", InetAddress.ofLiteral("198.51.100.7"))
         .authenticated("Sister", SISTER, false, null));
     return new LinkCommand(links, this.logger.logger(), this.clock,
-        name -> name.equals("Brother") ? Optional.of(BROTHER) : Optional.empty());
+        name -> name.equals("Brother") ? Optional.of(BROTHER) : Optional.empty(), this.staff::add);
+  }
+
+  @Test
+  void withoutTheLinksPermissionNothingIsReadOrChanged() {
+    command().execute(source(false), new String[] {"forget", SISTER.toString()}).join();
+
+    assertEquals(1, this.store.rows.size());
+    assertTrue(this.told.getFirst().contains("btc.admission.links"), this.told.toString());
+  }
+
+  @Test
+  void theRequestIsLoggedBeforeTheDatabaseAnswers() {
+    final MemoryLinkStore down = new MemoryLinkStore() {
+      @Override
+      public synchronized int forget(final UUID account) {
+        throw new IllegalStateException("database down");
+      }
+    };
+
+    command(down).execute(this.console, new String[] {"forget", SISTER.toString()}).join();
+
+    assertTrue(this.logger.has("INFO", "console asks to erase what is kept about " + SISTER),
+        this.logger.lines().toString());
+  }
+
+  @Test
+  void aHouseholdAroundABannedAccountIsToldToTheStaff() {
+    this.banned.add(BROTHER);
+
+    command().execute(this.console, new String[] {"household", "add", SISTER.toString(),
+        BROTHER.toString()}).join();
+
+    assertEquals(1, this.staff.size(), this.staff.toString());
+    assertTrue(this.staff.getFirst().contains(BROTHER.toString()), this.staff.getFirst());
+    assertTrue(this.logger.has("WARN", "under a network ban"), this.logger.lines().toString());
   }
 
   @Test
@@ -79,7 +132,7 @@ class LinkCommandTest {
 
     assertTrue(this.store.rows.isEmpty());
     assertTrue(this.told.getFirst().startsWith("1 ligne(s) effacée(s)"), this.told.toString());
-    assertTrue(this.logger.has("INFO", "console erased what is kept about " + SISTER),
+    assertTrue(this.logger.has("INFO", "console erased 1 row(s) about " + SISTER),
         this.logger.lines().toString());
   }
 
@@ -93,8 +146,8 @@ class LinkCommandTest {
 
   @Test
   void linksOffSaySo() {
-    new LinkCommand(null, this.logger.logger(), this.clock, name -> Optional.empty())
-        .execute(this.console, new String[] {"alts", SISTER.toString()}).join();
+    new LinkCommand(null, this.logger.logger(), this.clock, name -> Optional.empty(),
+        this.staff::add).execute(this.console, new String[] {"alts", SISTER.toString()}).join();
 
     assertTrue(this.told.getFirst().startsWith("Comptes liés : désactivés"), this.told.toString());
   }

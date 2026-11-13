@@ -217,6 +217,17 @@ public final class AccountLinks {
   }
 
   /**
+   * Which of these accounts are under a network ban in force now. Blocks: for {@link #run}.
+   *
+   * @param accounts the accounts
+   * @return the banned ones
+   * @throws SQLException if the sanctions cannot be read
+   */
+  public Set<UUID> bannedAmong(final Set<UUID> accounts) throws SQLException {
+    return this.bans.activeNetworkBans(accounts, this.clock.instant()).keySet();
+  }
+
+  /**
    * The store, for the staff command; its calls block.
    *
    * @return the store

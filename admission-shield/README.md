@@ -16,7 +16,7 @@ trafic sortant est le téléchargement périodique des listes (X4BNet `lists_vpn
 | ASN | base IP→ASN d'iptoasn.com ; `ADM-VPN-ASN` pour les systèmes de `asn.deny-asns` (vide, `observe` par défaut) ; mots-clés de nom signalés au staff seul (voir « ASN ») |
 | Geyser | `geyser-addresses` **vide par défaut** tant que 13.1 n'a pas mesuré l'adresse vue au proxy. Une connexion venue d'une de ces adresses sans être joueur Floodgate est journalisée `geyser-address-not-floodgate`, signalée en WARN et jugée normalement. Une connexion de l'écoute `geyser` du proxy (`advanced.geyser-listener` de `velocity.toml`) est traitée comme venant de Geyser même si la liste est vide. Avec le PROXY protocol son adresse est l'IP réelle du joueur : un joueur Floodgate y est jugé sur l'adresse que Floodgate a retenue, à défaut sur celle de la connexion, au lieu d'être admis en `bedrock, ip réelle inconnue` ; elle entre dans le plafond par réseau comme toute autre. Seule une adresse de `geyser-addresses` (mode à adresse partagée) garde l'exemption et l'admission sans jugement |
 | Journal | une ligne `key=value` par refus, observation ou exemption, sur le logger `btc.admission.journal` ; `identity=declared` au pré-login, `authenticated` au login |
-| Staff | `/admission why <pseudo\|ip>`, `/admission status` (`btc.admission.staff`) ; alerte en jeu à chaque refus, au plus un message toutes les 10 s |
+| Staff | `/admission why <pseudo\|ip>`, `/admission status` (`btc.admission.staff`), `alts`/`household`/`forget` (en plus `btc.admission.links`) ; alerte en jeu à chaque refus, au plus un message toutes les 10 s |
 | Comptes liés | **coupés par défaut** (`links.enabled: false`) ; voir « Comptes liés » |
 
 ## Comptes liés (Sentinel 16.2, `links`)
@@ -33,7 +33,11 @@ joueur comptent, jamais ceux qu'ils ont croisés ailleurs) :
 - **FAIBLE** : même adresse plus ancienne, partagée, listée ou d'hébergeur, ou même /24 (IPv4) ou
   /48 (IPv6) sous `weak-window-days` ;
 - **FOYER** : déclaré par le staff (`/admission household add <a> <b> [raison]`) ; jamais refusé ni
-  signalé pour un membre banni.
+  signalé pour un membre banni ; le staff en ligne est alerté (et un WARN écrit) quand un foyer est
+  déclaré avec un compte sous ban réseau actif.
+
+`alts`, `household` et `forget` demandent **`btc.admission.links`** en plus de
+`btc.admission.staff` ; chaque usage est journalisé avant l'appel à la base, puis son résultat.
 
 **Seul refus** : un lien FORT avec un compte sous **ban réseau actif** de Sentinel, depuis un compte
 **vu pour la première fois après ce ban** (le plus ancien de ses bans actifs ; la fenêtre FORTE part
@@ -58,9 +62,15 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
   `ip_digest`, `net_digest`, `first_seen`, `last_seen`) et `<prefix>admission_households`. Les
   adresses n'y sont **jamais en clair** : HMAC-SHA256 avec la clé de `BTC_ADMISSION_LINK_KEY`
   (base64, 32 octets au moins ; absente ou courte : fonction coupée avec une erreur, le proxy
-  démarre). Changer la clé efface de fait l'historique. Une session n'est enregistrée qu'une fois
-  acceptée par un serveur (`ServerPostConnectEvent`), purgée 180 jours après son dernier passage ;
-  `/admission forget <uuid>` efface un compte.
+  démarre ; une clé triviale, tous octets identiques, est refusée). Changer la clé efface de fait
+  l'historique. **La clé et la table ensemble rendent toutes les IPv4 en quelques minutes** (2^32
+  essais) : ne jamais sauvegarder la clé avec la base ni dans ses sauvegardes. Une session n'est
+  enregistrée qu'une fois acceptée par un serveur (`ServerPostConnectEvent`), purgée 180 jours
+  (`retention-days`) après son dernier passage ; un foyer déclaré avant ce délai et dont aucun
+  membre n'a été vu depuis est purgé aussi. `/admission forget <uuid>` efface les passages et le
+  foyer d'un compte, **pas** le journal (/24, pseudo, `linked=`, retenu selon sa propre purge), ni
+  la mémoire de `/admission why` (4096 décisions, jusqu'au redémarrage), ni les lignes d'audit
+  des commandes staff.
 - **Échec ouvert** : la recherche attend au plus `lookup-timeout-ms` (1,5 s) ; base lente, absente
   ou saturée : le joueur est admis sans jugement, un WARN par minute au plus. Une recherche restée
   en file au-delà de ce délai est abandonnée sans interroger la base ; PostgreSQL coupe toute

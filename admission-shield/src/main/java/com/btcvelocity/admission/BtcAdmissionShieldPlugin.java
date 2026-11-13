@@ -204,7 +204,7 @@ public final class BtcAdmissionShieldPlugin {
         this.proxy.getCommandManager().metaBuilder(COMMAND).plugin(this).build(),
         new AdmissionCommand(this.journal, store, settings, admission.rateLimiter(), asn,
             new LinkCommand(this.links, this.logger, this.clock, name -> this.proxy.getPlayer(name)
-                .map(Player::getUniqueId))));
+                .map(Player::getUniqueId), this::tellStaff)));
     this.alertTask = this.proxy.getScheduler()
         .buildTask(this, () -> {
           this.alerts.flushIfDue();

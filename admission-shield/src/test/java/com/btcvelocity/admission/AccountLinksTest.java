@@ -247,6 +247,22 @@ class AccountLinksTest {
   }
 
   @Test
+  void aHouseholdNobodyWasSeenInSinceTheRetentionIsPurgedToo() throws SQLException {
+    final AccountLinks links = links("observe", this.store);
+    this.store.declareHousehold(BROTHER, SISTER, "console", null, this.clock.instant());
+    this.store.declareHousehold(NEWCOMER, BANNED, "console", null, this.clock.instant());
+    seenBeforeTheBan(BROTHER, HOME);
+    seenBeforeTheBan(NEWCOMER, HOME);
+
+    this.clock.advance(Duration.ofDays(100));
+    seenBeforeTheBan(BROTHER, ELSEWHERE);
+    this.clock.advance(Duration.ofDays(81));
+
+    assertEquals(4, links.purge(), "two old sightings and the household nobody came back to");
+    assertEquals(Set.of(BROTHER, SISTER), this.store.households.keySet());
+  }
+
+  @Test
   void theFirstPurgeRunsMinutesAfterTheStartThenEveryDay() {
     final Map<String, Duration> asked = new HashMap<>();
     final Scheduler.TaskBuilder builder = (Scheduler.TaskBuilder) Proxy.newProxyInstance(

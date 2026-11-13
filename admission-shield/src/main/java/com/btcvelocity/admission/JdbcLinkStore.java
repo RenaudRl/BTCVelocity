@@ -232,10 +232,17 @@ public final class JdbcLinkStore implements LinkStore {
   @Override
   public int purgeOlderThan(final Instant cutoff) throws SQLException {
     try (Connection connection = open();
-        PreparedStatement delete = connection.prepareStatement("DELETE FROM " + this.sightings
-            + " WHERE last_seen < ?")) {
-      delete.setLong(1, cutoff.toEpochMilli());
-      return delete.executeUpdate();
+        PreparedStatement sightings = connection.prepareStatement("DELETE FROM " + this.sightings
+            + " WHERE last_seen < ?");
+        // A household declared before the cutoff with no member seen since then is kept no longer.
+        PreparedStatement households = connection.prepareStatement("DELETE FROM "
+            + this.households + " h WHERE h.declared_at < ? AND NOT EXISTS (SELECT 1 FROM "
+            + this.households + " m JOIN " + this.sightings + " s ON s.uuid = m.uuid"
+            + " WHERE m.household_id = h.household_id AND s.last_seen >= ?)")) {
+      sightings.setLong(1, cutoff.toEpochMilli());
+      households.setLong(1, cutoff.toEpochMilli());
+      households.setLong(2, cutoff.toEpochMilli());
+      return sightings.executeUpdate() + households.executeUpdate();
     }
   }
 

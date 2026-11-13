@@ -162,7 +162,7 @@ class LinkStorageSqlTest {
     assertTrue(db.calls.get(3).sql().contains("MIN(first_seen) FROM btc_admission_sightings"
         + " WHERE uuid = ?"), db.calls.get(3).sql());
     assertEquals(ENTRANT.toString(), db.calls.get(3).params().get(1));
-    assertNull(unknown.firstSeen(),"MIN over no row is NULL: never seen");
+    assertNull(unknown.firstSeen(), "MIN over no row is NULL: never seen");
     final List<FakeJdbc.Call> calls = db.calls;
     assertTrue(calls.get(0).sql().contains("WHERE ip_digest = ?"), calls.get(0).sql());
     assertArrayEquals(SEEN.ipDigest(), (byte[]) calls.get(0).params().get(1));
@@ -184,6 +184,13 @@ class LinkStorageSqlTest {
     assertTrue(db.calls.getFirst().sql().endsWith("btc_admission_sightings WHERE last_seen < ?"),
         db.calls.getFirst().sql());
     assertEquals(cutoff.toEpochMilli(), db.calls.getFirst().params().get(1));
+    final FakeJdbc.Call households = db.calls.get(1);
+    assertTrue(households.sql().startsWith("DELETE FROM btc_admission_households h WHERE"
+        + " h.declared_at < ? AND NOT EXISTS"), households.sql());
+    assertTrue(households.sql().contains("m.household_id = h.household_id AND s.last_seen >= ?"),
+        households.sql());
+    assertEquals(cutoff.toEpochMilli(), households.params().get(1));
+    assertEquals(cutoff.toEpochMilli(), households.params().get(2));
   }
 
   @Test

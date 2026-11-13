@@ -32,9 +32,10 @@ import org.jspecify.annotations.Nullable;
 /**
  * The secret that turns an address into what is stored: HMAC-SHA256, never the address itself.
  *
- * <p>Without the key, the 2^32 IPv4 addresses could be hashed back in minutes from a stolen table;
- * with it, they cannot. The key lives in an environment variable of the proxy host, never in the
- * database, never in a file of this module, never in a log line ({@link #toString()} hides it).
+ * <p>A stolen table alone tells nothing; the table AND the key give back every IPv4 address in
+ * minutes (2^32 tries), so the key must never be stored or backed up with the database. It lives
+ * in an environment variable of the proxy host, never in the database, never in a file of this
+ * module, never in a log line ({@link #toString()} hides it).
  * Changing or losing the key makes every stored digest meaningless: the link history is lost, and
  * nothing else.
  */
@@ -85,7 +86,21 @@ public final class LinkKey {
           + MIN_BYTES + "; account links are DISABLED");
       return Optional.empty();
     }
+    if (trivial(secret)) {
+      errors.accept("links: " + variable + " holds the same byte repeated; generate a random key."
+          + " Account links are DISABLED");
+      return Optional.empty();
+    }
     return Optional.of(new LinkKey(secret));
+  }
+
+  private static boolean trivial(final byte[] secret) {
+    for (byte each : secret) {
+      if (each != secret[0]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

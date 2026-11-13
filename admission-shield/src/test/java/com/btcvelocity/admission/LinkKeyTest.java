@@ -106,6 +106,15 @@ class LinkKeyTest {
   }
 
   @Test
+  void aKeyOfOneRepeatedByteIsRefused() {
+    final List<String> errors = new ArrayList<>();
+
+    assertTrue(LinkKey.fromEnvironment("K", base64("0".repeat(LinkKey.MIN_BYTES)), errors::add)
+        .isEmpty(), "32 times the same byte");
+    assertTrue(errors.getFirst().contains("DISABLED"), errors.toString());
+  }
+
+  @Test
   void toStringHidesKey() {
     final List<String> errors = new ArrayList<>();
     final String shortKey = base64("short-secret-value");

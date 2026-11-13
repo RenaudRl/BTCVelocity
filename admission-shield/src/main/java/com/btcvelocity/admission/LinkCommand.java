@@ -24,8 +24,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -34,9 +36,13 @@ import org.slf4j.Logger;
 
 /**
  * The staff side of the account links: {@code alts}, {@code household add|remove} and
- * {@code forget}. Every use is logged with who asked, never with an address (none is stored).
+ * {@code forget}, behind their own permission. Every use is logged with who asked before the
+ * database is called, then its outcome; never an address (none is stored).
  */
 final class LinkCommand {
+
+  /** The permission these subcommands need, beyond the one that opens {@code /admission}. */
+  static final String PERMISSION = "btc.admission.links";
 
   static final List<String> SUBCOMMANDS = List.of("alts", "household", "forget");
   static final String USAGE = "/admission alts <uuid|pseudo en ligne> | household add <a> <b>"
@@ -46,6 +52,7 @@ final class LinkCommand {
   private final Logger logger;
   private final Clock clock;
   private final Function<String, Optional<UUID>> online;
+  private final Consumer<String> staff;
 
   /**
    * Creates the subcommands.
@@ -54,13 +61,15 @@ final class LinkCommand {
    * @param logger where each use is logged
    * @param clock the time
    * @param online the UUID of a player online by name
+   * @param staff told when a household is declared around an account under a network ban
    */
   LinkCommand(final @Nullable AccountLinks links, final Logger logger, final Clock clock,
-      final Function<String, Optional<UUID>> online) {
+      final Function<String, Optional<UUID>> online, final Consumer<String> staff) {
     this.links = links;
     this.logger = logger;
     this.clock = clock;
     this.online = online;
+    this.staff = staff;
   }
 
   /**
@@ -71,6 +80,10 @@ final class LinkCommand {
    * @return the answer, done when it has been sent
    */
   CompletableFuture<Void> execute(final CommandSource source, final String[] arguments) {
+    if (!source.hasPermission(PERMISSION)) {
+      tell(source, "Permission requise : " + PERMISSION + ".", NamedTextColor.RED);
+      return CompletableFuture.completedFuture(null);
+    }
     final AccountLinks current = this.links;
     if (current == null) {
       tell(source, "Comptes liés : désactivés (links.enabled: false, ou clé absente au"
@@ -83,20 +96,24 @@ final class LinkCommand {
       return withAccount(source, arguments[1], account -> alts(source, current, account));
     }
     if (subcommand.equals("forget") && arguments.length == 2) {
-      return withAccount(source, arguments[1], account -> current.run(store -> store.forget(account))
-          .thenAccept(removed -> {
-            audit(source, "erased what is kept about", account);
-            tell(source, removed + " ligne(s) effacée(s) pour " + account + ".",
-                NamedTextColor.GRAY);
-          }));
+      return withAccount(source, arguments[1], account -> {
+        audit(source, "asks to erase what is kept about", account);
+        return current.run(store -> store.forget(account)).thenAccept(removed -> {
+          audit(source, "erased " + removed + " row(s) about", account);
+          tell(source, removed + " ligne(s) effacée(s) pour " + account + ".",
+              NamedTextColor.GRAY);
+        });
+      });
     }
     if (subcommand.equals("household") && action.equals("remove") && arguments.length == 3) {
-      return withAccount(source, arguments[2], account -> current.run(store ->
-          store.leaveHousehold(account)).thenAccept(left -> {
-            audit(source, "took out of its household", account);
-            tell(source, left ? account + " ne fait plus partie d'un foyer."
-                : account + " n'avait pas de foyer.", NamedTextColor.GRAY);
-          }));
+      return withAccount(source, arguments[2], account -> {
+        audit(source, "asks to take out of its household", account);
+        return current.run(store -> store.leaveHousehold(account)).thenAccept(left -> {
+          audit(source, left ? "took out of its household" : "found no household for", account);
+          tell(source, left ? account + " ne fait plus partie d'un foyer."
+              : account + " n'avait pas de foyer.", NamedTextColor.GRAY);
+        });
+      });
     }
     if (subcommand.equals("household") && action.equals("add") && arguments.length >= 4) {
       final String reason = arguments.length > 4
@@ -110,9 +127,11 @@ final class LinkCommand {
 
   private CompletableFuture<Void> alts(final CommandSource source, final AccountLinks current,
       final UUID account) {
+    audit(source, "asks for the accounts sharing an address with", account);
     return current.run(store -> store.sharingAddressWith(account,
         this.clock.instant().minus(LinkSettings.ADDRESS_HISTORY))).thenAccept(others -> {
-          audit(source, "looked up the accounts sharing an address with", account);
+          audit(source, "was shown " + others.size() + " account(s) sharing an address with",
+              account);
           tell(source, others.size() + " compte(s) vu(s) sur une adresse de " + account + " en "
               + LinkSettings.ADDRESS_HISTORY.toDays() + " jours :", NamedTextColor.GRAY);
           others.forEach((other, seen) -> tell(source, "  " + other + " (vu le " + seen + ")",
@@ -127,15 +146,27 @@ final class LinkCommand {
       tell(source, "Un foyer réunit deux comptes différents.", NamedTextColor.YELLOW);
       return CompletableFuture.completedFuture(null);
     }
+    audit(source, "asks to declare one household: " + second + " and", first);
+    // Empty when not declared; otherwise the members under a network ban in force.
     return current.run(store -> store.declareHousehold(first, second, who(source), reason,
-        this.clock.instant())).thenAccept(declared -> {
-          if (declared) {
-            audit(source, "declared one household: " + second + " and", first);
-          }
-          tell(source, declared ? first + " et " + second + " forment un foyer : jamais refusés"
-              + " l'un pour l'autre." : "Ces deux comptes sont déjà dans deux foyers différents :"
-              + " retirez d'abord l'un des deux (household remove).", NamedTextColor.GRAY);
-        });
+        this.clock.instant()) ? Optional.of(current.bannedAmong(Set.of(first, second)))
+            : Optional.<Set<UUID>>empty()).thenAccept(declared -> {
+              audit(source, declared.isPresent() ? "declared one household: " + second + " and"
+                  : "was refused one household (two households already): " + second + " and",
+                  first);
+              declared.filter(banned -> !banned.isEmpty()).ifPresent(banned -> {
+                // A household is never refused for its banned member: the staff must know.
+                final String alert = "[Admission] Foyer déclaré par " + who(source)
+                    + " avec un compte sous ban réseau actif : " + banned + ".";
+                this.logger.warn("links: {} declared a household with {} under a network ban.",
+                    who(source), banned);
+                this.staff.accept(alert);
+              });
+              tell(source, declared.isPresent() ? first + " et " + second + " forment un foyer :"
+                  + " jamais refusés l'un pour l'autre." : "Ces deux comptes sont déjà dans deux"
+                  + " foyers différents : retirez d'abord l'un des deux (household remove).",
+                  NamedTextColor.GRAY);
+            });
   }
 
   private CompletableFuture<Void> withAccount(final CommandSource source, final String given,
