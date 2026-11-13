@@ -183,6 +183,7 @@ class AccountLinksTest {
     links.recordAccepted(login(NEWCOMER, HOME));
     assertTrue(this.logger.has("WARN", "connection refused"), this.logger.lines().toString());
   }
+
   @Test
   void purgeAt180Days() {
     final AccountLinks links = links("observe", this.store);

@@ -157,7 +157,7 @@ final class LinkCommand {
   private Optional<UUID> account(final String given) {
     try {
       return Optional.of(UUID.fromString(given));
-    } catch (IllegalArgumentException notAUuid) {
+    } catch (IllegalArgumentException notUuid) {
       return this.online.apply(given);
     }
   }
