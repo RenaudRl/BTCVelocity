@@ -72,8 +72,8 @@ class LinkStorageSqlTest {
     assertTrue(db.calls.get(7).sql().startsWith("INSERT INTO"), db.calls.get(7).sql());
   }
 
-  private static final Object[] BOTH_TABLES =
-      {"btc_admission_sightings", "btc_admission_households"};
+  private static final Object[] BOTH_TABLES = {
+      "btc_admission_sightings", "btc_admission_households"};
 
   @Test
   void aRoleThatCannotCreateButOwnsTheTablesStillReadsAndWrites() throws SQLException {
