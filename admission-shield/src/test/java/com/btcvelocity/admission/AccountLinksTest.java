@@ -26,6 +26,7 @@ import com.btcvelocity.admission.Verdict.Basis;
 import java.net.InetAddress;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
@@ -51,9 +52,11 @@ class AccountLinksTest {
   private final MemoryLinkStore store = new MemoryLinkStore();
   private final Set<UUID> askedAbout = new HashSet<>();
   private final RecordingLogger logger = new RecordingLogger();
+  private Instant bannedAt = this.clock.instant();
   private final BanLookup bans = (accounts, now) -> {
     this.askedAbout.addAll(accounts);
-    return accounts.contains(BANNED) ? Map.of(BANNED, 42L) : Map.of();
+    return accounts.contains(BANNED)
+        ? Map.of(BANNED, new BanLookup.ActiveBan(42L, this.bannedAt)) : Map.of();
   };
 
   private AccountLinks links(final String mode, final LinkStore over) {
@@ -94,6 +97,25 @@ class AccountLinksTest {
     assertEquals(Verdict.LINKED_BAN_CODE, enforced.causeCode());
     assertEquals(Action.OBSERVE, observed.action());
     assertEquals(Basis.LINKED_BAN, observed.basis());
+  }
+
+  @Test
+  void aSisterWhoPlayedBeforeTheBanIsAdmittedAndAnAccountMadeAfterItIsRefused() {
+    final AccountLinks links = links("enforce", this.store);
+    links.recordAccepted(login(SISTER, HOME));
+    links.recordAccepted(login(BANNED, HOME));
+    this.clock.advance(Duration.ofDays(10));
+    this.bannedAt = this.clock.instant();
+    this.clock.advance(Duration.ofHours(1));
+    links.recordAccepted(login(NEWCOMER, ELSEWHERE));
+    this.clock.advance(Duration.ofHours(1));
+
+    final Verdict sister = now(links, login(SISTER, HOME)).orElseThrow();
+    final Verdict alt = now(links, login(NEWCOMER, HOME)).orElseThrow();
+
+    assertEquals(Action.ADMIT, sister.action(), "no household declared, known before the ban");
+    assertEquals(Basis.LINKED_ACCOUNT, sister.basis());
+    assertEquals(Action.REFUSE, alt.action(), "first seen an hour after the ban");
   }
 
   @Test

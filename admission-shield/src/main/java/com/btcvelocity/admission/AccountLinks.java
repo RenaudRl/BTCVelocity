@@ -115,11 +115,11 @@ public final class AccountLinks {
     try {
       final LinkFacts facts = this.store.factsFor(this.key.sighting(self, judged, now),
           now.minus(LinkSettings.ADDRESS_HISTORY), now.minus(this.settings.weakWindow()));
-      final Set<UUID> linked = this.engine.linksOf(self, facts, now).stream()
+      final Set<UUID> linked = this.engine.linksOf(self, judged, facts, Map.of(), now).stream()
           .filter(link -> link.strength() != Link.Strength.HOUSEHOLD)
           .map(Link::account)
           .collect(Collectors.toSet());
-      final Map<UUID, Long> banned = linked.isEmpty() ? Map.of()
+      final Map<UUID, BanLookup.ActiveBan> banned = linked.isEmpty() ? Map.of()
           : this.bans.activeNetworkBans(linked, now);
       final Verdict verdict = this.engine.decideLinks(authenticated, judged, facts, banned, now);
       return verdict.basis() == Verdict.Basis.CLEAN ? Optional.empty() : Optional.of(verdict);

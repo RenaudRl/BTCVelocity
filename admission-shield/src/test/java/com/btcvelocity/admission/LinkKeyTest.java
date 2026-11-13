@@ -79,15 +79,17 @@ class LinkKeyTest {
   }
 
   @Test
-  void ipv6GroupedBy64() {
+  void ipv6AddressIsThe64AndNetworkThe48() {
     final LinkKey key = key(TEST_KEY);
 
-    assertArrayEquals(seen(key, "2001:db8:1:2::1").netDigest(),
-        seen(key, "2001:db8:1:2:ffff::9").netDigest());
-    assertFalse(Arrays.equals(seen(key, "2001:db8:1:2::1").netDigest(),
-        seen(key, "2001:db8:1:3::1").netDigest()));
+    assertArrayEquals(seen(key, "2001:db8:1:2::1").ipDigest(),
+        seen(key, "2001:db8:1:2:ffff::9").ipDigest(), "a new address in the same /64");
     assertFalse(Arrays.equals(seen(key, "2001:db8:1:2::1").ipDigest(),
-        seen(key, "2001:db8:1:2::2").ipDigest()));
+        seen(key, "2001:db8:1:3::1").ipDigest()));
+    assertArrayEquals(seen(key, "2001:db8:1:2::1").netDigest(),
+        seen(key, "2001:db8:1:ffff::1").netDigest(), "the same /48");
+    assertFalse(Arrays.equals(seen(key, "2001:db8:1::1").netDigest(),
+        seen(key, "2001:db8:2::1").netDigest()));
   }
 
   @Test

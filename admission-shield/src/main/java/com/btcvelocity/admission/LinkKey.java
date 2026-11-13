@@ -44,6 +44,11 @@ public final class LinkKey {
   public static final int MIN_BYTES = 32;
 
   private static final String ALGORITHM = "HmacSHA256";
+  private static final int ADDRESS_V4 = 32;
+  // An IPv6 subscriber holds a whole /64 and picks a new address in it at will.
+  private static final int ADDRESS_V6 = 64;
+  private static final int NETWORK_V4 = 24;
+  private static final int NETWORK_V6 = 48;
 
   private final SecretKeySpec key;
   private final int length;
@@ -89,12 +94,13 @@ public final class LinkKey {
    * @param account the account
    * @param address the judged address (a tunnel or an IPv4-mapped form is read as the IPv4 address)
    * @param at when
-   * @return the sighting, with the digests of the address and of its /24 or /64
+   * @return the sighting: the digests of its address (an IPv4 /32, an IPv6 /64: one subscriber)
+   *     and of its network (an IPv4 /24, an IPv6 /48)
    */
   public Sighting sighting(final UUID account, final InetAddress address, final Instant at) {
     final InetAddress normal = AddressPolicy.unwrap(address);
-    return new Sighting(account, digest("ip|" + normal.getHostAddress()),
-        digest("net|" + Networks.of(normal, Networks.AGGREGATE_V4, Networks.AGGREGATE_V6)), at);
+    return new Sighting(account, digest("ip|" + Networks.of(normal, ADDRESS_V4, ADDRESS_V6)),
+        digest("net|" + Networks.of(normal, NETWORK_V4, NETWORK_V6)), at);
   }
 
   private byte[] digest(final String text) {

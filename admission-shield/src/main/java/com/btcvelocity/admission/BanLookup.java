@@ -29,13 +29,22 @@ import java.util.UUID;
 public interface BanLookup {
 
   /**
+   * One account's network ban in force.
+   *
+   * @param id the id of one of its bans in force
+   * @param createdAt when the latest of them was pronounced
+   */
+  record ActiveBan(long id, Instant createdAt) {
+  }
+
+  /**
    * Which of these accounts carry a ban of network scope in force now: not revoked, not expired.
    * A ban limited to one server never counts.
    *
    * @param accounts the accounts to ask about (only the linked ones, never the whole table)
    * @param now the time "in force" is judged at
-   * @return each banned account with the id of one of its bans in force
+   * @return each banned account with its ban
    * @throws SQLException if the sanctions cannot be read
    */
-  Map<UUID, Long> activeNetworkBans(Set<UUID> accounts, Instant now) throws SQLException;
+  Map<UUID, ActiveBan> activeNetworkBans(Set<UUID> accounts, Instant now) throws SQLException;
 }

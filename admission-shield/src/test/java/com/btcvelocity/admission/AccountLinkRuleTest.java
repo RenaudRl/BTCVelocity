@@ -26,6 +26,7 @@ import com.btcvelocity.admission.Verdict.Basis;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.InetAddress;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -53,7 +54,8 @@ class AccountLinkRuleTest {
   private static final UUID SISTER = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000002");
   private static final UUID BANNED = UUID.fromString("bbbbbbbb-0000-0000-0000-000000000001");
   private static final UUID NEWCOMER = UUID.fromString("cccccccc-0000-0000-0000-000000000001");
-  private static final Map<UUID, Long> BANNED_ACTIVE = Map.of(BANNED, 42L);
+  private static final Map<UUID, BanLookup.ActiveBan> BANNED_ACTIVE =
+      Map.of(BANNED, new BanLookup.ActiveBan(42L, NOW.minus(Duration.ofDays(2))));
 
   static AdmissionConfig config(final String yaml) {
     try {
@@ -87,7 +89,7 @@ class AccountLinkRuleTest {
         sameAddress(Map.of(BROTHER, daysAgo(0))), Map.of(), NOW);
 
     assertEquals(List.of(new Link(BROTHER, Link.Strength.STRONG)),
-        engine.linksOf(SISTER, sameAddress(Map.of(BROTHER, daysAgo(0))), NOW));
+        engine.linksOf(SISTER, HOME, sameAddress(Map.of(BROTHER, daysAgo(0))), Map.of(), NOW));
     assertEquals(Action.ADMIT, sister.action());
     assertEquals(Basis.CLEAN, sister.basis());
     assertFalse(sister.isJournaled());
@@ -142,20 +144,96 @@ class AccountLinkRuleTest {
     final Verdict verdict = engine.decideLinks(login(NEWCOMER), HOME, sameAddress(school),
         BANNED_ACTIVE, NOW);
 
-    assertTrue(engine.linksOf(NEWCOMER, sameAddress(school), NOW).stream()
+    assertTrue(engine.linksOf(NEWCOMER, HOME, sameAddress(school), Map.of(), NOW).stream()
         .noneMatch(link -> link.strength() == Link.Strength.STRONG), "5 accounts: shared");
     assertEquals(Action.ADMIT, verdict.action());
     assertEquals(Basis.LINKED_ACCOUNT, verdict.basis());
   }
 
   @Test
+  void fourAccountsOnAnAddressStillLinkStrongly() {
+    final Map<UUID, Instant> home = new HashMap<>();
+    home.put(BANNED, daysAgo(2));
+    home.put(BROTHER, daysAgo(2));
+    home.put(SISTER, daysAgo(2));
+
+    final Verdict verdict = engine("enforce").decideLinks(login(NEWCOMER), HOME,
+        sameAddress(home), BANNED_ACTIVE, NOW);
+
+    assertEquals(Action.REFUSE, verdict.action(), "4 accounts, the shared bound is 4");
+    assertEquals(4, verdict.links().accountsOnAddress());
+  }
+
+  @Test
+  void strongWindowRunsFromTheBanWhenItCameAfterTheLastSighting() {
+    final LinkFacts facts = sameAddress(Map.of(BANNED, daysAgo(10)));
+    final AdmissionEngine engine = engine("enforce");
+
+    final Verdict justBanned = engine.decideLinks(login(NEWCOMER), HOME, facts,
+        Map.of(BANNED, new BanLookup.ActiveBan(42L, daysAgo(1))), NOW);
+    final Verdict atTheBound = engine.decideLinks(login(NEWCOMER), HOME, facts,
+        Map.of(BANNED, new BanLookup.ActiveBan(42L, daysAgo(7))), NOW);
+    final Verdict pastTheBound = engine.decideLinks(login(NEWCOMER), HOME, facts,
+        Map.of(BANNED, new BanLookup.ActiveBan(42L, daysAgo(7).minus(Duration.ofMinutes(1)))),
+        NOW);
+
+    assertEquals(Action.REFUSE, justBanned.action(), "last seen 10 days ago, banned yesterday");
+    assertEquals(Action.REFUSE, atTheBound.action(), "7 days after the ban");
+    assertEquals(Action.ADMIT, pastTheBound.action(), "7 days and a minute after the ban");
+    assertEquals(Link.Strength.WEAK, pastTheBound.links().strength());
+  }
+
+  @Test
+  void anAccountKnownBeforeTheBanIsOnlySignalledEvenWithoutHousehold() {
+    final LinkFacts sisterPlayedFirst = new LinkFacts(Map.of(BANNED, daysAgo(2)),
+        Map.of(BANNED, daysAgo(2)), Set.of(), daysAgo(30));
+    final LinkFacts bornWithTheBan = new LinkFacts(Map.of(BANNED, daysAgo(2)),
+        Map.of(BANNED, daysAgo(2)), Set.of(), daysAgo(2));
+    final AdmissionEngine engine = engine("enforce");
+
+    final Verdict sister = engine.decideLinks(login(SISTER), HOME, sisterPlayedFirst,
+        BANNED_ACTIVE, NOW);
+    final Verdict alt = engine.decideLinks(login(NEWCOMER), HOME, bornWithTheBan,
+        BANNED_ACTIVE, NOW);
+
+    assertEquals(Action.ADMIT, sister.action());
+    assertEquals(Basis.LINKED_ACCOUNT, sister.basis());
+    assertEquals(Link.Strength.STRONG, sister.links().strength());
+    assertTrue(sister.isJournaled(), "told to the staff");
+    assertEquals(Action.REFUSE, alt.action(), "first seen the moment of the ban: a new account");
+  }
+
+  @Test
+  void aVpnOrHostingAddressNeverLinksStrongly() {
+    final IpClassifier vpnList =
+        address -> Optional.of(new IpClassifier.Match(IpClass.VPN, "test:vpn"));
+    final AsnLookup hosting =
+        address -> Optional.of(new AsnDatabase.Info(64496, "Alpha Hosting BV", "NL"));
+    final AdmissionEngine onVpn = new AdmissionEngine(config(ON.formatted("enforce")), vpnList);
+    final AdmissionEngine onHosting = new AdmissionEngine(
+        config(ON.formatted("enforce") + "asn:\n  observe-keywords: [hosting]\n"),
+        address -> Optional.empty(), address -> Optional.empty(), Clock.systemUTC(), hosting,
+        AsnLookup.NONE);
+
+    for (AdmissionEngine engine : List.of(onVpn, onHosting)) {
+      final Verdict verdict = engine.decideLinks(login(NEWCOMER), HOME,
+          sameAddress(Map.of(BANNED, daysAgo(2))), BANNED_ACTIVE, NOW);
+
+      assertEquals(Action.ADMIT, verdict.action());
+      assertEquals(Link.Strength.WEAK, verdict.links().strength());
+    }
+  }
+
+  @Test
   void weakLinkOnlyAlerts() {
     final LinkFacts neighbour = new LinkFacts(Map.of(), Map.of(BANNED, daysAgo(1)), Set.of());
     final LinkFacts longAgo = sameAddress(Map.of(BANNED, daysAgo(20)));
+    final Map<UUID, BanLookup.ActiveBan> oldBan =
+        Map.of(BANNED, new BanLookup.ActiveBan(42L, daysAgo(20)));
 
     for (LinkFacts facts : List.of(neighbour, longAgo)) {
       final Verdict verdict = engine("enforce").decideLinks(login(NEWCOMER), HOME, facts,
-          BANNED_ACTIVE, NOW);
+          oldBan, NOW);
 
       assertEquals(Action.ADMIT, verdict.action(), facts.toString());
       assertEquals(Basis.LINKED_ACCOUNT, verdict.basis());
@@ -168,8 +246,8 @@ class AccountLinkRuleTest {
   void noTransitivityOnlyTheAccountsOfItsOwnAddressAreLinked() {
     // C shares an address with B only; B once shared another address with the banned A. The
     // store also returns C's own sightings, which are never a link.
-    final List<Link> links = engine("enforce").linksOf(NEWCOMER,
-        sameAddress(Map.of(SISTER, daysAgo(1), NEWCOMER, daysAgo(2))), NOW);
+    final List<Link> links = engine("enforce").linksOf(NEWCOMER, HOME,
+        sameAddress(Map.of(SISTER, daysAgo(1), NEWCOMER, daysAgo(2))), Map.of(), NOW);
 
     assertEquals(List.of(new Link(SISTER, Link.Strength.STRONG)), links);
   }
@@ -215,6 +293,8 @@ class AccountLinkRuleTest {
         .authenticated(".Bedrock", NEWCOMER, true, null)).isEmpty(), "bedrock, real unknown");
     assertEquals(Optional.of(HOME), withGeyser.linkSubject(Attempt.claimed(".Bedrock", geyser)
         .authenticated(".Bedrock", NEWCOMER, true, HOME)), "bedrock, judged on its real one");
+    assertTrue(withGeyser.linkSubject(Attempt.claimed("Java", geyser)
+        .authenticated("Java", NEWCOMER, false, null)).isEmpty(), "Geyser, no Floodgate");
     assertTrue(on.linkSubject(Attempt.claimed("Lan", InetAddress.ofLiteral("192.168.1.2"))
         .authenticated("Lan", NEWCOMER, false, null)).isEmpty(), "not public");
     assertTrue(exempting.linkSubject(Attempt.claimed("StaffMember", HOME)

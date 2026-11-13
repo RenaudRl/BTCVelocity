@@ -229,18 +229,21 @@ lists:
 # together from one home: declare them a household (/admission household add <a> <b>).
 #
 # Three levels, never transitive (A linked to B and B linked to C never links A to C):
-#   STRONG    : the same exact address within strong-window-days, on an address that is NOT shared
-#               (at most shared-address-accounts distinct accounts on it over 30 days).
-#   WEAK      : the same /24 or /64 within weak-window-days, the same address seen longer ago (up
-#               to 30 days), or a shared address.
+#   STRONG    : the same address (an IPv4, or an IPv6 /64) within strong-window-days, counted from
+#               the later of the last sighting and the ban, on an address that is NOT shared (at
+#               most shared-address-accounts distinct accounts on it over 30 days) and is neither
+#               listed (vpn, datacenter, tor, denied system) nor named by an asn.observe-keywords word.
+#   WEAK      : the same IPv4 /24 or IPv6 /48 within weak-window-days, the same address seen longer
+#               ago (up to 30 days), or a shared, listed or hosting address.
 #   HOUSEHOLD : declared by the staff. Never refused, never signalled for it.
 # ONLY a STRONG link to an account under a NETWORK ban in force (Sentinel, not revoked, not
-# expired) refuses, and only in `enforce` (code ADM-ALT-BAN). Everything else is a journal line and
-# a staff message. Nobody is ever banned by this module.
+# expired), from an account first seen AFTER that ban, refuses, and only in `enforce` (code
+# ADM-ALT-BAN). An account already known before the ban is only signalled. Everything else is a
+# journal line and a staff message. Nobody is ever banned by this module.
 #
 # What is stored (Sentinel database, tables <prefix>admission_sightings and
 # <prefix>admission_households): for each session a SERVER ACCEPTED, the account UUID and two
-# HMAC-SHA256 digests (the address, its /24 or /64), with first and last seen times. Never the
+# HMAC-SHA256 digests (the address or /64, the /24 or /48), with first and last seen times. Never the
 # address itself. Kept retention-days after the last sighting, then purged daily.
 # /admission forget <uuid> erases an account. Sentinel's sanctions are only READ.
 # BEFORE `enabled: true`: register of processing (entry n. 3), terms of use, AIPD threshold check.

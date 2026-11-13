@@ -475,8 +475,9 @@ public final class AdmissionEngine {
   /**
    * The address the account links judge an authenticated login on, or empty when that rule stays
    * silent: links off, an address that is not public, a Bedrock player whose real address is
-   * unknown, an exempted network or player. A Floodgate player is judged on its real address; a
-   * connection from Geyser that is not a Floodgate player on the address it came from.
+   * unknown, a connection from Geyser that is not a Floodgate player (an anomaly the other rules
+   * report; Geyser's address links nobody), an exempted network or player. A Floodgate player is
+   * judged on its real address.
    *
    * @param authenticated the login
    * @return the address, unwrapped like the lists read it
@@ -486,8 +487,8 @@ public final class AdmissionEngine {
       return Optional.empty();
     }
     InetAddress judged = authenticated.remote();
-    if (fromGeyser(authenticated) && authenticated.floodgatePlayer()) {
-      judged = bedrockReal(authenticated);
+    if (fromGeyser(authenticated)) {
+      judged = authenticated.floodgatePlayer() ? bedrockReal(authenticated) : null;
       if (judged == null) {
         return Optional.empty();
       }
@@ -502,22 +503,35 @@ public final class AdmissionEngine {
    * The links of an entering account, from what the store knows around it. Only the accounts seen
    * on ITS address or ITS network are linked: there is no transitivity.
    *
+   * <p>A banned account stops being seen the day it is banned, so its strong window runs from the
+   * later of its last sighting and its ban. An address of a refused or signalled class, or whose
+   * autonomous system names a hosting keyword, is shared by strangers: it links WEAKLY at most.
+   *
    * @param self the entering account
+   * @param judged the address the login is judged on
    * @param facts the sightings around it and its household
+   * @param bans the accounts under a network ban in force (empty when not read yet)
    * @param now the time the windows are counted back from
    * @return one link per other account, the strongest that applies
    */
-  public List<Link> linksOf(final UUID self, final LinkFacts facts, final Instant now) {
+  public List<Link> linksOf(final UUID self, final InetAddress judged, final LinkFacts facts,
+      final Map<UUID, BanLookup.ActiveBan> bans, final Instant now) {
     final LinkSettings settings = this.config.links();
-    final boolean shared = accountsOnAddress(self, facts, now) > settings.sharedAddressAccounts();
+    final boolean shared = accountsOnAddress(self, facts, now) > settings.sharedAddressAccounts()
+        || this.classifier.classify(judged).isPresent()
+        || keywordSignal(judged, Origin.DIRECT).isPresent();
     final Instant strongSince = now.minus(settings.strongWindow());
     final Instant weakSince = now.minus(settings.weakWindow());
     final Instant addressSince = now.minus(LinkSettings.ADDRESS_HISTORY);
     final Map<UUID, Link.Strength> links = new LinkedHashMap<>();
     facts.onAddress().forEach((account, seen) -> {
       if (!account.equals(self) && !seen.isBefore(addressSince)) {
+        final BanLookup.ActiveBan ban = bans.get(account);
+        final Instant anchor =
+            ban != null && ban.createdAt().isAfter(seen) ? ban.createdAt() : seen;
         links.put(account, facts.household().contains(account) ? Link.Strength.HOUSEHOLD
-            : !shared && !seen.isBefore(strongSince) ? Link.Strength.STRONG : Link.Strength.WEAK);
+            : !shared && !anchor.isBefore(strongSince) ? Link.Strength.STRONG
+                : Link.Strength.WEAK);
       }
     });
     facts.onNetwork().forEach((account, seen) -> {
@@ -535,9 +549,11 @@ public final class AdmissionEngine {
    * beforehand.
    *
    * <ul>
-   *   <li>A STRONG link to an account under a network ban in force: refused ({@code enforce}) or
-   *       observed, {@value Verdict#LINKED_BAN_CODE}.</li>
-   *   <li>A WEAK link to such an account: admitted, journaled, told to the staff.</li>
+   *   <li>A STRONG link to an account under a network ban in force, from an account first seen
+   *       after that ban: refused ({@code enforce}) or observed, {@value Verdict#LINKED_BAN_CODE}.
+   *       </li>
+   *   <li>A WEAK link to such an account, or a STRONG one from an account already known before the
+   *       ban: admitted, journaled, told to the staff.</li>
    *   <li>More distinct accounts on the address than {@code max-accounts-per-household} (the
    *       entrant's household counted once): admitted, journaled, told to the staff.</li>
    *   <li>Otherwise, or when the banned account is of the entrant's declared household: a clean
@@ -547,25 +563,28 @@ public final class AdmissionEngine {
    * @param authenticated the login
    * @param judged the address from {@link #linkSubject}
    * @param facts the sightings around the account and its household
-   * @param activeBans the linked accounts under a network ban in force, with the ban's id
+   * @param activeBans the linked accounts under a network ban in force, with the ban
    * @param now the time the windows are counted back from
    * @return the verdict
    */
   public Verdict decideLinks(final Attempt authenticated, final InetAddress judged,
-      final LinkFacts facts, final Map<UUID, Long> activeBans, final Instant now) {
+      final LinkFacts facts, final Map<UUID, BanLookup.ActiveBan> activeBans, final Instant now) {
     final UUID self = authenticated.uuid();
     final Origin origin = fromGeyser(authenticated) && authenticated.floodgatePlayer()
         ? Origin.GEYSER_FLOODGATE : Origin.DIRECT;
     final int accounts = accountsOnAddress(self, facts, now);
+    final Instant firstSeen = facts.firstSeen();
     Verdict weak = null;
-    for (Link link : linksOf(self, facts, now)) {
-      final Long ban = activeBans.get(link.account());
+    for (Link link : linksOf(self, judged, facts, activeBans, now)) {
+      final BanLookup.ActiveBan ban = activeBans.get(link.account());
       if (ban == null || link.strength() == Link.Strength.HOUSEHOLD) {
         continue;
       }
       final LinkEvidence evidence =
-          new LinkEvidence(link.strength(), link.account(), ban, accounts);
-      if (link.strength() == Link.Strength.STRONG) {
+          new LinkEvidence(link.strength(), link.account(), ban.id(), accounts);
+      // Only an account born after the ban can be its way back in; one known before is told only.
+      final boolean newcomer = firstSeen == null || !firstSeen.isBefore(ban.createdAt());
+      if (link.strength() == Link.Strength.STRONG && newcomer) {
         final Action action = this.config.linksMode() == AdmissionConfig.Mode.ENFORCE
             ? Action.REFUSE : Action.OBSERVE;
         return named(new Verdict(action, Basis.LINKED_BAN, origin, judged, null, null, null,

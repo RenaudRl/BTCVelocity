@@ -126,7 +126,23 @@ public final class JdbcLinkStore implements LinkStore {
           }
         }
       }
-      return new LinkFacts(onAddress, onNetwork, household);
+      return new LinkFacts(onAddress, onNetwork, household, firstSeen(connection,
+          entering.account()));
+    }
+  }
+
+  private @Nullable Instant firstSeen(final Connection connection, final UUID account)
+      throws SQLException {
+    try (PreparedStatement query = connection.prepareStatement("SELECT MIN(first_seen) FROM "
+        + this.sightings + " WHERE uuid = ?")) {
+      query.setString(1, account.toString());
+      try (ResultSet rows = query.executeQuery()) {
+        if (!rows.next()) {
+          return null;
+        }
+        final long first = rows.getLong(1);
+        return rows.wasNull() ? null : Instant.ofEpochMilli(first);
+      }
     }
   }
 

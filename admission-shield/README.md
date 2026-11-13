@@ -25,19 +25,30 @@ Rapproche les comptes vus depuis la même adresse pour repérer le contournement
 sans gêner une fratrie. Trois niveaux, **sans transitivité** (seuls les comptes de l'adresse du
 joueur comptent, jamais ceux qu'ils ont croisés ailleurs) :
 
-- **FORT** : même adresse exacte vue sous `strong-window-days` (7 j), adresse non partagée (au plus
-  `shared-address-accounts` = 4 comptes en 30 j) ;
-- **FAIBLE** : même adresse plus ancienne ou partagée, ou même /24 (IPv4) ou /64 (IPv6) sous
-  `weak-window-days` ;
+- **FORT** : même adresse (IPv4 exacte, ou même /64 en IPv6 : un abonné y change d'adresse à
+  volonté) vue sous `strong-window-days` (7 j), comptés depuis le **plus tardif** du dernier
+  passage et du ban (un banni n'est plus vu après son ban) ; adresse non partagée (au plus
+  `shared-address-accounts` = 4 comptes en 30 j), ni listée (vpn, datacenter, Tor, système de
+  `deny-asns`), ni nommée par un mot de `asn.observe-keywords` ;
+- **FAIBLE** : même adresse plus ancienne, partagée, listée ou d'hébergeur, ou même /24 (IPv4) ou
+  /48 (IPv6) sous `weak-window-days` ;
 - **FOYER** : déclaré par le staff (`/admission household add <a> <b> [raison]`) ; jamais refusé ni
   signalé pour un membre banni.
 
-**Seul refus** : un lien FORT avec un compte sous **ban réseau actif** de Sentinel, en `enforce`,
-code **`ADM-ALT-BAN`** (texte `messages.linked-ban`, bilingue). En `observe` (le mode à l'allumage,
-et toujours si le module entier est en `observe`) la même situation est journalisée
-`decision=observed`. Un lien FAIBLE avec un banni, ou plus de `max-accounts-per-household` comptes
-sur une adresse (un foyer compté une fois), est **admis**, journalisé et signalé au staff. Jamais
-de ban automatique.
+**Seul refus** : un lien FORT avec un compte sous **ban réseau actif** de Sentinel, depuis un compte
+**vu pour la première fois après ce ban**, en `enforce`, code **`ADM-ALT-BAN`** (texte
+`messages.linked-ban`, bilingue). Un compte déjà connu avant le ban (la sœur qui jouait déjà) est
+seulement signalé, même sans foyer déclaré. En `observe` (le mode à l'allumage, et toujours si le
+module entier est en `observe`) la même situation est journalisée `decision=observed`. Un lien
+FAIBLE avec un banni, ou plus de `max-accounts-per-household` comptes sur une adresse (un foyer
+compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ban automatique.
+
+- **Une connexion Java venue d'une adresse Geyser** (`geyser-addresses`) n'est jamais jugée ni
+  enregistrée ici : l'adresse de Geyser ne lie personne.
+- **Comptes admis en `observe`** : un compte qui aurait été refusé en `enforce` entre, est
+  enregistré, et compte ensuite parmi les comptes de l'adresse (« adresse partagée »,
+  `max-accounts-per-household`). Un essai à blanc prolongé peut donc rendre une adresse partagée,
+  et ses liens FAIBLES, au passage en `enforce`.
 
 - **Ban réseau actif** : lu en LECTURE SEULE dans `<prefix>sanctions` de Sentinel : `type = 'BAN'`,
   `scope = 'NETWORK'`, `network_id` = `links.database.network-id`, `revoked_at IS NULL`,

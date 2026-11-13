@@ -53,7 +53,9 @@ class MemoryLinkStore implements LinkStore {
     return new LinkFacts(
         seen((row, since) -> Arrays.equals(row.ip(), entering.ipDigest()), addressSince),
         seen((row, since) -> Arrays.equals(row.net(), entering.netDigest()), networkSince),
-        household);
+        household,
+        this.rows.stream().filter(row -> row.account().equals(entering.account()))
+            .map(Row::first).min(Instant::compareTo).orElse(null));
   }
 
   private Map<UUID, Instant> seen(final BiPredicate<Row, Instant> matches, final Instant since) {

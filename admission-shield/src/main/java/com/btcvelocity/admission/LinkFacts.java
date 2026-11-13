@@ -21,19 +21,24 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 
 /**
  * What the store knows around an entering account: who was seen on its address and on its
- * network, and who shares its declared household. The rule turns this into {@link Link}s.
+ * network, who shares its declared household, and since when the account itself is known. The
+ * rule turns this into {@link Link}s.
  *
- * @param onAddress the accounts seen on the same exact address, with when they were last seen
- *     there (bounded to the address history; the entering account may be among them)
- * @param onNetwork the accounts seen on the same /24 or /64, with when they were last seen there
+ * @param onAddress the accounts seen on the same address (/32 in IPv4, /64 in IPv6), with when
+ *     they were last seen there (bounded to the address history; the entering account may be
+ *     among them)
+ * @param onNetwork the accounts seen on the same /24 or /48, with when they were last seen there
  * @param household the accounts declared in the same household as the entering one (itself
  *     included when it has one)
+ * @param firstSeen the oldest sighting of the entering account, anywhere, or {@code null} when it
+ *     was never accepted before
  */
 public record LinkFacts(Map<UUID, Instant> onAddress, Map<UUID, Instant> onNetwork,
-    Set<UUID> household) {
+    Set<UUID> household, @Nullable Instant firstSeen) {
 
   /** Nothing known: the address and the network were never seen, no household. */
   public static final LinkFacts NONE = new LinkFacts(Map.of(), Map.of(), Set.of());
@@ -41,13 +46,26 @@ public record LinkFacts(Map<UUID, Instant> onAddress, Map<UUID, Instant> onNetwo
   /**
    * Creates the facts, copied.
    *
-   * @param onAddress the accounts seen on the same exact address
+   * @param onAddress the accounts seen on the same address
    * @param onNetwork the accounts seen on the same network
    * @param household the accounts of the same declared household
+   * @param firstSeen the oldest sighting of the entering account, or {@code null}
    */
   public LinkFacts {
     onAddress = Map.copyOf(onAddress);
     onNetwork = Map.copyOf(onNetwork);
     household = Set.copyOf(household);
+  }
+
+  /**
+   * Facts about an account never seen before.
+   *
+   * @param onAddress the accounts seen on the same address
+   * @param onNetwork the accounts seen on the same network
+   * @param household the accounts of the same declared household
+   */
+  public LinkFacts(final Map<UUID, Instant> onAddress, final Map<UUID, Instant> onNetwork,
+      final Set<UUID> household) {
+    this(onAddress, onNetwork, household, null);
   }
 }

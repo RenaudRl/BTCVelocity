@@ -20,6 +20,7 @@ package com.btcvelocity.admission;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -47,14 +48,18 @@ class LinkStorageSqlTest {
 
   @Test
   void aBanInForceIsANetworkBanOfThisNetworkNeitherRevokedNorExpired() throws SQLException {
-    final FakeJdbc db = new FakeJdbc().answer(new Object[] {BANNED.toString(), 42L});
+    final Instant pronounced = NOW.minusSeconds(3600);
+    final FakeJdbc db = new FakeJdbc()
+        .answer(new Object[] {BANNED.toString(), 42L, pronounced.toEpochMilli()});
 
-    final Map<UUID, Long> bans = new JdbcBanLookup(db.dataSource(), "btc_", "borntocraft")
-        .activeNetworkBans(Set.of(BANNED), NOW);
+    final Map<UUID, BanLookup.ActiveBan> bans =
+        new JdbcBanLookup(db.dataSource(), "btc_", "borntocraft")
+            .activeNetworkBans(Set.of(BANNED), NOW);
 
-    assertEquals(Map.of(BANNED, 42L), bans);
+    assertEquals(Map.of(BANNED, new BanLookup.ActiveBan(42L, pronounced)), bans);
     final FakeJdbc.Call call = db.calls.getFirst();
-    for (String predicate : List.of("FROM btc_sanctions", "player_uuid = ANY (?)", "type = 'BAN'",
+    for (String predicate : List.of("MAX(created_at)", "FROM btc_sanctions",
+        "player_uuid = ANY (?)", "type = 'BAN'",
         "scope = 'NETWORK'", "network_id = ?", "revoked_at IS NULL",
         "(expires_at IS NULL OR expires_at > ?)")) {
       assertTrue(call.sql().contains(predicate), predicate + " in " + call.sql());
@@ -114,16 +119,25 @@ class LinkStorageSqlTest {
     final FakeJdbc db = new FakeJdbc()
         .answer(new Object[] {SISTER.toString(), NOW.minusSeconds(60).toEpochMilli()})
         .answer(new Object[] {BANNED.toString(), NOW.minusSeconds(120).toEpochMilli()})
-        .answer(new Object[] {SISTER.toString()});
+        .answer(new Object[] {SISTER.toString()})
+        .answer(new Object[] {NOW.minusSeconds(86_400).toEpochMilli()});
     final Instant addressSince = NOW.minus(LinkSettings.ADDRESS_HISTORY);
     final Instant networkSince = NOW.minusSeconds(3600);
 
     final LinkFacts facts = new JdbcLinkStore(db.dataSource(), "btc_")
         .factsFor(SEEN, addressSince, networkSince);
+    final LinkFacts unknown = new JdbcLinkStore(new FakeJdbc().answer().answer().answer()
+        .answer(new Object[] {null}).dataSource(), "btc_").factsFor(SEEN, addressSince,
+        networkSince);
 
     assertEquals(Map.of(SISTER, NOW.minusSeconds(60)), facts.onAddress());
     assertEquals(Map.of(BANNED, NOW.minusSeconds(120)), facts.onNetwork());
     assertEquals(Set.of(SISTER), facts.household());
+    assertEquals(NOW.minusSeconds(86_400), facts.firstSeen());
+    assertTrue(db.calls.get(3).sql().contains("MIN(first_seen) FROM btc_admission_sightings"
+        + " WHERE uuid = ?"), db.calls.get(3).sql());
+    assertEquals(ENTRANT.toString(), db.calls.get(3).params().get(1));
+    assertNull(unknown.firstSeen(),"MIN over no row is NULL: never seen");
     final List<FakeJdbc.Call> calls = db.calls;
     assertTrue(calls.get(0).sql().contains("WHERE ip_digest = ?"), calls.get(0).sql());
     assertArrayEquals(SEEN.ipDigest(), (byte[]) calls.get(0).params().get(1));

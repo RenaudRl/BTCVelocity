@@ -102,11 +102,21 @@ final class FakeJdbc {
 
   private static ResultSet rows(final List<Object[]> rows) {
     final int[] cursor = {-1};
-    return proxy(ResultSet.class, (method, args) -> switch (method) {
-      case "next" -> ++cursor[0] < rows.size();
-      case "getString" -> (String) rows.get(cursor[0])[(Integer) args[0] - 1];
-      case "getLong" -> ((Number) rows.get(cursor[0])[(Integer) args[0] - 1]).longValue();
-      default -> null;
+    final boolean[] wasNull = {false};
+    return proxy(ResultSet.class, (method, args) -> {
+      final Object value = method.startsWith("get") && args[0] instanceof Integer column
+          ? rows.get(cursor[0])[column - 1] : null;
+      if (method.startsWith("get")) {
+        wasNull[0] = value == null;
+      }
+      return switch (method) {
+        case "next" -> ++cursor[0] < rows.size();
+        case "wasNull" -> wasNull[0];
+        case "getString" -> (String) value;
+        // JDBC reads an SQL NULL as 0 and tells it by wasNull().
+        case "getLong" -> value == null ? 0L : ((Number) value).longValue();
+        default -> null;
+      };
     });
   }
 

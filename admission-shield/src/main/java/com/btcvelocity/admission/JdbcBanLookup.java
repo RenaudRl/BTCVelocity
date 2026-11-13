@@ -35,6 +35,7 @@ import javax.sql.DataSource;
  * <p>A ban in force is the predicate of Sentinel's own {@code SanctionService}: {@code type} is
  * {@code BAN}, {@code scope} is {@code NETWORK}, {@code network_id} is this network,
  * {@code revoked_at} is null and {@code expires_at} (epoch millis) is null or later than now.
+ * {@code created_at} (epoch millis) dates the latest of them.
  */
 public final class JdbcBanLookup implements BanLookup {
 
@@ -55,16 +56,16 @@ public final class JdbcBanLookup implements BanLookup {
     }
     this.database = database;
     this.networkId = networkId;
-    this.sql = "SELECT player_uuid, MAX(id) FROM " + prefix + "sanctions"
+    this.sql = "SELECT player_uuid, MAX(id), MAX(created_at) FROM " + prefix + "sanctions"
         + " WHERE player_uuid = ANY (?) AND type = 'BAN' AND scope = 'NETWORK'"
         + " AND network_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)"
         + " GROUP BY player_uuid";
   }
 
   @Override
-  public Map<UUID, Long> activeNetworkBans(final Set<UUID> accounts, final Instant now)
+  public Map<UUID, ActiveBan> activeNetworkBans(final Set<UUID> accounts, final Instant now)
       throws SQLException {
-    final Map<UUID, Long> banned = new HashMap<>();
+    final Map<UUID, ActiveBan> banned = new HashMap<>();
     if (accounts.isEmpty()) {
       return banned;
     }
@@ -77,7 +78,8 @@ public final class JdbcBanLookup implements BanLookup {
       query.setLong(3, now.toEpochMilli());
       try (ResultSet rows = query.executeQuery()) {
         while (rows.next()) {
-          banned.put(UUID.fromString(rows.getString(1)), rows.getLong(2));
+          banned.put(UUID.fromString(rows.getString(1)),
+              new ActiveBan(rows.getLong(2), Instant.ofEpochMilli(rows.getLong(3))));
         }
       } finally {
         uuids.free();
