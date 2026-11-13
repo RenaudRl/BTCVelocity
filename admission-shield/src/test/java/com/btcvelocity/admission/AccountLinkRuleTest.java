@@ -205,10 +205,10 @@ class AccountLinkRuleTest {
 
   @Test
   void anAccountMadeBetweenTwoBansIsNewToTheFirstOne() {
-    // Banned 20 days ago and again yesterday, last seen 25 days ago; the entrant appeared 10 days
-    // ago: after the first ban, so it is not a sibling who played before it.
-    final LinkFacts betweenTheBans = new LinkFacts(Map.of(BANNED, daysAgo(25)),
-        Map.of(BANNED, daysAgo(25)), Set.of(), daysAgo(10));
+    // Banned 20 days ago and again yesterday, last seen 5 days ago on this address; the entrant
+    // appeared 10 days ago: after the first ban, so it is not a sibling who played before it.
+    final LinkFacts betweenTheBans = new LinkFacts(Map.of(BANNED, daysAgo(5)),
+        Map.of(BANNED, daysAgo(5)), Set.of(), daysAgo(10));
     final Map<UUID, BanLookup.ActiveBan> twoBans =
         Map.of(BANNED, new BanLookup.ActiveBan(43L, daysAgo(20), daysAgo(1)));
 
@@ -217,6 +217,22 @@ class AccountLinkRuleTest {
 
     assertEquals(Action.REFUSE, verdict.action(), "first seen between the two bans");
     assertEquals(Link.Strength.STRONG, verdict.links().strength(), "window from the latest ban");
+  }
+
+  @Test
+  void anAddressTheBannedLeftLongBeforeItsBanIsNotRearmedByTheBan() {
+    // Seen on this address 25 days ago, the address was reassigned since, banned yesterday: the
+    // strong window runs from the last sighting plus its length, not from the ban.
+    final LinkFacts reassigned = sameAddress(Map.of(BANNED, daysAgo(25)));
+    final Map<UUID, BanLookup.ActiveBan> bannedYesterday =
+        Map.of(BANNED, new BanLookup.ActiveBan(42L, daysAgo(1)));
+
+    final Verdict verdict = engine("enforce").decideLinks(login(NEWCOMER), HOME, reassigned,
+        bannedYesterday, NOW);
+
+    assertEquals(Action.ADMIT, verdict.action());
+    assertEquals(Basis.LINKED_ACCOUNT, verdict.basis());
+    assertEquals(Link.Strength.WEAK, verdict.links().strength());
   }
 
   @Test

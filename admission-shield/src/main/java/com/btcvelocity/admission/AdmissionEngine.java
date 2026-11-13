@@ -503,8 +503,9 @@ public final class AdmissionEngine {
    * The links of an entering account, from what the store knows around it. Only the accounts seen
    * on ITS address or ITS network are linked: there is no transitivity.
    *
-   * <p>A banned account stops being seen the day it is banned, so its strong window runs from the
-   * later of its last sighting and its latest ban in force. An address of a refused or signalled class, or whose
+   * <p>A banned account stops being seen the day it is banned, so its strong window runs from its
+   * last sighting on the address, extended to its latest ban in force by at most one strong window:
+   * the banned must have been seen there at most one window before the anchor. An address of a refused or signalled class, or whose
    * autonomous system names a hosting keyword, is shared by strangers: it links WEAKLY at most.
    *
    * @param self the entering account
@@ -527,8 +528,10 @@ public final class AdmissionEngine {
     facts.onAddress().forEach((account, seen) -> {
       if (!account.equals(self) && !seen.isBefore(addressSince)) {
         final BanLookup.ActiveBan ban = bans.get(account);
-        final Instant anchor =
-            ban != null && ban.latest().isAfter(seen) ? ban.latest() : seen;
+        // The ban extends the window only from the last sighting on this address, by one window at
+        // most: an address the banned left long ago is not re-armed by a recent ban.
+        final Instant anchor = ban != null && ban.latest().isAfter(seen)
+            ? min(ban.latest(), seen.plus(settings.strongWindow())) : seen;
         links.put(account, facts.household().contains(account) ? Link.Strength.HOUSEHOLD
             : !shared && !anchor.isBefore(strongSince) ? Link.Strength.STRONG
                 : Link.Strength.WEAK);
@@ -607,6 +610,10 @@ public final class AdmissionEngine {
           null, null, new LinkEvidence(null, null, null, accounts)));
     }
     return new Verdict(Action.ADMIT, Basis.CLEAN, origin, judged, null, null);
+  }
+
+  private static Instant min(final Instant first, final Instant second) {
+    return first.isBefore(second) ? first : second;
   }
 
   /** The distinct accounts seen on the address over the address history, the entrant included. */

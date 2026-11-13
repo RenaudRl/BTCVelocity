@@ -26,8 +26,10 @@ sans gêner une fratrie. Trois niveaux, **sans transitivité** (seuls les compte
 joueur comptent, jamais ceux qu'ils ont croisés ailleurs) :
 
 - **FORT** : même adresse (IPv4 exacte, ou même /64 en IPv6 : un abonné y change d'adresse à
-  volonté) vue sous `strong-window-days` (7 j), comptés depuis le **plus tardif** du dernier
-  passage et du ban (un banni n'est plus vu après son ban) ; adresse non partagée (au plus
+  volonté) vue sous `strong-window-days` (7 j), comptés depuis le dernier passage du banni sur
+  cette adresse, prolongé jusqu'à son ban d'au plus `strong-window-days` (un banni n'est plus vu
+  après son ban, mais une adresse qu'il a quittée depuis longtemps n'est pas réarmée par un ban
+  récent : il doit y avoir été vu au plus 7 j avant le ban) ; adresse non partagée (au plus
   `shared-address-accounts` = 4 comptes en 30 j), ni listée (vpn, datacenter, Tor, système de
   `deny-asns`), ni nommée par un mot de `asn.observe-keywords` ;
 - **FAIBLE** : même adresse plus ancienne, partagée, listée ou d'hébergeur, ou même /24 (IPv4) ou
