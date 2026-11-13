@@ -32,6 +32,7 @@ import org.jspecify.annotations.Nullable;
  * @param sourceId the list that named that class, or {@code null}
  * @param asn the autonomous system of the judged address, when the database knows it; carried by
  *     the verdicts that are written down, so the journal and {@code /admission why} can name it
+ * @param links why an account-link verdict was given, {@code null} for every other verdict
  */
 public record Verdict(
     Action action,
@@ -40,7 +41,25 @@ public record Verdict(
     @Nullable InetAddress judged,
     @Nullable IpClass ipClass,
     @Nullable String sourceId,
-    AsnDatabase.@Nullable Info asn) {
+    AsnDatabase.@Nullable Info asn,
+    @Nullable LinkEvidence links) {
+
+  /**
+   * Creates a verdict that is not about account links.
+   *
+   * @param action what to do with the connection
+   * @param basis why
+   * @param origin how the connection reached the proxy
+   * @param judged the address that was judged, or {@code null}
+   * @param ipClass the class the address was found in, or {@code null}
+   * @param sourceId the list that named that class, or {@code null}
+   * @param asn the autonomous system of the judged address, or {@code null}
+   */
+  public Verdict(final Action action, final Basis basis, final Origin origin,
+      final @Nullable InetAddress judged, final @Nullable IpClass ipClass,
+      final @Nullable String sourceId, final AsnDatabase.@Nullable Info asn) {
+    this(action, basis, origin, judged, ipClass, sourceId, asn, null);
+  }
 
   /**
    * Creates a verdict that does not name an autonomous system.
@@ -66,11 +85,14 @@ public record Verdict(
    */
   public Verdict withAsn(final AsnDatabase.@Nullable Info system) {
     return new Verdict(this.action, this.basis, this.origin, this.judged, this.ipClass,
-        this.sourceId, system);
+        this.sourceId, system, this.links);
   }
 
   /** The cause code of a connection turned away for coming too often from one network. */
   public static final String RATE_NETWORK_CODE = "ADM-RATE-NET";
+
+  /** The cause code of a connection turned away for a strong link to a network-banned account. */
+  public static final String LINKED_BAN_CODE = "ADM-ALT-BAN";
 
   /** What happens to the connection. */
   public enum Action {
@@ -140,7 +162,16 @@ public record Verdict(
      * The address is in the {@code vpn} list (a known VPN service) and in no list that refuses. A
      * signal for the staff, never a refusal: the connection is admitted.
      */
-    VPN_SIGNAL("vpn-signal");
+    VPN_SIGNAL("vpn-signal"),
+    /**
+     * A STRONG link (same address, recently, not shared) to an account under a network ban in
+     * force: refused in {@code enforce}, observed otherwise.
+     */
+    LINKED_BAN("linked-ban"),
+    /** A WEAK link to an account under a network ban in force. A signal, never a refusal. */
+    LINKED_ACCOUNT("linked-account"),
+    /** More distinct accounts on the address than {@code max-accounts-per-household}. A signal. */
+    ACCOUNTS_PER_ADDRESS("accounts-per-address");
 
     private final String label;
 
@@ -170,7 +201,8 @@ public record Verdict(
   public boolean isJournaled() {
     return switch (this.basis) {
       case LISTED, EXEMPT_NETWORK, EXEMPT_PLAYER, BEDROCK_IP_UNKNOWN,
-          GEYSER_ADDRESS_NOT_FLOODGATE, RATE_NETWORK, ASN_KEYWORD, VPN_SIGNAL -> true;
+          GEYSER_ADDRESS_NOT_FLOODGATE, RATE_NETWORK, ASN_KEYWORD, VPN_SIGNAL, LINKED_BAN,
+          LINKED_ACCOUNT, ACCOUNTS_PER_ADDRESS -> true;
       case CLEAN, GEYSER_ORIGIN, AWAITING_IDENTITY -> false;
     };
   }
@@ -178,12 +210,15 @@ public record Verdict(
   /**
    * The code shown to a player this verdict refuses and written in the journal.
    *
-   * @return {@value #RATE_NETWORK_CODE} for a rate refusal, the class code for a listed address,
-   *     {@code null} when there is no cause to give
+   * @return {@value #RATE_NETWORK_CODE} for a rate refusal, {@value #LINKED_BAN_CODE} for a
+   *     linked ban, the class code for a listed address, {@code null} when there is no cause to give
    */
   public @Nullable String causeCode() {
     if (this.basis == Basis.RATE_NETWORK) {
       return RATE_NETWORK_CODE;
+    }
+    if (this.basis == Basis.LINKED_BAN) {
+      return LINKED_BAN_CODE;
     }
     return this.ipClass == null ? null : this.ipClass.causeCode();
   }

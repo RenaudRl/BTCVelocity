@@ -64,6 +64,9 @@ messages:
   tor: "<red>Connexion refusée.</red>\n<gray>Les connexions depuis le réseau Tor ne sont pas acceptées. Contactez le staff avec le code <white>{code}</white>.</gray>"
   asn: "<red>Connexion refusée.</red>\n<gray>Votre adresse appartient à un fournisseur d'hébergement ou de VPN. Si vous n'utilisez pas de VPN, contactez le staff avec le code <white>{code}</white>.</gray>"
   network-rate: "<red>Connexion refusée.</red>\n<gray>Trop de tentatives de connexion depuis votre réseau. Patientez quelques secondes puis réessayez. Si cela persiste, contactez le staff avec le code <white>{code}</white>.</gray>"
+  # ADM-ALT-BAN (see links below). The player's language is unknown at the login: French and
+  # English together. Never names the linked account.
+  linked-ban: "<red>Connexion refusée / Connection refused.</red>\n<gray>Contactez le staff avec le code / Contact the staff with the code <white>{code}</white>.</gray>"
 
 # BOUND ON CONNECTION ATTEMPTS PER NETWORK (Sentinel 13.4). Independent of the lists above.
 # Every pre-login spends one token of its network: an IPv4 /24 or an IPv6 /48 (6to4, Teredo, NAT64
@@ -218,3 +221,59 @@ lists:
       class: vpn
       url: https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/vpn/ipv6.txt
       file: x4bnet-vpn-ipv6.txt
+
+# ACCOUNT LINKS (Sentinel 16.2). Brings together the accounts that log in from the same address, to
+# spot a network ban dodged with a new account, WITHOUT getting in the way of a family that plays
+# together from one home: declare them a household (/admission household add <a> <b>).
+#
+# Three levels, never transitive (A linked to B and B linked to C never links A to C):
+#   STRONG    : the same exact address within strong-window-days, on an address that is NOT shared
+#               (at most shared-address-accounts distinct accounts on it over 30 days).
+#   WEAK      : the same /24 or /64 within weak-window-days, the same address seen longer ago (up
+#               to 30 days), or a shared address.
+#   HOUSEHOLD : declared by the staff. Never refused, never signalled for it.
+# ONLY a STRONG link to an account under a NETWORK ban in force (Sentinel, not revoked, not
+# expired) refuses, and only in `enforce` (code ADM-ALT-BAN). Everything else is a journal line and
+# a staff message. Nobody is ever banned by this module.
+#
+# What is stored (Sentinel database, tables <prefix>admission_sightings and
+# <prefix>admission_households): for each session a SERVER ACCEPTED, the account UUID and two
+# HMAC-SHA256 digests (the address, its /24 or /64), with first and last seen times. Never the
+# address itself. Kept retention-days after the last sighting, then purged daily.
+# /admission forget <uuid> erases an account. Sentinel's sanctions are only READ.
+# BEFORE `enabled: true`: register of processing (entry n. 3), terms of use, AIPD threshold check.
+links:
+  # false : nothing is read, nothing is recorded.
+  enabled: false
+  # off | observe | enforce.  observe : a strong link to a banned account is journaled
+  # (decision=observed) and told to the staff, the player gets in.  enforce : refused, ADM-ALT-BAN.
+  # The module-wide `mode: observe` also holds this back.
+  mode: observe
+  # Environment variable of the proxy host holding the HMAC key: base64 of at least 32 random bytes
+  # (e.g. `openssl rand -base64 32`). Absent or too short: the links are DISABLED with an ERROR,
+  # the proxy starts anyway. NEVER put the key in a file. Changing or losing it loses the link
+  # history, and nothing else.
+  key-env: BTC_ADMISSION_LINK_KEY
+  database:
+    # The Sentinel database (PostgreSQL). A URL holding a password is refused.
+    jdbc-url: ""
+    # A role owning its two tables, with SELECT only on <prefix>sanctions.
+    username: btc_admission
+    # Environment variable holding that role's password.
+    password-env: BTC_ADMISSION_DB_PASSWORD
+    # Sentinel's table prefix, ^[a-z][a-z0-9_]{0,31}$.
+    table-prefix: btc_
+    # Sentinel's identity.network-id: only the bans of this network count.
+    network-id: borntocraft
+    # A login waits at most this long for the database, then is ADMITTED anyway (fail open).
+    lookup-timeout-ms: 1500
+    max-pool-size: 2
+  strong-window-days: 7
+  weak-window-days: 7
+  # Above this many distinct accounts in 30 days, an address is shared (school, carrier NAT): it
+  # never makes a STRONG link.
+  shared-address-accounts: 4
+  # Above this many distinct accounts in 30 days (the player's household counted once), the login
+  # is signalled to the staff. Never refused.
+  max-accounts-per-household: 5
+  retention-days: 180

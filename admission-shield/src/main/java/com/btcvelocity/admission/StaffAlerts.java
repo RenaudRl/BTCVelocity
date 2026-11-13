@@ -94,6 +94,19 @@ public final class StaffAlerts {
   }
 
   /**
+   * Creates the alerts for the account links that do not refuse (a weak link to a banned account,
+   * a strong one in {@code observe}, too many accounts on one address): their own window and words.
+   *
+   * @param clock the source of "now"
+   * @param sink receives each message, to be shown to the staff online
+   * @return the alerts
+   */
+  public static StaffAlerts forAccountLinks(final Clock clock, final Consumer<String> sink) {
+    return new StaffAlerts(clock, sink, "[Admission] Comptes liés (non refusé) : ",
+        "signaux de comptes liés (non refusés)");
+  }
+
+  /**
    * Counts a refusal, and says it now if the window allows.
    *
    * @param refusal the journal entry of the refusal
@@ -148,7 +161,8 @@ public final class StaffAlerts {
         + " (" + AdmissionJournal.identityOf(entry.phase())
         + ", " + (verdict.judged() == null ? "ip inconnue"
             : Networks.of(verdict.judged(), Networks.STAFF_V4, Networks.STAFF_V6))
-        + ", " + (verdict.ipClass() == null ? "aucune classe" : verdict.ipClass().key())
+        + ", " + (verdict.links() != null ? verdict.basis().label()
+            : verdict.ipClass() == null ? "aucune classe" : verdict.ipClass().key())
         + ", " + (entry.code() == null ? "sans code" : entry.code())
         + asnSuffix(verdict.asn()) + ")."
         + " /admission why pour le détail.";

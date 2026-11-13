@@ -40,7 +40,8 @@ import org.slf4j.Logger;
  *
  * <p>The line is {@code key=value} pairs so that it can be grepped and parsed without a schema:
  * {@code ts, user, identity, uuid, ip, origin, class, source, decision, code, basis, phase, mode}
- * and, when the IP-to-ASN database knows the address, {@code asn, as_name} at the end.
+ * and, when the IP-to-ASN database knows the address, {@code asn, as_name} at the end, then for
+ * an account-link verdict {@code link, linked, sanction, accounts}.
  * {@code identity} says whether {@code user} is only {@code declared} (pre-login) or
  * {@code authenticated}. It goes to a logger of its own ({@value #LOGGER_NAME}), so the proxy's
  * logging configuration can route it to a file of its own.
@@ -114,7 +115,30 @@ public final class AdmissionJournal {
       append(line, "phase", this.phase.label());
       append(line, "mode", this.mode.name().toLowerCase(Locale.ROOT));
       appendAsn(line, judgement.asn());
+      appendLinks(line, judgement.links());
       return line.toString().trim();
+    }
+
+    /**
+     * The account link behind the verdict, last: {@code link} (strong, weak), {@code linked} (the
+     * other account, shortened like {@code uuid}), {@code sanction} (the id of its network ban) and
+     * {@code accounts} (distinct accounts on the address). Never the other account's address.
+     */
+    private static void appendLinks(final StringBuilder line,
+        final @Nullable LinkEvidence links) {
+      if (links == null) {
+        return;
+      }
+      if (links.strength() != null) {
+        append(line, "link", links.strength().label());
+      }
+      if (links.linked() != null) {
+        append(line, "linked", links.linked().toString().substring(0, UUID_LOGGED_LENGTH));
+      }
+      if (links.sanctionId() != null) {
+        append(line, "sanction", Long.toString(links.sanctionId()));
+      }
+      append(line, "accounts", Integer.toString(links.accountsOnAddress()));
     }
 
     private static void append(final StringBuilder line, final String key, final String value) {
@@ -294,7 +318,8 @@ public final class AdmissionJournal {
     final InetAddress judged = entry.verdict().judged();
     final Verdict.Basis basis = entry.verdict().basis();
     if ((basis != Verdict.Basis.LISTED && basis != Verdict.Basis.RATE_NETWORK
-        && basis != Verdict.Basis.ASN_KEYWORD && basis != Verdict.Basis.VPN_SIGNAL)
+        && basis != Verdict.Basis.ASN_KEYWORD && basis != Verdict.Basis.VPN_SIGNAL
+        && basis != Verdict.Basis.ACCOUNTS_PER_ADDRESS)
         || judged == null) {
       return true;
     }

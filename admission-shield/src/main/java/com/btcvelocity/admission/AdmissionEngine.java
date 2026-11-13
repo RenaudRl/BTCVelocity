@@ -22,7 +22,14 @@ import com.btcvelocity.admission.Verdict.Basis;
 import com.btcvelocity.admission.Verdict.Origin;
 import java.net.InetAddress;
 import java.time.Clock;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -219,6 +226,18 @@ public final class AdmissionEngine {
     return attempt.viaGeyserListener() || this.config.geyserAddresses().contains(attempt.remote());
   }
 
+  /**
+   * The real address of a Floodgate player, or {@code null} when it is unknown or is Geyser's own.
+   */
+  private @Nullable InetAddress bedrockReal(final Attempt attempt) {
+    InetAddress real = attempt.bedrockReal();
+    if (real == null && attempt.viaGeyserListener()) {
+      // PROXY protocol: the address of this connection already is the player's real one.
+      real = attempt.remote();
+    }
+    return real == null || this.config.geyserAddresses().contains(real) ? null : real;
+  }
+
   private Verdict decideOn(final Attempt attempt, final Phase phase,
       final IpClassifier lists) {
     InetAddress judged = attempt.remote();
@@ -229,12 +248,8 @@ public final class AdmissionEngine {
             null, null);
       }
       if (attempt.floodgatePlayer()) {
-        InetAddress real = attempt.bedrockReal();
-        if (real == null && attempt.viaGeyserListener()) {
-          // PROXY protocol: the address of this connection already is the player's real one.
-          real = attempt.remote();
-        }
-        if (real == null || this.config.geyserAddresses().contains(real)) {
+        final InetAddress real = bedrockReal(attempt);
+        if (real == null) {
           return new Verdict(Action.ADMIT, Basis.BEDROCK_IP_UNKNOWN, Origin.GEYSER_FLOODGATE, null,
               null, null);
         }
@@ -455,6 +470,131 @@ public final class AdmissionEngine {
 
   private Verdict rateVerdict(final Action action, final Basis basis, final Attempt attempt) {
     return named(new Verdict(action, basis, Origin.DIRECT, attempt.remote(), null, null));
+  }
+
+  /**
+   * The address the account links judge an authenticated login on, or empty when that rule stays
+   * silent: links off, an address that is not public, a Bedrock player whose real address is
+   * unknown, an exempted network or player. A Floodgate player is judged on its real address; a
+   * connection from Geyser that is not a Floodgate player on the address it came from.
+   *
+   * @param authenticated the login
+   * @return the address, unwrapped like the lists read it
+   */
+  public Optional<InetAddress> linkSubject(final Attempt authenticated) {
+    if (!this.config.links().enabled() || authenticated.uuid() == null) {
+      return Optional.empty();
+    }
+    InetAddress judged = authenticated.remote();
+    if (fromGeyser(authenticated) && authenticated.floodgatePlayer()) {
+      judged = bedrockReal(authenticated);
+      if (judged == null) {
+        return Optional.empty();
+      }
+    }
+    if (exemptionOf(authenticated, Phase.LOGIN, judged) != Exemption.NONE) {
+      return Optional.empty();
+    }
+    return AddressPolicy.classifiable(judged);
+  }
+
+  /**
+   * The links of an entering account, from what the store knows around it. Only the accounts seen
+   * on ITS address or ITS network are linked: there is no transitivity.
+   *
+   * @param self the entering account
+   * @param facts the sightings around it and its household
+   * @param now the time the windows are counted back from
+   * @return one link per other account, the strongest that applies
+   */
+  public List<Link> linksOf(final UUID self, final LinkFacts facts, final Instant now) {
+    final LinkSettings settings = this.config.links();
+    final boolean shared = accountsOnAddress(self, facts, now) > settings.sharedAddressAccounts();
+    final Instant strongSince = now.minus(settings.strongWindow());
+    final Instant weakSince = now.minus(settings.weakWindow());
+    final Instant addressSince = now.minus(LinkSettings.ADDRESS_HISTORY);
+    final Map<UUID, Link.Strength> links = new LinkedHashMap<>();
+    facts.onAddress().forEach((account, seen) -> {
+      if (!account.equals(self) && !seen.isBefore(addressSince)) {
+        links.put(account, facts.household().contains(account) ? Link.Strength.HOUSEHOLD
+            : !shared && !seen.isBefore(strongSince) ? Link.Strength.STRONG : Link.Strength.WEAK);
+      }
+    });
+    facts.onNetwork().forEach((account, seen) -> {
+      if (!account.equals(self) && !seen.isBefore(weakSince) && !links.containsKey(account)) {
+        links.put(account, facts.household().contains(account) ? Link.Strength.HOUSEHOLD
+            : Link.Strength.WEAK);
+      }
+    });
+    return links.entrySet().stream().map(link -> new Link(link.getKey(), link.getValue()))
+        .toList();
+  }
+
+  /**
+   * Judges an authenticated login on its account links. Pure: the facts and the bans are read
+   * beforehand.
+   *
+   * <ul>
+   *   <li>A STRONG link to an account under a network ban in force: refused ({@code enforce}) or
+   *       observed, {@value Verdict#LINKED_BAN_CODE}.</li>
+   *   <li>A WEAK link to such an account: admitted, journaled, told to the staff.</li>
+   *   <li>More distinct accounts on the address than {@code max-accounts-per-household} (the
+   *       entrant's household counted once): admitted, journaled, told to the staff.</li>
+   *   <li>Otherwise, or when the banned account is of the entrant's declared household: a clean
+   *       admission.</li>
+   * </ul>
+   *
+   * @param authenticated the login
+   * @param judged the address from {@link #linkSubject}
+   * @param facts the sightings around the account and its household
+   * @param activeBans the linked accounts under a network ban in force, with the ban's id
+   * @param now the time the windows are counted back from
+   * @return the verdict
+   */
+  public Verdict decideLinks(final Attempt authenticated, final InetAddress judged,
+      final LinkFacts facts, final Map<UUID, Long> activeBans, final Instant now) {
+    final UUID self = authenticated.uuid();
+    final Origin origin = fromGeyser(authenticated) && authenticated.floodgatePlayer()
+        ? Origin.GEYSER_FLOODGATE : Origin.DIRECT;
+    final int accounts = accountsOnAddress(self, facts, now);
+    Verdict weak = null;
+    for (Link link : linksOf(self, facts, now)) {
+      final Long ban = activeBans.get(link.account());
+      if (ban == null || link.strength() == Link.Strength.HOUSEHOLD) {
+        continue;
+      }
+      final LinkEvidence evidence =
+          new LinkEvidence(link.strength(), link.account(), ban, accounts);
+      if (link.strength() == Link.Strength.STRONG) {
+        final Action action = this.config.linksMode() == AdmissionConfig.Mode.ENFORCE
+            ? Action.REFUSE : Action.OBSERVE;
+        return named(new Verdict(action, Basis.LINKED_BAN, origin, judged, null, null, null,
+            evidence));
+      }
+      if (weak == null) {
+        weak = new Verdict(Action.ADMIT, Basis.LINKED_ACCOUNT, origin, judged, null, null, null,
+            evidence);
+      }
+    }
+    if (weak != null) {
+      return named(weak);
+    }
+    final Set<UUID> household = facts.household();
+    final long ownHousehold = facts.onAddress().keySet().stream()
+        .filter(account -> !account.equals(self) && household.contains(account)).count();
+    if (accounts - ownHousehold > this.config.links().maxAccountsPerAddress()) {
+      return named(new Verdict(Action.ADMIT, Basis.ACCOUNTS_PER_ADDRESS, origin, judged, null,
+          null, null, new LinkEvidence(null, null, null, accounts)));
+    }
+    return new Verdict(Action.ADMIT, Basis.CLEAN, origin, judged, null, null);
+  }
+
+  /** The distinct accounts seen on the address over the address history, the entrant included. */
+  private static int accountsOnAddress(final UUID self, final LinkFacts facts, final Instant now) {
+    final Instant since = now.minus(LinkSettings.ADDRESS_HISTORY);
+    final long others = facts.onAddress().entrySet().stream()
+        .filter(seen -> !seen.getKey().equals(self) && !seen.getValue().isBefore(since)).count();
+    return (int) others + 1;
   }
 
   private static Verdict stronger(final Verdict first, final Verdict second) {

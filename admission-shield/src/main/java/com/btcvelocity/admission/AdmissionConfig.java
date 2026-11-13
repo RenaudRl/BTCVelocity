@@ -65,6 +65,7 @@ import org.spongepowered.configurate.yaml.YamlConfigurationLoader;
  *     addition during its quarantine and still be promoted
  * @param networkRate the bound on connection attempts per network
  * @param asn the IP-to-ASN database and what is done with the system of an address
+ * @param links the account links (accounts seen on the same address)
  */
 public record AdmissionConfig(
     Mode mode,
@@ -80,7 +81,8 @@ public record AdmissionConfig(
     Duration quarantine,
     int quarantineMaxExtraPlayers,
     NetworkRateSettings networkRate,
-    AsnSettings asn) {
+    AsnSettings asn,
+    LinkSettings links) {
 
   /** The default ceiling on the entries of one list, well above the largest default list. */
   public static final int DEFAULT_MAX_ENTRIES = 500_000;
@@ -292,7 +294,10 @@ public record AdmissionConfig(
         NetworkRateSettings.parse(root.node("network-rate"),
             root.node("messages", "network-rate").getString(NetworkRateSettings.DEFAULT_MESSAGE),
             warnings),
-        AsnSettings.parse(root.node("asn"), warnings));
+        AsnSettings.parse(root.node("asn"), warnings),
+        LinkSettings.parse(root.node("links"),
+            root.node("messages", "linked-ban").getString(LinkSettings.DEFAULT_MESSAGE),
+            warnings, errors));
   }
 
   /**
@@ -313,8 +318,11 @@ public record AdmissionConfig(
    */
   public String refusalText(final Verdict refusal) {
     final String code = refusal.causeCode();
-    final String template = refusal.basis() == Verdict.Basis.RATE_NETWORK
-        ? this.networkRate.message() : messageFor(refusal.ipClass());
+    final String template = switch (refusal.basis()) {
+      case RATE_NETWORK -> this.networkRate.message();
+      case LINKED_BAN -> this.links.message();
+      default -> messageFor(refusal.ipClass());
+    };
     return template.replace("{code}", code == null ? "" : code);
   }
 
@@ -339,6 +347,16 @@ public record AdmissionConfig(
   }
 
   /**
+   * The mode the account links run in. The module-wide {@code observe} is a dry run for
+   * everything the module does, so it also holds this back.
+   *
+   * @return {@code observe} if either the module or {@code links.mode} is in {@code observe}
+   */
+  public Mode linksMode() {
+    return this.mode == Mode.OBSERVE ? Mode.OBSERVE : this.links.mode();
+  }
+
+  /**
    * The mode in force for the rule behind a verdict, as the journal states it.
    *
    * @param verdict the verdict
@@ -350,8 +368,13 @@ public record AdmissionConfig(
     if (verdict.basis() == Verdict.Basis.RATE_NETWORK) {
       return rateMode();
     }
+    if (verdict.basis() == Verdict.Basis.LINKED_BAN) {
+      return linksMode();
+    }
     if (verdict.basis() == Verdict.Basis.VPN_SIGNAL
-        || verdict.basis() == Verdict.Basis.ASN_KEYWORD) {
+        || verdict.basis() == Verdict.Basis.ASN_KEYWORD
+        || verdict.basis() == Verdict.Basis.LINKED_ACCOUNT
+        || verdict.basis() == Verdict.Basis.ACCOUNTS_PER_ADDRESS) {
       // A signal never refuses, in any mode: "enforce" next to "admitted" would read as a lie.
       return Mode.OBSERVE;
     }
