@@ -71,6 +71,11 @@ class AccountLinkConfigAndReportTest {
       assertEquals("borntocraft", links.networkId());
     }
     assertEquals(defaults, shipped, "the template says what the code does");
+    assertFalse(parse("""
+        links:
+          database:
+            jdbc-url: "jdbc:postgresql://db.invalid:5432/sentinel"
+        """, new ArrayList<>()).links().enabled(), "a database alone does not switch them on");
   }
 
   @Test

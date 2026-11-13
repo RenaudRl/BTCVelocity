@@ -166,9 +166,10 @@ class AccountLinkRuleTest {
 
   @Test
   void noTransitivityOnlyTheAccountsOfItsOwnAddressAreLinked() {
-    // C shares an address with B only; B once shared another address with the banned A.
+    // C shares an address with B only; B once shared another address with the banned A. The
+    // store also returns C's own sightings, which are never a link.
     final List<Link> links = engine("enforce").linksOf(NEWCOMER,
-        sameAddress(Map.of(SISTER, daysAgo(1))), NOW);
+        sameAddress(Map.of(SISTER, daysAgo(1), NEWCOMER, daysAgo(2))), NOW);
 
     assertEquals(List.of(new Link(SISTER, Link.Strength.STRONG)), links);
   }
