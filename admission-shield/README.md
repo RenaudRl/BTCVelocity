@@ -41,6 +41,11 @@ joueur comptent, jamais ceux qu'ils ont croisés ailleurs) :
   créé et la commande le dit (« vérification des bans réseau a échoué »), l'audit portant
   « ban check failed ».
 
+Un client de l'écoute Geyser qui n'est pas un joueur Floodgate (sans adresse réelle attestée) est
+jugé mais jamais enregistré comme passage. Renseigner `geyser-addresses` quand Geyser tourne sur
+une adresse publique : sinon l'adresse de Geyser, partagée par tous les joueurs Bedrock, serait
+prise pour celle d'un joueur.
+
 `alts`, `household` et `forget` demandent **`btc.admission.links`** en plus de
 `btc.admission.staff` ; chaque usage est journalisé avant l'appel à la base, puis son résultat.
 

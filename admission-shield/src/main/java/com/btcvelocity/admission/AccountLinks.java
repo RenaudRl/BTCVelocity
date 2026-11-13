@@ -163,15 +163,18 @@ public final class AccountLinks {
 
   /**
    * Records that a server accepted the player, off the calling thread. Nothing for a login the
-   * links do not judge (exempted, Bedrock without a real address, links off), nor for an account
-   * under a network ban in force (let in by an exemption or a ban pronounced while it was online):
-   * its sightings would only stretch its links.
+   * links do not judge (exempted, Bedrock without a real address, links off), nor for a client of
+   * the Geyser listener that is not a Floodgate player (no attested address: Geyser's own, if it is
+   * not listed, would be shared by every Bedrock player), nor for an account under a network ban
+   * in force (let in by an exemption or a ban pronounced while it was online): its sightings would
+   * only stretch its links.
    *
    * @param authenticated the login
    */
   public void recordAccepted(final Attempt authenticated) {
     final Optional<InetAddress> subject = this.engine.linkSubject(authenticated);
-    if (subject.isEmpty()) {
+    if (subject.isEmpty()
+        || authenticated.viaGeyserListener() && !authenticated.floodgatePlayer()) {
       return;
     }
     final Instant now = this.clock.instant();

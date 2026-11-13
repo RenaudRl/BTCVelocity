@@ -115,6 +115,21 @@ class AccountLinksTest {
   }
 
   @Test
+  void aNonFloodgateClientOnTheGeyserListenerIsNeverRecordedButAFloodgatePlayerIs() {
+    // Geyser's address is public and not listed: recording it would link every Bedrock player.
+    final InetAddress geyser = InetAddress.ofLiteral("198.51.100.50");
+    final AccountLinks links = links("enforce", this.store);
+
+    links.recordAccepted(Attempt.claimed("Java", geyser, true)
+        .authenticated("Java", SISTER, false, null));
+    assertEquals(0, this.store.rows.size(), "no sighting for a non-Floodgate client");
+
+    links.recordAccepted(Attempt.claimed(".Bedrock", geyser, true)
+        .authenticated(".Bedrock", BROTHER, true, HOME));
+    assertEquals(1, this.store.rows.size(), "a Floodgate player is recorded on its real address");
+  }
+
+  @Test
   void aBannedPlayersNewAccountIsRefusedInEnforceAndOnlyObservedInObserve() {
     seenBeforeTheBan(BANNED, HOME);
 
