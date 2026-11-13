@@ -273,6 +273,11 @@ links:
     # A login waits at most this long for the database, then is ADMITTED anyway (fail open).
     lookup-timeout-ms: 1500
     max-pool-size: 2
+    # PostgreSQL cancels a statement running longer than this (a lock, a slow plan): no thread of
+    # this module stays stuck on it.
+    statement-timeout-ms: 2000
+    # The driver closes a connection silent for this long (a dead network that never answers).
+    socket-timeout-seconds: 5
   strong-window-days: 7
   weak-window-days: 7
   # Above this many distinct accounts in 30 days, an address is shared (school, carrier NAT): it

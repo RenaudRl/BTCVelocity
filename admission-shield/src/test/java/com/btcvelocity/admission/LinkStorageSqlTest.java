@@ -46,6 +46,30 @@ class LinkStorageSqlTest {
   private static final Sighting SEEN = LinkKeyTest.key(LinkKeyTest.TEST_KEY)
       .sighting(ENTRANT, InetAddress.ofLiteral("198.51.100.7"), NOW);
 
+  /** A store whose tables exist already, its set-up statements forgotten. */
+  private static JdbcLinkStore ready(final FakeJdbc db) throws SQLException {
+    final JdbcLinkStore store = new JdbcLinkStore(db.dataSource(), "btc_");
+    store.createTables();
+    db.calls.clear();
+    return store;
+  }
+
+  @Test
+  void aDatabaseAbsentAtStartGetsItsTablesOnItsFirstAnswer() throws SQLException {
+    final FakeJdbc db = new FakeJdbc();
+    db.failingExecutes = 1;
+    final JdbcLinkStore store = new JdbcLinkStore(db.dataSource(), "btc_");
+
+    assertThrows(SQLException.class, () -> store.record(SEEN), "down: nothing written");
+    store.record(SEEN);
+    store.record(SEEN);
+
+    assertEquals(6 + 2, db.calls.size(), "the schema once, then the two sightings");
+    assertTrue(db.calls.get(0).sql().startsWith("CREATE TABLE IF NOT EXISTS"),
+        db.calls.get(0).sql());
+    assertTrue(db.calls.get(6).sql().startsWith("INSERT INTO"), db.calls.get(6).sql());
+  }
+
   @Test
   void aBanInForceIsANetworkBanOfThisNetworkNeitherRevokedNorExpired() throws SQLException {
     final Instant pronounced = NOW.minusSeconds(3600);
@@ -104,7 +128,7 @@ class LinkStorageSqlTest {
   @Test
   void aSightingIsOneRowPerAccountAndAddressDigest() throws SQLException {
     final FakeJdbc db = new FakeJdbc();
-    new JdbcLinkStore(db.dataSource(), "btc_").record(SEEN);
+    ready(db).record(SEEN);
 
     final FakeJdbc.Call call = db.calls.getFirst();
     assertTrue(call.sql().contains("ON CONFLICT (uuid, ip_digest) DO UPDATE"), call.sql());
@@ -124,7 +148,7 @@ class LinkStorageSqlTest {
     final Instant addressSince = NOW.minus(LinkSettings.ADDRESS_HISTORY);
     final Instant networkSince = NOW.minusSeconds(3600);
 
-    final LinkFacts facts = new JdbcLinkStore(db.dataSource(), "btc_")
+    final LinkFacts facts = ready(db)
         .factsFor(SEEN, addressSince, networkSince);
     final LinkFacts unknown = new JdbcLinkStore(new FakeJdbc().answer().answer().answer()
         .answer(new Object[] {null}).dataSource(), "btc_").factsFor(SEEN, addressSince,
@@ -154,7 +178,7 @@ class LinkStorageSqlTest {
     final FakeJdbc db = new FakeJdbc();
     final Instant cutoff = NOW.minus(java.time.Duration.ofDays(180));
 
-    new JdbcLinkStore(db.dataSource(), "btc_").purgeOlderThan(cutoff);
+    ready(db).purgeOlderThan(cutoff);
 
     assertTrue(db.calls.getFirst().sql().endsWith("btc_admission_sightings WHERE last_seen < ?"),
         db.calls.getFirst().sql());
@@ -166,7 +190,7 @@ class LinkStorageSqlTest {
     final FakeJdbc db = new FakeJdbc();
     db.updateCount = 2;
 
-    assertEquals(4, new JdbcLinkStore(db.dataSource(), "btc_").forget(ENTRANT));
+    assertEquals(4, ready(db).forget(ENTRANT));
 
     assertEquals(List.of("DELETE FROM btc_admission_sightings WHERE uuid = ?",
         "DELETE FROM btc_admission_households WHERE uuid = ?"),
@@ -181,10 +205,8 @@ class LinkStorageSqlTest {
     final FakeJdbc twoHomes = new FakeJdbc().answer(new Object[] {SISTER.toString(), "house-1"},
         new Object[] {ENTRANT.toString(), "house-2"});
 
-    assertTrue(new JdbcLinkStore(joining.dataSource(), "btc_")
-        .declareHousehold(SISTER, ENTRANT, "console", "fratrie", NOW));
-    assertFalse(new JdbcLinkStore(twoHomes.dataSource(), "btc_")
-        .declareHousehold(SISTER, ENTRANT, "console", null, NOW));
+    assertTrue(ready(joining).declareHousehold(SISTER, ENTRANT, "console", "fratrie", NOW));
+    assertFalse(ready(twoHomes).declareHousehold(SISTER, ENTRANT, "console", null, NOW));
 
     final FakeJdbc.Call insert = joining.calls.getLast();
     assertTrue(insert.sql().startsWith("INSERT INTO btc_admission_households"), insert.sql());

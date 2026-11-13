@@ -61,7 +61,13 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
   acceptée par un serveur (`ServerPostConnectEvent`), purgée 180 jours après son dernier passage ;
   `/admission forget <uuid>` efface un compte.
 - **Échec ouvert** : la recherche attend au plus `lookup-timeout-ms` (1,5 s) ; base lente, absente
-  ou saturée : le joueur est admis sans jugement, un WARN par minute au plus.
+  ou saturée : le joueur est admis sans jugement, un WARN par minute au plus. Une recherche restée
+  en file au-delà de ce délai est abandonnée sans interroger la base ; PostgreSQL coupe toute
+  requête au-delà de `statement-timeout-ms` (2 s) et le pilote toute connexion muette au-delà de
+  `socket-timeout-seconds` (5 s). Base absente au démarrage : le proxy démarre, les tables sont
+  créées au premier accès qui aboutit ; la purge quotidienne commence un jour après le démarrage.
+  Un échec au démarrage des liens (pilote, pool) les coupe seuls, avec une ERROR sans l'URL.
+  Un compte sous ban réseau actif n'est jamais enregistré.
 - **Exploitation** : un rôle PostgreSQL limité à `SELECT` sur `<prefix>sanctions` et propriétaire de
   ses deux tables ; mot de passe dans la variable nommée par `password-env`, jamais dans l'URL
   (refusée sinon) ; une fiche au registre RGPD avant `enabled: true`.

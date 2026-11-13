@@ -34,6 +34,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -69,6 +70,8 @@ class AccountLinkConfigAndReportTest {
       assertEquals(4, links.sharedAddressAccounts());
       assertEquals(Duration.ofDays(180), links.retention());
       assertEquals("borntocraft", links.networkId());
+      assertEquals(Map.of("socketTimeout", "5", "options", "-c statement_timeout=2000"),
+          links.driverProperties(), "no statement nor silent socket holds a thread for long");
     }
     assertEquals(defaults, shipped, "the template says what the code does");
     assertFalse(parse("""

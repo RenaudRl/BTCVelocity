@@ -319,7 +319,7 @@ public final class AdmissionJournal {
     final Verdict.Basis basis = entry.verdict().basis();
     if ((basis != Verdict.Basis.LISTED && basis != Verdict.Basis.RATE_NETWORK
         && basis != Verdict.Basis.ASN_KEYWORD && basis != Verdict.Basis.VPN_SIGNAL
-        && basis != Verdict.Basis.ACCOUNTS_PER_ADDRESS)
+        && basis != Verdict.Basis.ACCOUNTS_PER_ADDRESS && basis != Verdict.Basis.LINKED_ACCOUNT)
         || judged == null) {
       return true;
     }

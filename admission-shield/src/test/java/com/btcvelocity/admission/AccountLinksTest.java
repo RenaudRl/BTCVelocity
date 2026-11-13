@@ -19,6 +19,7 @@ package com.btcvelocity.admission;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.btcvelocity.admission.Verdict.Action;
@@ -32,10 +33,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 /** The account links end to end, over a store in memory: what a login meets, what is kept. */
@@ -60,15 +67,33 @@ class AccountLinksTest {
   };
 
   private AccountLinks links(final String mode, final LinkStore over) {
+    return links(mode, over, Runnable::run);
+  }
+
+  private AccountLinks links(final LinkStore over, final Executor executor) {
+    return links("enforce", over, executor);
+  }
+
+  private AccountLinks links(final String mode, final LinkStore over, final Executor executor) {
     final AdmissionConfig config = AccountLinkRuleTest.config(AccountLinkRuleTest.ON
         .formatted(mode) + "    lookup-timeout-ms: 100\n");
     return new AccountLinks(new AdmissionEngine(config, address -> Optional.empty()),
-        config.links(), LinkKeyTest.key(LinkKeyTest.TEST_KEY), over, this.bans, Runnable::run,
+        config.links(), LinkKeyTest.key(LinkKeyTest.TEST_KEY), over, this.bans, executor,
         this.clock, this.logger.logger());
   }
 
   private static Attempt login(final UUID uuid, final InetAddress from) {
     return Attempt.claimed("Player", from).authenticated("Player", uuid, false, null);
+  }
+
+  /** A sighting kept from before the account was banned (a banned account is not recorded). */
+  private void seenBeforeTheBan(final UUID account, final InetAddress address) {
+    try {
+      this.store.record(LinkKeyTest.key(LinkKeyTest.TEST_KEY)
+          .sighting(account, address, this.clock.instant()));
+    } catch (SQLException impossible) {
+      throw new IllegalStateException(impossible);
+    }
   }
 
   private static Optional<Verdict> now(final AccountLinks links, final Attempt attempt) {
@@ -88,7 +113,7 @@ class AccountLinksTest {
 
   @Test
   void aBannedPlayersNewAccountIsRefusedInEnforceAndOnlyObservedInObserve() {
-    links("enforce", this.store).recordAccepted(login(BANNED, HOME));
+    seenBeforeTheBan(BANNED, HOME);
 
     final Verdict enforced = now(links("enforce", this.store), login(NEWCOMER, HOME)).orElseThrow();
     final Verdict observed = now(links("observe", this.store), login(NEWCOMER, HOME)).orElseThrow();
@@ -103,7 +128,7 @@ class AccountLinksTest {
   void aSisterWhoPlayedBeforeTheBanIsAdmittedAndAnAccountMadeAfterItIsRefused() {
     final AccountLinks links = links("enforce", this.store);
     links.recordAccepted(login(SISTER, HOME));
-    links.recordAccepted(login(BANNED, HOME));
+    seenBeforeTheBan(BANNED, HOME);
     this.clock.advance(Duration.ofDays(10));
     this.bannedAt = this.clock.instant();
     this.clock.advance(Duration.ofHours(1));
@@ -121,7 +146,7 @@ class AccountLinksTest {
   @Test
   void aDeclaredHouseholdIsNeverRefusedForItsBannedMember() throws SQLException {
     final AccountLinks links = links("enforce", this.store);
-    links.recordAccepted(login(BANNED, HOME));
+    seenBeforeTheBan(BANNED, HOME);
     this.store.declareHousehold(SISTER, BANNED, "console", "fratrie", this.clock.instant());
 
     assertEquals(Optional.empty(), now(links, login(SISTER, HOME)));
@@ -131,7 +156,7 @@ class AccountLinksTest {
   @Test
   void noTransitivityAcrossTwoAddresses() {
     final AccountLinks links = links("enforce", this.store);
-    links.recordAccepted(login(BANNED, HOME));
+    seenBeforeTheBan(BANNED, HOME);
     links.recordAccepted(login(BROTHER, HOME));
     links.recordAccepted(login(BROTHER, ELSEWHERE));
 
@@ -221,12 +246,91 @@ class AccountLinksTest {
   @Test
   void forgetRemovesAccount() throws SQLException {
     final AccountLinks links = links("enforce", this.store);
-    links.recordAccepted(login(BANNED, HOME));
+    seenBeforeTheBan(BANNED, HOME);
     this.store.declareHousehold(BANNED, BROTHER, "console", null, this.clock.instant());
 
     assertEquals(2, links.run(kept -> kept.forget(BANNED)).join());
     assertTrue(this.store.rows.isEmpty());
     assertTrue(this.store.households.keySet().stream().noneMatch(BANNED::equals));
     assertEquals(Optional.empty(), now(links, login(NEWCOMER, HOME)), "nothing left to link to");
+  }
+
+  @Test
+  void anAccountUnderANetworkBanIsNeverRecorded() {
+    links("observe", this.store).recordAccepted(login(BANNED, HOME));
+
+    assertTrue(this.store.rows.isEmpty());
+  }
+
+  @Test
+  void aLookupQueuedPastItsDeadlineNeverReachesTheDatabase() throws Exception {
+    final CountDownLatch release = new CountDownLatch(1);
+    final AtomicInteger asked = new AtomicInteger();
+    final ExecutorService pool = Executors.newSingleThreadExecutor();
+    final LinkStore slow = new MemoryLinkStore() {
+      @Override
+      public LinkFacts factsFor(final Sighting entering, final Instant addressSince,
+          final Instant networkSince) {
+        asked.incrementAndGet();
+        await(release);
+        return LinkFacts.NONE;
+      }
+    };
+    final AccountLinks links = links(slow, pool);
+    try {
+      assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME)).get(2, TimeUnit.SECONDS));
+      assertEquals(Optional.empty(), links.judge(login(SISTER, HOME)).get(2, TimeUnit.SECONDS));
+    } finally {
+      release.countDown();
+      pool.shutdown();
+      assertTrue(pool.awaitTermination(2, TimeUnit.SECONDS));
+    }
+
+    assertEquals(1, asked.get(), "the second lookup was dropped once its login had gone in");
+  }
+
+  @Test
+  void aFullQueueAdmitsRecordsNothingAndAnswersTheStaffWithAFailure() throws Exception {
+    final CountDownLatch release = new CountDownLatch(1);
+    final ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<>(1));
+    try {
+      pool.execute(() -> await(release));
+      pool.execute(() -> { });
+      final AccountLinks links = links(this.store, pool);
+
+      assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME)).get(1, TimeUnit.SECONDS));
+      links.recordAccepted(login(NEWCOMER, HOME));
+      final CompletableFuture<Integer> staff = links.run(kept -> kept.forget(NEWCOMER));
+
+      assertTrue(staff.isCompletedExceptionally(), "a full queue is an answer, never a throw");
+      assertTrue(this.logger.has("WARN", "queue is full"), this.logger.lines().toString());
+    } finally {
+      release.countDown();
+      pool.shutdownNow();
+    }
+    assertTrue(this.store.rows.isEmpty());
+  }
+
+  @Test
+  void aFailedStartLeavesOnlyTheLinksOffAndNeverLogsTheUrl() {
+    final AtomicBoolean undone = new AtomicBoolean();
+
+    final AccountLinks none = AccountLinks.startOrDisable(() -> {
+      throw new IllegalStateException("no driver for jdbc:postgresql://db.invalid:5432/sentinel");
+    }, this.logger.logger(), () -> undone.set(true));
+
+    assertNull(none);
+    assertTrue(undone.get(), "what was opened is closed");
+    assertTrue(this.logger.has("ERROR", "DISABLED"), this.logger.lines().toString());
+    assertFalse(this.logger.lines().toString().contains("db.invalid"), "no URL in the log");
+  }
+
+  private static void await(final CountDownLatch latch) {
+    try {
+      latch.await(5, TimeUnit.SECONDS);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+    }
   }
 }

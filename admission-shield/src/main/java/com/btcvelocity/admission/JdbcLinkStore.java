@@ -48,6 +48,7 @@ public final class JdbcLinkStore implements LinkStore {
   private final DataSource database;
   private final String sightings;
   private final String households;
+  private volatile boolean tablesReady;
 
   /**
    * A store over a database.
@@ -88,23 +89,45 @@ public final class JdbcLinkStore implements LinkStore {
   }
 
   /**
-   * Creates the two tables when they are missing.
+   * Creates the two tables when they are missing. Every other call does it first until it has
+   * succeeded once, so a database absent at start is set up on its first answer.
    *
    * @throws SQLException if the database refuses (the role must own the two tables)
    */
   public void createTables() throws SQLException {
-    try (Connection connection = this.database.getConnection();
-        Statement statement = connection.createStatement()) {
+    open().close();
+  }
+
+  private synchronized void ensureTables(final Connection connection) throws SQLException {
+    if (this.tablesReady) {
+      return;
+    }
+    try (Statement statement = connection.createStatement()) {
       for (String ddl : schema()) {
         statement.execute(ddl);
       }
     }
+    this.tablesReady = true;
+  }
+
+  /** A connection on which the two tables exist. */
+  private Connection open() throws SQLException {
+    final Connection connection = this.database.getConnection();
+    if (!this.tablesReady) {
+      try {
+        ensureTables(connection);
+      } catch (SQLException | RuntimeException failed) {
+        connection.close();
+        throw failed;
+      }
+    }
+    return connection;
   }
 
   @Override
   public LinkFacts factsFor(final Sighting entering, final Instant addressSince,
       final Instant networkSince) throws SQLException {
-    try (Connection connection = this.database.getConnection()) {
+    try (Connection connection = open()) {
       final Map<UUID, Instant> onAddress = seen(connection, "SELECT uuid, last_seen FROM "
           + this.sightings + " WHERE ip_digest = ? AND last_seen >= ?"
           + " ORDER BY last_seen DESC LIMIT ?", entering.ipDigest(), addressSince);
@@ -164,7 +187,7 @@ public final class JdbcLinkStore implements LinkStore {
 
   @Override
   public void record(final Sighting sighting) throws SQLException {
-    try (Connection connection = this.database.getConnection();
+    try (Connection connection = open();
         PreparedStatement upsert = connection.prepareStatement("INSERT INTO " + this.sightings
             + " (uuid, ip_digest, net_digest, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)"
             + " ON CONFLICT (uuid, ip_digest) DO UPDATE SET net_digest = EXCLUDED.net_digest,"
@@ -181,7 +204,7 @@ public final class JdbcLinkStore implements LinkStore {
 
   @Override
   public int forget(final UUID account) throws SQLException {
-    try (Connection connection = this.database.getConnection()) {
+    try (Connection connection = open()) {
       connection.setAutoCommit(false);
       try {
         final int removed = delete(connection, this.sightings, account)
@@ -208,7 +231,7 @@ public final class JdbcLinkStore implements LinkStore {
 
   @Override
   public int purgeOlderThan(final Instant cutoff) throws SQLException {
-    try (Connection connection = this.database.getConnection();
+    try (Connection connection = open();
         PreparedStatement delete = connection.prepareStatement("DELETE FROM " + this.sightings
             + " WHERE last_seen < ?")) {
       delete.setLong(1, cutoff.toEpochMilli());
@@ -222,7 +245,7 @@ public final class JdbcLinkStore implements LinkStore {
     if (first.equals(second)) {
       throw new IllegalArgumentException("a household needs two different accounts");
     }
-    try (Connection connection = this.database.getConnection()) {
+    try (Connection connection = open()) {
       connection.setAutoCommit(false);
       try {
         final boolean declared = declareIn(connection, first, second, declaredBy, reason, at);
@@ -278,7 +301,7 @@ public final class JdbcLinkStore implements LinkStore {
 
   @Override
   public boolean leaveHousehold(final UUID account) throws SQLException {
-    try (Connection connection = this.database.getConnection()) {
+    try (Connection connection = open()) {
       return delete(connection, this.households, account) > 0;
     }
   }
@@ -287,7 +310,7 @@ public final class JdbcLinkStore implements LinkStore {
   public Map<UUID, Instant> sharingAddressWith(final UUID account, final Instant since)
       throws SQLException {
     final Map<UUID, Instant> others = new LinkedHashMap<>();
-    try (Connection connection = this.database.getConnection();
+    try (Connection connection = open();
         PreparedStatement query = connection.prepareStatement("SELECT other.uuid,"
             + " MAX(other.last_seen) FROM " + this.sightings + " own JOIN " + this.sightings
             + " other ON other.ip_digest = own.ip_digest WHERE own.uuid = ? AND other.uuid <> ?"

@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.InetAddress;
 import java.time.Duration;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -45,6 +46,21 @@ class JournalAggregationTest {
         new Verdict(Verdict.Action.REFUSE, Verdict.Basis.LISTED, Verdict.Origin.DIRECT,
             ip(address), IpClass.DATACENTER, "dc"),
         Phase.PRE_LOGIN, AdmissionConfig.Mode.ENFORCE);
+  }
+
+  @Test
+  void aWaveOfLinkSignalsFromOneNetworkIsOneLine() {
+    for (int host = 1; host <= 3; host++) {
+      final InetAddress address = ip("198.51.100." + host);
+      this.journal.record(Attempt.claimed("Alt" + host, address)
+              .authenticated("Alt" + host, UUID.randomUUID(), false, null),
+          new Verdict(Verdict.Action.ADMIT, Verdict.Basis.LINKED_ACCOUNT, Verdict.Origin.DIRECT,
+              address, null, null, null,
+              new LinkEvidence(Link.Strength.WEAK, UUID.randomUUID(), 42L, 2)),
+          Phase.LOGIN, AdmissionConfig.Mode.OBSERVE);
+    }
+
+    assertEquals(1, this.log.lines().size(), this.log.lines().toString());
   }
 
   @Test

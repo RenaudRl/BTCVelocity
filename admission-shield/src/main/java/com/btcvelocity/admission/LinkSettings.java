@@ -19,6 +19,7 @@ package com.btcvelocity.admission;
 
 import java.time.Duration;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import org.spongepowered.configurate.ConfigurationNode;
@@ -41,6 +42,8 @@ import org.spongepowered.configurate.ConfigurationNode;
  * @param networkId the network the bans must belong to (Sentinel's {@code identity.network-id})
  * @param lookupTimeout how long a login waits for the database before it is admitted anyway
  * @param maxPoolSize the most connections held to the database
+ * @param statementTimeout how long PostgreSQL lets one statement run before cancelling it
+ * @param socketTimeout how long the driver waits on a silent connection before closing it
  * @param strongWindow how recent a sighting on the same address must be for a STRONG link
  * @param weakWindow how recent a sighting on the same network must be for a WEAK link
  * @param sharedAddressAccounts above this many distinct accounts over {@link #ADDRESS_HISTORY},
@@ -61,6 +64,8 @@ public record LinkSettings(
     String networkId,
     Duration lookupTimeout,
     int maxPoolSize,
+    Duration statementTimeout,
+    Duration socketTimeout,
     Duration strongWindow,
     Duration weakWindow,
     int sharedAddressAccounts,
@@ -78,6 +83,10 @@ public record LinkSettings(
   static final String DEFAULT_PASSWORD_ENV = "BTC_ADMISSION_DB_PASSWORD";
   static final int DEFAULT_TIMEOUT_MS = 1500;
   static final int DEFAULT_POOL = 2;
+  static final int DEFAULT_STATEMENT_TIMEOUT_MS = 2000;
+  static final int DEFAULT_SOCKET_TIMEOUT_S = 5;
+  private static final int MAX_STATEMENT_TIMEOUT_MS = 60_000;
+  private static final int MAX_SOCKET_TIMEOUT_S = 300;
   static final int DEFAULT_WINDOW_DAYS = 7;
   static final int DEFAULT_SHARED_ACCOUNTS = 4;
   static final int DEFAULT_MAX_ACCOUNTS = 5;
@@ -147,6 +156,10 @@ public record LinkSettings(
         Duration.ofMillis(within(database, "lookup-timeout-ms", DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS,
             MAX_TIMEOUT_MS, warnings)),
         within(database, "max-pool-size", DEFAULT_POOL, 1, MAX_POOL, warnings),
+        Duration.ofMillis(within(database, "statement-timeout-ms", DEFAULT_STATEMENT_TIMEOUT_MS,
+            MIN_TIMEOUT_MS, MAX_STATEMENT_TIMEOUT_MS, warnings)),
+        Duration.ofSeconds(within(database, "socket-timeout-seconds", DEFAULT_SOCKET_TIMEOUT_S, 1,
+            MAX_SOCKET_TIMEOUT_S, warnings)),
         Duration.ofDays(within(section, "strong-window-days", DEFAULT_WINDOW_DAYS, 1,
             (int) ADDRESS_HISTORY.toDays(), warnings)),
         Duration.ofDays(within(section, "weak-window-days", DEFAULT_WINDOW_DAYS, 1,
@@ -158,6 +171,18 @@ public record LinkSettings(
         Duration.ofDays(within(section, "retention-days", DEFAULT_RETENTION_DAYS,
             (int) ADDRESS_HISTORY.toDays(), Integer.MAX_VALUE, warnings)),
         message);
+  }
+
+  /**
+   * What the PostgreSQL driver is told beyond the URL: no statement and no silent socket may hold a
+   * thread of this module for long.
+   *
+   * @return the driver properties
+   */
+  public Map<String, String> driverProperties() {
+    return Map.of(
+        "socketTimeout", Long.toString(this.socketTimeout.toSeconds()),
+        "options", "-c statement_timeout=" + this.statementTimeout.toMillis());
   }
 
   private static boolean holdsPassword(final String url) {

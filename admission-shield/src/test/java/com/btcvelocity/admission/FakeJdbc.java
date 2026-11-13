@@ -22,6 +22,7 @@ import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -44,6 +45,8 @@ final class FakeJdbc {
   final List<String> transaction = new ArrayList<>();
   private final Deque<List<Object[]>> answers = new ArrayDeque<>();
   int updateCount = 1;
+  /** How many of the next DDL statements fail, as a database that is down. */
+  int failingExecutes;
 
   /** Queues the rows of the next query. */
   FakeJdbc answer(final Object[]... rows) {
@@ -84,6 +87,10 @@ final class FakeJdbc {
       }
       return switch (method) {
         case "execute" -> {
+          if (this.failingExecutes > 0) {
+            this.failingExecutes--;
+            throw new SQLException("connection refused");
+          }
           this.calls.add(new Call((String) args[0], Map.of()));
           yield false;
         }
@@ -121,7 +128,7 @@ final class FakeJdbc {
   }
 
   private interface Handler {
-    Object handle(String method, Object[] args);
+    Object handle(String method, Object[] args) throws SQLException;
   }
 
   private static <T> T proxy(final Class<T> type, final Handler handler) {

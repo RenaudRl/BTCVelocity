@@ -42,7 +42,6 @@ import java.io.InputStream;
 import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -199,7 +198,8 @@ public final class BtcAdmissionShieldPlugin {
         store.quarantine().shadow(), this.clock, asn, asn.shadow(), this.logger);
     this.engine = admission;
     this.config = settings;
-    this.links = startLinks(settings.links(), admission);
+    this.links = AccountLinks.startOrDisable(() -> startLinks(settings.links(), admission),
+        this.logger, this::closeLinks);
     this.proxy.getCommandManager().register(
         this.proxy.getCommandManager().metaBuilder(COMMAND).plugin(this).build(),
         new AdmissionCommand(this.journal, store, settings, admission.rateLimiter(), asn,
@@ -238,6 +238,14 @@ public final class BtcAdmissionShieldPlugin {
         task.cancel();
       }
     }
+    closeLinks();
+  }
+
+  private void closeLinks() {
+    final ScheduledTask purge = this.purgeTask;
+    if (purge != null) {
+      purge.cancel();
+    }
     final ExecutorService executor = this.linkExecutor;
     if (executor != null) {
       executor.shutdownNow();
@@ -274,6 +282,7 @@ public final class BtcAdmissionShieldPlugin {
     pool.setPassword(password);
     pool.setMaximumPoolSize(settings.maxPoolSize());
     pool.setConnectionTimeout(Math.max(MIN_POOL_TIMEOUT_MS, settings.lookupTimeout().toMillis()));
+    settings.driverProperties().forEach(pool::addDataSourceProperty);
     // A database down at start must not stop the proxy: the logins are admitted until it is back.
     pool.setInitializationFailTimeout(-1);
     final HikariDataSource database = new HikariDataSource(pool);
@@ -287,21 +296,16 @@ public final class BtcAdmissionShieldPlugin {
     final AccountLinks accountLinks = new AccountLinks(admission, settings, key.get(), linkStore,
         new JdbcBanLookup(database, settings.tablePrefix(), settings.networkId()), executor,
         this.clock, this.logger);
+    // The tables are created by the first call that reaches the database (JdbcLinkStore#open).
     this.purgeTask = this.proxy.getScheduler()
         .buildTask(this, () -> {
-          try {
-            linkStore.createTables();
-          } catch (SQLException failed) {
-            this.logger.warn("links: the tables could not be created ({}); logins are admitted"
-                + " unjudged until they exist.", failed.getMessage());
-            return;
-          }
           final int purged = accountLinks.purge();
           if (purged > 0) {
             this.logger.info("links: {} sighting(s) older than {} days deleted.", purged,
                 settings.retention().toDays());
           }
         })
+        .delay(Duration.ofDays(1))
         .repeat(Duration.ofDays(1))
         .schedule();
     this.logger.info("Account links up: mode {}, database {} (table prefix {}), lookup timeout"

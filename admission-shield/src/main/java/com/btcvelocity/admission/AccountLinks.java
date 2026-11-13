@@ -32,6 +32,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -84,6 +85,27 @@ public final class AccountLinks {
   }
 
   /**
+   * Starts the account links, or leaves them off when that fails: the rest of the module runs.
+   *
+   * @param start opens them
+   * @param logger told why they are off, by the type of the failure only (a driver or pool message
+   *     may carry the database URL)
+   * @param undo releases what was opened before the failure
+   * @return the links, or {@code null}
+   */
+  public static @Nullable AccountLinks startOrDisable(
+      final Supplier<@Nullable AccountLinks> start, final Logger logger, final Runnable undo) {
+    try {
+      return start.get();
+    } catch (RuntimeException failed) {
+      undo.run();
+      logger.error("links: could not start ({}); account links are DISABLED, the rest of the"
+          + " admission shield runs.", failed.getClass().getSimpleName());
+      return null;
+    }
+  }
+
+  /**
    * Judges an authenticated login on its links.
    *
    * @param authenticated the login
@@ -96,6 +118,8 @@ public final class AccountLinks {
     }
     final InetAddress judged = subject.get();
     try {
+      // orTimeout completes this very future, and a supplyAsync task whose future is already
+      // complete never runs: a lookup still queued when its login went in never reaches the base.
       return CompletableFuture.supplyAsync(() -> decide(authenticated, judged), this.executor)
           .orTimeout(this.settings.lookupTimeout().toMillis(), TimeUnit.MILLISECONDS)
           .exceptionally(failure -> {
@@ -130,7 +154,9 @@ public final class AccountLinks {
 
   /**
    * Records that a server accepted the player, off the calling thread. Nothing for a login the
-   * links do not judge (exempted, Bedrock without a real address, links off).
+   * links do not judge (exempted, Bedrock without a real address, links off), nor for an account
+   * under a network ban in force (let in by an exemption or a ban pronounced while it was online):
+   * its sightings would only stretch its links.
    *
    * @param authenticated the login
    */
@@ -139,11 +165,14 @@ public final class AccountLinks {
     if (subject.isEmpty()) {
       return;
     }
-    final Sighting sighting =
-        this.key.sighting(authenticated.uuid(), subject.get(), this.clock.instant());
+    final Instant now = this.clock.instant();
+    final Sighting sighting = this.key.sighting(authenticated.uuid(), subject.get(), now);
     try {
       this.executor.execute(() -> {
         try {
+          if (!this.bans.activeNetworkBans(Set.of(sighting.account()), now).isEmpty()) {
+            return;
+          }
           this.store.record(sighting);
         } catch (SQLException | RuntimeException failed) {
           warn("a session was not recorded", failed);
@@ -182,16 +211,20 @@ public final class AccountLinks {
    *
    * @param request the request
    * @param <T> its answer
-   * @return its answer, or the failure
+   * @return its answer, or the failure (a full queue included: never thrown at the caller)
    */
   public <T> CompletableFuture<T> run(final StoreCall<T> request) {
-    return CompletableFuture.supplyAsync(() -> {
-      try {
-        return request.call(this.store);
-      } catch (SQLException failed) {
-        throw new CompletionException(failed);
-      }
-    }, this.executor);
+    try {
+      return CompletableFuture.supplyAsync(() -> {
+        try {
+          return request.call(this.store);
+        } catch (SQLException failed) {
+          throw new CompletionException(failed);
+        }
+      }, this.executor);
+    } catch (RejectedExecutionException full) {
+      return CompletableFuture.failedFuture(full);
+    }
   }
 
   /**
