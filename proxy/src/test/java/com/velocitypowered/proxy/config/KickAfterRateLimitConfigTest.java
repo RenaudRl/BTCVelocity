@@ -32,13 +32,13 @@ import java.util.Properties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** The shipped file kicks a flooder after 20 refused commands or 40 refused tab-completes. */
+/** The shipped file kicks a flooder after 100 refused commands or 40 refused tab-completes. */
 class KickAfterRateLimitConfigTest {
 
   private static final String BUNDLE_DIR = "com/velocitypowered/proxy/l10n/";
 
   @Test
-  void theShippedFileKicksAfterTwentyCommandsAndFortyTabCompletes(@TempDir final Path dir)
+  void theShippedFileKicksAfterOneHundredCommandsAndFortyTabCompletes(@TempDir final Path dir)
       throws IOException {
     final Path secret = dir.resolve("forwarding.secret");
     Files.writeString(secret, "secret");
@@ -53,7 +53,7 @@ class KickAfterRateLimitConfigTest {
 
     final VelocityConfiguration config = VelocityConfiguration.read(file);
 
-    assertEquals(20, config.getKickAfterRateLimitedCommands());
+    assertEquals(100, config.getKickAfterRateLimitedCommands());
     assertEquals(40, config.getKickAfterRateLimitedTabCompletes());
   }
 
