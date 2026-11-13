@@ -187,14 +187,20 @@ public final class ListQuarantine {
     if (lookedUp.isEmpty()) {
       return Optional.empty();
     }
+    Optional<IpClassifier.Match> signal = Optional.empty();
     for (ListStore.Loaded inUse : this.store.snapshot()) {
       final Entry waiting = this.entries.get(inUse.source().id());
       final CidrSet set = waiting != null ? waiting.pending().list().set() : inUse.set();
       if (set.contains(lookedUp.get())) {
-        return Optional.of(new IpClassifier.Match(inUse.source().ipClass(), inUse.source().id()));
+        final IpClassifier.Match match =
+            new IpClassifier.Match(inUse.source().ipClass(), inUse.source().id());
+        if (match.ipClass().refusable()) {
+          return Optional.of(match);
+        }
+        signal = signal.or(() -> Optional.of(match));
       }
     }
-    return Optional.empty();
+    return signal;
   }
 
   /**

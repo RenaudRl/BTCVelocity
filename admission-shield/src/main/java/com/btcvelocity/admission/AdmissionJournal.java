@@ -294,7 +294,8 @@ public final class AdmissionJournal {
     final InetAddress judged = entry.verdict().judged();
     final Verdict.Basis basis = entry.verdict().basis();
     if ((basis != Verdict.Basis.LISTED && basis != Verdict.Basis.RATE_NETWORK
-        && basis != Verdict.Basis.ASN_KEYWORD) || judged == null) {
+        && basis != Verdict.Basis.ASN_KEYWORD && basis != Verdict.Basis.VPN_SIGNAL)
+        || judged == null) {
       return true;
     }
     final String network = Networks.of(judged, Networks.AGGREGATE_V4, Networks.AGGREGATE_V6);

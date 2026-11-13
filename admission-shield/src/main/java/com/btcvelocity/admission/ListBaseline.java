@@ -66,10 +66,20 @@ public record ListBaseline(
   /** FireHOL tor_exits, 2026-10-07: 1 270 single addresses. */
   private static final ListBaseline TOR_EXITS = new ListBaseline(300, 5_000, 300, 5_000, 0, 0);
 
+  /** X4BNet lists_vpn vpn, 2026-11-13: 11 068 lines, 3 321 678 addresses (0.08 %). */
+  private static final ListBaseline X4BNET_VPN_IPV4 =
+      new ListBaseline(4_500, 28_000, 1_300_000L, 8_300_000L, 0, 0);
+
+  /** X4BNet lists_vpn vpn, 2026-11-13: 699 lines, 3.33e12 /64 (0.00002 % of 2000::/3). */
+  private static final ListBaseline X4BNET_VPN_IPV6 =
+      new ListBaseline(280, 1_750, 0, 0, 1.3e12, 8.3e12);
+
   private static final Map<String, ListBaseline> BY_SOURCE = Map.of(
       "x4bnet-datacenter-ipv4", X4BNET_IPV4,
       "x4bnet-datacenter-ipv6", X4BNET_IPV6,
-      "firehol-tor-exits", TOR_EXITS);
+      "firehol-tor-exits", TOR_EXITS,
+      "x4bnet-vpn-ipv4", X4BNET_VPN_IPV4,
+      "x4bnet-vpn-ipv6", X4BNET_VPN_IPV6);
 
   /**
    * The baseline of a default source.

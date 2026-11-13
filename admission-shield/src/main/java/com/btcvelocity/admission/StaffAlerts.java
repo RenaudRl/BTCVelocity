@@ -80,6 +80,20 @@ public final class StaffAlerts {
   }
 
   /**
+   * Creates the alerts for the addresses of the {@code vpn} list. Like the keyword signal, a
+   * signal and not a refusal: its own instance (its own window) and its own words.
+   *
+   * @param clock the source of "now"
+   * @param sink receives each message, to be shown to the staff online
+   * @return the alerts
+   */
+  public static StaffAlerts forVpnSignals(final Clock clock, final Consumer<String> sink) {
+    return new StaffAlerts(clock, sink,
+        "[Admission] Signal VPN (adresse de VPN connu, non refusé) : ",
+        "signaux VPN (adresses de VPN connu, non refusés)");
+  }
+
+  /**
    * Counts a refusal, and says it now if the window allows.
    *
    * @param refusal the journal entry of the refusal

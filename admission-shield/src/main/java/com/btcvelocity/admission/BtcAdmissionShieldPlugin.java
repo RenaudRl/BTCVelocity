@@ -118,6 +118,7 @@ public final class BtcAdmissionShieldPlugin {
   private volatile ScheduledTask alertTask;
   private volatile StaffAlerts alerts;
   private volatile StaffAlerts asnAlerts;
+  private volatile StaffAlerts vpnAlerts;
 
   /**
    * Creates the plugin.
@@ -165,6 +166,7 @@ public final class BtcAdmissionShieldPlugin {
         this.clock);
     this.alerts = new StaffAlerts(this.clock, this::tellStaff);
     this.asnAlerts = StaffAlerts.forAsnKeywords(this.clock, this::tellStaff);
+    this.vpnAlerts = StaffAlerts.forVpnSignals(this.clock, this::tellStaff);
     this.store = store;
     final AsnStore asn = new AsnStore(this.dataDirectory.resolve("lists"), this.logger, this.clock,
         settings.asn(), settings.embeddedBaseline(),
@@ -184,6 +186,7 @@ public final class BtcAdmissionShieldPlugin {
         .buildTask(this, () -> {
           this.alerts.flushIfDue();
           this.asnAlerts.flushIfDue();
+          this.vpnAlerts.flushIfDue();
           this.journal.flushExpired();
         })
         .delay(StaffAlerts.WINDOW)
@@ -239,6 +242,8 @@ public final class BtcAdmissionShieldPlugin {
       entry.ifPresent(this.alerts::onRefusal);
     } else if (verdict.basis() == Verdict.Basis.ASN_KEYWORD) {
       entry.ifPresent(this.asnAlerts::onRefusal);
+    } else if (verdict.basis() == Verdict.Basis.VPN_SIGNAL) {
+      entry.ifPresent(this.vpnAlerts::onRefusal);
     }
   }
 
@@ -290,6 +295,8 @@ public final class BtcAdmissionShieldPlugin {
       entry.ifPresent(this.alerts::onRefusal);
     } else if (verdict.basis() == Verdict.Basis.ASN_KEYWORD) {
       entry.ifPresent(this.asnAlerts::onRefusal);
+    } else if (verdict.basis() == Verdict.Basis.VPN_SIGNAL) {
+      entry.ifPresent(this.vpnAlerts::onRefusal);
     }
   }
 

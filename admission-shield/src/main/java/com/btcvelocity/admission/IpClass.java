@@ -23,31 +23,50 @@ import java.util.Optional;
 /**
  * The classes of address a list can put an address in.
  *
- * <p>All three are membership of a public list or of a short list of systems the staff chose, not
- * a score, and all three are refused: they barely overlap with a home or a mobile subscription.
- * Any other class a future list might carry belongs in observation only, until its false positives
- * have been measured.
+ * <p>{@link #DATACENTER}, {@link #TOR} and {@link #ASN} are membership of a public list or of a
+ * short list of systems the staff chose, not a score, and they are refused: they barely overlap
+ * with a home or a mobile subscription. {@link #VPN} is the first class that is never refused, only
+ * signalled: it is kept in observation until its false positives have been measured. Any other
+ * class a future list might carry belongs there too.
  */
 public enum IpClass {
 
   /** A hosting or VPN network (X4BNet {@code lists_vpn}, datacenter list). */
-  DATACENTER("datacenter", "ADM-VPN-DC"),
+  DATACENTER("datacenter", "ADM-VPN-DC", true),
 
   /** A Tor exit node (FireHOL {@code tor_exits}). */
-  TOR("tor", "ADM-VPN-TOR"),
+  TOR("tor", "ADM-VPN-TOR", true),
 
   /**
    * An autonomous system the staff denies ({@code asn.deny-asns}, from the iptoasn.com database).
    * Not a list: it has its own mode and no address list may be configured with this class.
    */
-  ASN("asn", "ADM-VPN-ASN");
+  ASN("asn", "ADM-VPN-ASN", true),
+
+  /**
+   * An address of a known VPN service (X4BNet {@code lists_vpn}, {@code output/vpn}). Never
+   * refused, whatever the mode: admitted, journaled and told to the staff. An address a refusing
+   * class also holds is refused as that class.
+   */
+  VPN("vpn", "ADM-VPN-SIGNAL", false);
 
   private final String key;
   private final String causeCode;
+  private final boolean refused;
 
-  IpClass(final String key, final String causeCode) {
+  IpClass(final String key, final String causeCode, final boolean refused) {
     this.key = key;
     this.causeCode = causeCode;
+    this.refused = refused;
+  }
+
+  /**
+   * Whether an address of this class may be refused.
+   *
+   * @return {@code false} for a class that is only a signal
+   */
+  public boolean refusable() {
+    return this.refused;
   }
 
   /**

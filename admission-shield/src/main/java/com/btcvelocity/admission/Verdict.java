@@ -135,7 +135,12 @@ public record Verdict(
      * The name of the address's autonomous system holds one of {@code asn.observe-keywords}. A
      * signal for the staff, never a refusal: the connection is admitted.
      */
-    ASN_KEYWORD("asn-keyword");
+    ASN_KEYWORD("asn-keyword"),
+    /**
+     * The address is in the {@code vpn} list (a known VPN service) and in no list that refuses. A
+     * signal for the staff, never a refusal: the connection is admitted.
+     */
+    VPN_SIGNAL("vpn-signal");
 
     private final String label;
 
@@ -165,7 +170,7 @@ public record Verdict(
   public boolean isJournaled() {
     return switch (this.basis) {
       case LISTED, EXEMPT_NETWORK, EXEMPT_PLAYER, BEDROCK_IP_UNKNOWN,
-          GEYSER_ADDRESS_NOT_FLOODGATE, RATE_NETWORK, ASN_KEYWORD -> true;
+          GEYSER_ADDRESS_NOT_FLOODGATE, RATE_NETWORK, ASN_KEYWORD, VPN_SIGNAL -> true;
       case CLEAN, GEYSER_ORIGIN, AWAITING_IDENTITY -> false;
     };
   }

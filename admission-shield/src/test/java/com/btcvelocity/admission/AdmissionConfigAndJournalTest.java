@@ -132,12 +132,13 @@ class AdmissionConfigAndJournalTest {
   }
 
   @Test
-  void theDefaultListsAreHttpsAndCoverBothFamiliesForDatacentersAndTor() {
+  void theDefaultListsAreHttpsAndCoverBothFamiliesForDatacentersAndVpnAndTor() {
     final List<ListSource> sources = AdmissionConfig.defaultSources();
 
-    assertEquals(3, sources.size());
+    assertEquals(5, sources.size());
     assertTrue(sources.stream().allMatch(s -> "https".equals(s.url().getScheme())));
     assertEquals(2, sources.stream().filter(s -> s.ipClass() == IpClass.DATACENTER).count());
+    assertEquals(2, sources.stream().filter(s -> s.ipClass() == IpClass.VPN).count());
     assertEquals(1, sources.stream().filter(s -> s.ipClass() == IpClass.TOR).count());
   }
 

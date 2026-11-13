@@ -254,12 +254,18 @@ public final class ListStore implements IpClassifier {
     if (lookedUp.isEmpty()) {
       return Optional.empty();
     }
+    Optional<Match> signal = Optional.empty();
     for (Loaded list : this.loaded) {
       if (list.set().contains(lookedUp.get())) {
-        return Optional.of(new Match(list.source().ipClass(), list.source().id()));
+        final Match match = new Match(list.source().ipClass(), list.source().id());
+        if (match.ipClass().refusable()) {
+          return Optional.of(match);
+        }
+        // A class that is only a signal never hides one that refuses, whatever the order.
+        signal = signal.or(() -> Optional.of(match));
       }
     }
-    return Optional.empty();
+    return signal;
   }
 
   /**

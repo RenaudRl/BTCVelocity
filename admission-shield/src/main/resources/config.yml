@@ -1,6 +1,8 @@
 # BTC Admission Shield - local anti-VPN.
 #
-# A connection whose address is in a datacenter list or a Tor exit list is refused. Everything is
+# A connection whose address is in a datacenter list or a Tor exit list is refused. An address of
+# a known VPN service (X4BNet "vpn" list) is NEVER refused: it is let in, written to the journal
+# (basis=vpn-signal) and told to the staff (see lists.vpn-signal). Everything is
 # decided in memory from files kept on this proxy. NO player address is ever sent anywhere: the
 # only outbound traffic is the periodic download of the public lists below, which carries no
 # player data. There is no remote API.
@@ -181,9 +183,18 @@ lists:
   # the odd VPN user it is meant to refuse).
   quarantine-hours: 6
   quarantine-max-extra-players: 0
-  # Files are kept in <this directory>/lists/. A source needs: class (datacenter | tor), an https
-  # url, and a plain file name. Leave this section out to use the three lists below.
-  #  - X4BNet lists_vpn (MIT): networks of hosting providers and VPNs, built from ASNs.
+  # SIGNAL ON KNOWN VPN SERVICES. true : the sources of class vpn below are loaded; an address they
+  # hold (and no refusing list holds) is admitted in EVERY mode, journaled as decision=admitted
+  # basis=vpn-signal and told to the staff online, with its own window. An address a datacenter or
+  # Tor list also holds is refused as such. false : the vpn sources are ignored (nothing is
+  # downloaded for them). The journal keeps those admitted players for 180 days like the rest: say
+  # so in the register of processing.
+  vpn-signal: true
+  # Files are kept in <this directory>/lists/. A source needs: class (datacenter | tor | vpn), an
+  # https url, and a plain file name. Leave this section out to use the five lists below. A
+  # `sources:` written out without the vpn entries has no signal: copy them in to get it.
+  #  - X4BNet lists_vpn (MIT): networks of hosting providers (datacenter) and of VPN services
+  #    (vpn), built from ASNs and from the providers' published ranges.
   #  - FireHOL tor_exits: built from the Tor Project's own exit list, updated every 5 minutes.
   #    IPv4 only: IPv6 Tor exits are not covered.
   sources:
@@ -199,3 +210,11 @@ lists:
       class: tor
       url: https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/tor_exits.ipset
       file: firehol-tor-exits.ipset
+    x4bnet-vpn-ipv4:
+      class: vpn
+      url: https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/vpn/ipv4.txt
+      file: x4bnet-vpn-ipv4.txt
+    x4bnet-vpn-ipv6:
+      class: vpn
+      url: https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/vpn/ipv6.txt
+      file: x4bnet-vpn-ipv6.txt

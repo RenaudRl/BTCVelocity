@@ -42,12 +42,19 @@ public interface IpClassifier {
   Optional<Match> classify(InetAddress address);
 
   /**
-   * This classifier first, then another for the addresses this one does not know.
+   * This classifier first, then another for the addresses this one does not know, or only knows
+   * as a class that is a signal (never refused): the other one may still refuse it.
    *
-   * @param other consulted when this classifier answers empty
+   * @param other consulted when this classifier answers empty or with a signal
    * @return the combined classifier
    */
   default IpClassifier orElse(final IpClassifier other) {
-    return address -> classify(address).or(() -> other.classify(address));
+    return address -> {
+      final Optional<Match> first = classify(address);
+      if (first.isPresent() && first.get().ipClass().refusable()) {
+        return first;
+      }
+      return other.classify(address).or(() -> first);
+    };
   }
 }

@@ -118,7 +118,8 @@ public record AdmissionConfig(
   /**
    * The default lists. X4BNet {@code lists_vpn} (MIT) for datacenters in both families; the
    * FireHOL {@code tor_exits} ipset, built from the Tor Project's own exit list, for Tor. That
-   * ipset is IPv4 only; IPv6 Tor exits are not covered.
+   * ipset is IPv4 only; IPv6 Tor exits are not covered. The X4BNet {@code vpn} lists (known VPN
+   * services) come last: they only raise a signal, and a datacenter or Tor hit outranks them.
    *
    * @return the default sources
    */
@@ -132,7 +133,13 @@ public record AdmissionConfig(
             "x4bnet-datacenter-ipv6.txt"),
         new ListSource("firehol-tor-exits", IpClass.TOR, URI.create(
             "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/tor_exits.ipset"),
-            "firehol-tor-exits.ipset"));
+            "firehol-tor-exits.ipset"),
+        new ListSource("x4bnet-vpn-ipv4", IpClass.VPN, URI.create(
+            "https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/vpn/ipv4.txt"),
+            "x4bnet-vpn-ipv4.txt"),
+        new ListSource("x4bnet-vpn-ipv6", IpClass.VPN, URI.create(
+            "https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/vpn/ipv6.txt"),
+            "x4bnet-vpn-ipv6.txt"));
   }
 
   /**
@@ -273,8 +280,10 @@ public record AdmissionConfig(
     final boolean embeddedBaseline = lists.node("embedded-baseline").getBoolean(true);
     final Duration quarantine = Duration.ofMinutes(Math.max(0, Math.round(
         lists.node("quarantine-hours").getDouble(DEFAULT_QUARANTINE.toHours()) * 60)));
-    final List<ListSource> sources = lists.node("sources").empty()
-        ? defaultSources() : parseSources(lists.node("sources"), warnings);
+    final boolean vpnSignal = lists.node("vpn-signal").getBoolean(true);
+    final List<ListSource> sources = (lists.node("sources").empty()
+        ? defaultSources() : parseSources(lists.node("sources"), warnings)).stream()
+        .filter(source -> vpnSignal || source.ipClass() != IpClass.VPN).toList();
 
     return new AdmissionConfig(mode, geyser, exemptions, parseMessages(root.node("messages")),
         sources, refresh, timeout, maxBytes, maxEntries, embeddedBaseline, quarantine,
@@ -390,7 +399,7 @@ public record AdmissionConfig(
       final URI uri = parseHttps(url);
       if (ipClass == null || ipClass == IpClass.ASN || uri == null
           || !SAFE_FILE_NAME.matcher(file).matches() || file.contains("..")) {
-        warnings.accept("lists.sources." + id + ": needs class (datacenter|tor), an https url"
+        warnings.accept("lists.sources." + id + ": needs class (datacenter|tor|vpn), an https url"
             + " and a plain file name; ignored");
         continue;
       }
