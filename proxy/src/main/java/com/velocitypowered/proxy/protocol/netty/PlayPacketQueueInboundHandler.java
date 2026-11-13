@@ -47,6 +47,10 @@ public class PlayPacketQueueInboundHandler extends ChannelDuplexHandler {
   private static final int MAXIMUM_SIZE = Integer.getInteger("velocity.maximum-play-queue-size", 128 * 1024 * 1024); // 128MiB by default
   private static final QuietDecoderException QUEUE_LIMIT_FAILED = new QuietDecoderException(
       "Queue too big (greater than " + MAXIMUM_SIZE + " bytes)");
+  // Decoded packets that are not ByteBufHolders weigh 0 bytes, so the size bound alone never trips.
+  static final int MAXIMUM_PACKETS = Integer.getInteger("velocity.maximum-play-queue-packets", 4096);
+  private static final QuietDecoderException QUEUE_PACKETS_FAILED = new QuietDecoderException(
+      "Queue too big (more than " + MAXIMUM_PACKETS + " packets)");
 
   private final StateRegistry.PacketRegistry.ProtocolRegistry registry;
 
@@ -85,6 +89,10 @@ public class PlayPacketQueueInboundHandler extends ChannelDuplexHandler {
     if (this.queueSize + length > MAXIMUM_SIZE) {
       ReferenceCountUtil.release(msg);
       throw QUEUE_LIMIT_FAILED;
+    }
+    if (this.queue.size() >= MAXIMUM_PACKETS) {
+      ReferenceCountUtil.release(msg);
+      throw QUEUE_PACKETS_FAILED;
     }
     this.queueSize += length;
 
