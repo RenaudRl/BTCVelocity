@@ -297,17 +297,14 @@ public final class BtcAdmissionShieldPlugin {
         new JdbcBanLookup(database, settings.tablePrefix(), settings.networkId()), executor,
         this.clock, this.logger);
     // The tables are created by the first call that reaches the database (JdbcLinkStore#open).
-    this.purgeTask = this.proxy.getScheduler()
+    this.purgeTask = AccountLinks.schedulePurge(this.proxy.getScheduler()
         .buildTask(this, () -> {
           final int purged = accountLinks.purge();
           if (purged > 0) {
             this.logger.info("links: {} sighting(s) older than {} days deleted.", purged,
                 settings.retention().toDays());
           }
-        })
-        .delay(Duration.ofDays(1))
-        .repeat(Duration.ofDays(1))
-        .schedule();
+        }));
     this.logger.info("Account links up: mode {}, database {} (table prefix {}), lookup timeout"
         + " {} ms.", this.config.linksMode(), settings.jdbcUrl(), settings.tablePrefix(),
         settings.lookupTimeout().toMillis());

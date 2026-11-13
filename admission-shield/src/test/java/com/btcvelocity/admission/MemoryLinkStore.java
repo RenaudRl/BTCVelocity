@@ -90,7 +90,7 @@ class MemoryLinkStore implements LinkStore {
   }
 
   @Override
-  public synchronized int purgeOlderThan(final Instant cutoff) {
+  public synchronized int purgeOlderThan(final Instant cutoff) throws SQLException {
     final int before = this.rows.size();
     this.rows.removeIf(row -> row.last().isBefore(cutoff));
     return before - this.rows.size();

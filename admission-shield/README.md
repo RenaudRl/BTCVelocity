@@ -66,7 +66,9 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
   en file au-delà de ce délai est abandonnée sans interroger la base ; PostgreSQL coupe toute
   requête au-delà de `statement-timeout-ms` (2 s) et le pilote toute connexion muette au-delà de
   `socket-timeout-seconds` (5 s). Base absente au démarrage : le proxy démarre, les tables sont
-  créées au premier accès qui aboutit ; la purge quotidienne commence un jour après le démarrage.
+  créées au premier accès qui aboutit ; la purge passe 5 minutes après le démarrage (le temps que la base
+  réponde), puis toutes les 24 h : un proxy redémarré chaque jour purge quand même ; une purge
+  qui échoue donne un WARN et repasse 24 h plus tard.
   Un échec au démarrage des liens (pilote, pool) les coupe seuls, avec une ERROR sans l'URL.
   Un compte sous ban réseau actif n'est jamais enregistré.
 - **Exploitation** : un rôle PostgreSQL limité à `SELECT` sur `<prefix>sanctions` et propriétaire de

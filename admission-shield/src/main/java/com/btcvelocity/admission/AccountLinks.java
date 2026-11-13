@@ -17,6 +17,8 @@
 
 package com.btcvelocity.admission;
 
+import com.velocitypowered.api.scheduler.ScheduledTask;
+import com.velocitypowered.api.scheduler.Scheduler;
 import java.net.InetAddress;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -48,6 +50,12 @@ import org.slf4j.Logger;
 public final class AccountLinks {
 
   static final Duration WARNING_PERIOD = Duration.ofMinutes(1);
+
+  /** How long after the start the first purge runs: time for the database to come up. */
+  static final Duration FIRST_PURGE_DELAY = Duration.ofMinutes(5);
+
+  /** How often the purge runs after the first one. */
+  static final Duration PURGE_PERIOD = Duration.ofDays(1);
 
   private final AdmissionEngine engine;
   private final LinkSettings settings;
@@ -192,9 +200,20 @@ public final class AccountLinks {
     try {
       return this.store.purgeOlderThan(this.clock.instant().minus(this.settings.retention()));
     } catch (SQLException | RuntimeException failed) {
-      warn("the purge of old sightings failed; it is tried again tomorrow", failed);
+      warn("the purge of old sightings failed; it is tried again in 24 h", failed);
       return -1;
     }
+  }
+
+  /**
+   * Schedules the purge soon after the start, then daily: a proxy restarted every day still
+   * keeps the retention it announces.
+   *
+   * @param purge the task that calls {@link #purge()}
+   * @return the scheduled task
+   */
+  static ScheduledTask schedulePurge(final Scheduler.TaskBuilder purge) {
+    return purge.delay(FIRST_PURGE_DELAY).repeat(PURGE_PERIOD).schedule();
   }
 
   /**

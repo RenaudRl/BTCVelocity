@@ -24,10 +24,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.btcvelocity.admission.Verdict.Action;
 import com.btcvelocity.admission.Verdict.Basis;
+import com.velocitypowered.api.scheduler.Scheduler;
+import java.lang.reflect.Proxy;
 import java.net.InetAddress;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
@@ -241,6 +244,42 @@ class AccountLinksTest {
     this.clock.advance(Duration.ofMinutes(1));
     assertEquals(1, links.purge());
     assertTrue(this.store.rows.isEmpty());
+  }
+
+  @Test
+  void theFirstPurgeRunsMinutesAfterTheStartThenEveryDay() {
+    final Map<String, Duration> asked = new HashMap<>();
+    final Scheduler.TaskBuilder builder = (Scheduler.TaskBuilder) Proxy.newProxyInstance(
+        Scheduler.TaskBuilder.class.getClassLoader(), new Class<?>[] {Scheduler.TaskBuilder.class},
+        (self, method, args) -> {
+          if (args != null && (method.getName().equals("delay")
+              || method.getName().equals("repeat"))) {
+            asked.put(method.getName(), args[0] instanceof Duration given ? given
+                : Duration.of((Long) args[0], ((TimeUnit) args[1]).toChronoUnit()));
+            return self;
+          }
+          return null;
+        });
+
+    AccountLinks.schedulePurge(builder);
+
+    assertTrue(asked.get("delay").compareTo(Duration.ofHours(1)) < 0,
+        "a proxy restarted every day must still purge: " + asked);
+    assertEquals(Duration.ofDays(1), asked.get("repeat"));
+  }
+
+  @Test
+  void aPurgeWithoutDatabaseWarnsAndBreaksNothing() {
+    final LinkStore down = new MemoryLinkStore() {
+      @Override
+      public synchronized int purgeOlderThan(final Instant cutoff) throws SQLException {
+        throw new SQLException("connection refused");
+      }
+    };
+
+    assertEquals(-1, links("observe", down).purge());
+    assertTrue(this.logger.has("WARN", "the purge of old sightings failed"),
+        this.logger.lines().toString());
   }
 
   @Test
