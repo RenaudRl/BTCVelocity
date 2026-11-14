@@ -391,7 +391,7 @@ public final class BtcAdmissionShieldPlugin {
       return null;
     }
     // The database is waited on off the network thread, at most lookup-timeout-ms; it fails open.
-    return EventTask.resumeWhenComplete(accountLinks.judge(attempt)
+    return EventTask.resumeWhenComplete(accountLinks.judge(attempt, player)
         .thenAccept(found -> found.ifPresent(verdict -> settle(event, attempt, verdict))));
   }
 
@@ -431,13 +431,14 @@ public final class BtcAdmissionShieldPlugin {
     }
     final Attempt attempt = attemptOf(event.getPlayer());
     if (attempt != null) {
-      accountLinks.recordAccepted(attempt, event.getPlayer());
+      accountLinks.recordAccepted(attempt);
     }
   }
 
   /**
-   * Frees the account's place under the cap of accounts online on one address. The player object
-   * tells this session from a later one of the same account.
+   * Frees the session's place under the cap of accounts online on one address, whatever became of
+   * its login (refused, duplicate, gone before a server). The player object is the session: another
+   * connection of the same account keeps its own place.
    *
    * @param event the disconnection
    */
@@ -445,7 +446,7 @@ public final class BtcAdmissionShieldPlugin {
   public void onDisconnect(final DisconnectEvent event) {
     final AccountLinks accountLinks = this.links;
     if (accountLinks != null) {
-      accountLinks.sessionEnded(event.getPlayer().getUniqueId(), event.getPlayer());
+      accountLinks.sessionEnded(event.getPlayer());
     }
   }
 

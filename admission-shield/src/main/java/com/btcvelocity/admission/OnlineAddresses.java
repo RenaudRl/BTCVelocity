@@ -17,65 +17,99 @@
 
 package com.btcvelocity.admission;
 
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.HexFormat;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.WeakHashMap;
+import java.util.function.IntFunction;
 
 /**
- * Which accounts are online on which address, in memory only and keyed by the address DIGEST
+ * The sessions that hold a place on an address, in memory only and keyed by the address DIGEST
  * ({@link LinkKey}): the address itself is never held, and nothing here outlives the proxy.
  *
- * <p>One entry per account. A session is told apart by a token (the player object): the old session
- * of an account that logs in again may end after the new one began, and must not take the new one
- * away.
+ * <p>A place is taken when a login is judged, in the same step as the count it is judged on
+ * ({@link #judgeAndReserve}): ten logins that arrive before any of them reaches a server cannot
+ * all see an empty address. It belongs to a SESSION, told by a token (the player object), not to
+ * an account: a second connection of an account already online, refused later as a duplicate, comes
+ * and goes without taking the live session's place away. What is counted is the DISTINCT accounts
+ * other than the entering one.
+ *
+ * <p>A session whose end is heard before its place was taken (the events are not ordered) never
+ * takes it afterwards: it would hold the address for ever.
  */
 final class OnlineAddresses {
 
-  private record Session(String address, Object token) {
+  private record Session(UUID account, String address) {
   }
 
-  private final Map<UUID, Session> sessions = new HashMap<>();
+  private final Map<Object, Session> sessions = new IdentityHashMap<>();
+  /** Sessions that ended; weakly held, so the set never outlives the players. */
+  private final Set<Object> ended = Collections.newSetFromMap(new WeakHashMap<>());
 
   /**
-   * An account came online on an address.
+   * Counts the other accounts on an address, lets the caller judge on that count, and takes the
+   * place of the session unless the verdict refuses it, all in one step.
+   *
+   * @param account the entering account
+   * @param addressDigest the keyed digest of its address
+   * @param token tells this session from another, including another of the same account
+   * @param household the entrant's declared household, never counted against it
+   * @param judging the verdict from the number of other accounts online
+   * @return the verdict
+   */
+  synchronized Verdict judgeAndReserve(final UUID account, final byte[] addressDigest,
+      final Object token, final Set<UUID> household, final IntFunction<Verdict> judging) {
+    final Set<UUID> others = othersOn(account, addressDigest);
+    others.removeAll(household);
+    final Verdict verdict = judging.apply(others.size());
+    if (verdict.action() != Verdict.Action.REFUSE) {
+      reserve(account, addressDigest, token);
+    }
+    return verdict;
+  }
+
+  /**
+   * Takes the place of a session without judging it (the lookup failed or timed out: the login is
+   * admitted, and it counts against the next ones all the same). Does nothing for a session that
+   * has ended already.
    *
    * @param account the account
    * @param addressDigest the keyed digest of its address
-   * @param token tells this session from another of the same account
+   * @param token the session
    */
-  synchronized void enter(final UUID account, final byte[] addressDigest, final Object token) {
-    this.sessions.put(account, new Session(HexFormat.of().formatHex(addressDigest), token));
-  }
-
-  /**
-   * An account went offline; ignored when the account has since come back under another token.
-   *
-   * @param account the account
-   * @param token the token it entered with
-   */
-  synchronized void leave(final UUID account, final Object token) {
-    final Session session = this.sessions.get(account);
-    if (session != null && session.token() == token) {
-      this.sessions.remove(account);
+  synchronized void reserve(final UUID account, final byte[] addressDigest, final Object token) {
+    if (!this.ended.contains(token)) {
+      this.sessions.put(token, new Session(account, HexFormat.of().formatHex(addressDigest)));
     }
   }
 
   /**
-   * The other accounts online on an address.
+   * A session ended: its place is freed, and it can no longer take one.
+   *
+   * @param token the session
+   */
+  synchronized void leave(final Object token) {
+    this.sessions.remove(token);
+    this.ended.add(token);
+  }
+
+  /**
+   * The distinct accounts, other than one, with a place on an address.
    *
    * @param self the entering account, never counted against itself
    * @param addressDigest the keyed digest of the address
-   * @return those accounts
+   * @return those accounts, a copy
    */
   synchronized Set<UUID> othersOn(final UUID self, final byte[] addressDigest) {
     final String address = HexFormat.of().formatHex(addressDigest);
     final Set<UUID> others = new HashSet<>();
-    this.sessions.forEach((account, session) -> {
-      if (!account.equals(self) && session.address().equals(address)) {
-        others.add(account);
+    this.sessions.values().forEach(session -> {
+      if (!session.account().equals(self) && session.address().equals(address)) {
+        others.add(session.account());
       }
     });
     return others;

@@ -105,7 +105,7 @@ class AccountLinksTest {
   }
 
   private static Optional<Verdict> now(final AccountLinks links, final Attempt attempt) {
-    return links.judge(attempt).join();
+    return links.judge(attempt, new Object()).join();
   }
 
   @Test
@@ -240,9 +240,9 @@ class AccountLinksTest {
         this.bans, pool, pool, this.clock, this.logger.logger());
     try {
       final long start = System.nanoTime();
-      assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME)).get(2, TimeUnit.SECONDS));
+      assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME), new Object()).get(2, TimeUnit.SECONDS));
       assertTrue(System.nanoTime() - start < Duration.ofSeconds(1).toNanos(), "the login waited");
-      assertEquals(Optional.empty(), links.judge(login(SISTER, HOME)).get(2, TimeUnit.SECONDS));
+      assertEquals(Optional.empty(), links.judge(login(SISTER, HOME), new Object()).get(2, TimeUnit.SECONDS));
       assertEquals(1, this.logger.lines().size(), this.logger.lines().toString());
       assertTrue(this.logger.has("WARN", "admitted unjudged"), this.logger.lines().toString());
       assertFalse(this.logger.lines().getFirst().contains("198.51"), "no address in the warning");
@@ -436,7 +436,7 @@ class AccountLinksTest {
       for (UUID account : Set.of(BROTHER, SISTER, UUID.randomUUID())) {
         links.recordAccepted(login(account, ELSEWHERE));
       }
-      final Verdict alt = links.judge(login(NEWCOMER, HOME)).get(2, TimeUnit.SECONDS)
+      final Verdict alt = links.judge(login(NEWCOMER, HOME), new Object()).get(2, TimeUnit.SECONDS)
           .orElseThrow();
 
       assertTrue(this.logger.has("WARN", "session queue is full"), this.logger.lines().toString());
@@ -464,8 +464,8 @@ class AccountLinksTest {
     };
     final AccountLinks links = links(slow, pool);
     try {
-      assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME)).get(2, TimeUnit.SECONDS));
-      assertEquals(Optional.empty(), links.judge(login(SISTER, HOME)).get(2, TimeUnit.SECONDS));
+      assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME), new Object()).get(2, TimeUnit.SECONDS));
+      assertEquals(Optional.empty(), links.judge(login(SISTER, HOME), new Object()).get(2, TimeUnit.SECONDS));
     } finally {
       release.countDown();
       pool.shutdown();
@@ -485,7 +485,7 @@ class AccountLinksTest {
       pool.execute(() -> { });
       final AccountLinks links = links(this.store, pool);
 
-      assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME)).get(1, TimeUnit.SECONDS));
+      assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME), new Object()).get(1, TimeUnit.SECONDS));
       links.recordAccepted(login(NEWCOMER, HOME));
       final CompletableFuture<Integer> staff = links.run(kept -> kept.forget(NEWCOMER));
 

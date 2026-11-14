@@ -122,12 +122,21 @@ public final class AccountLinks {
   }
 
   /**
-   * Judges an authenticated login on its links.
+   * Judges an authenticated login on its links, and, under a cap of accounts online
+   * ({@code max-online-per-address}), takes the session's place on its address in the same step as
+   * the count it is judged on. When the lookup fails or is too slow the login is admitted unjudged
+   * and takes its place all the same: it counts against the next ones.
+   *
+   * <p>The place is freed by {@link #sessionEnded}, which the caller must call for every session it
+   * passed here, whatever became of the login.
    *
    * @param authenticated the login
+   * @param session tells this session from any other, including another of the same account (the
+   *     player object)
    * @return the verdict to apply and journal, or empty: nothing to say, or the lookup failed
    */
-  public CompletableFuture<Optional<Verdict>> judge(final Attempt authenticated) {
+  public CompletableFuture<Optional<Verdict>> judge(final Attempt authenticated,
+      final Object session) {
     final Optional<InetAddress> subject = this.engine.linkSubject(authenticated);
     if (subject.isEmpty()) {
       return CompletableFuture.completedFuture(Optional.empty());
@@ -136,20 +145,33 @@ public final class AccountLinks {
     try {
       // orTimeout completes this very future, and a supplyAsync task whose future is already
       // complete never runs: a lookup still queued when its login went in never reaches the base.
-      return CompletableFuture.supplyAsync(() -> decide(authenticated, judged), this.executor)
+      return CompletableFuture.supplyAsync(() -> decide(authenticated, judged, session),
+              this.executor)
           .orTimeout(this.settings.lookupTimeout().toMillis(), TimeUnit.MILLISECONDS)
           .exceptionally(failure -> {
             warn("the login of " + shortId(authenticated.uuid()) + " is admitted unjudged",
                 failure);
+            reserveUnjudged(authenticated, judged, session);
             return Optional.empty();
           });
     } catch (RejectedExecutionException full) {
       warn("the lookup queue is full; logins are admitted unjudged", full);
+      reserveUnjudged(authenticated, judged, session);
       return CompletableFuture.completedFuture(Optional.empty());
     }
   }
 
-  private Optional<Verdict> decide(final Attempt authenticated, final InetAddress judged) {
+  private void reserveUnjudged(final Attempt authenticated, final InetAddress judged,
+      final Object session) {
+    if (this.settings.maxOnlinePerAddress() > 0) {
+      final Sighting entering = this.key.sighting(authenticated.uuid(), judged,
+          this.clock.instant());
+      this.online.reserve(entering.account(), entering.ipDigest(), session);
+    }
+  }
+
+  private Optional<Verdict> decide(final Attempt authenticated, final InetAddress judged,
+      final Object session) {
     final UUID self = authenticated.uuid();
     final Instant now = this.clock.instant();
     try {
@@ -162,22 +184,15 @@ public final class AccountLinks {
           .collect(Collectors.toSet());
       final Map<UUID, BanLookup.ActiveBan> banned = linked.isEmpty() ? Map.of()
           : this.bans.activeNetworkBans(linked, now);
-      final Verdict verdict = this.engine.decideLinks(authenticated, judged, facts, banned, now,
-          othersOnline(entering, facts));
+      // Counted and reserved in one step: the place is held before any other login is judged.
+      final Verdict verdict = this.settings.maxOnlinePerAddress() == 0
+          ? this.engine.decideLinks(authenticated, judged, facts, banned, now, 0)
+          : this.online.judgeAndReserve(self, entering.ipDigest(), session, facts.household(),
+              others -> this.engine.decideLinks(authenticated, judged, facts, banned, now, others));
       return verdict.basis() == Verdict.Basis.CLEAN ? Optional.empty() : Optional.of(verdict);
     } catch (SQLException failed) {
       throw new CompletionException(failed);
     }
-  }
-
-  /** The other accounts online on the address, the entrant's declared household left out. */
-  private int othersOnline(final Sighting entering, final LinkFacts facts) {
-    if (this.settings.maxOnlinePerAddress() == 0) {
-      return 0;
-    }
-    final Set<UUID> others = this.online.othersOn(entering.account(), entering.ipDigest());
-    others.removeAll(facts.household());
-    return others.size();
   }
 
   /**
@@ -192,17 +207,6 @@ public final class AccountLinks {
    * @param authenticated the login
    */
   public void recordAccepted(final Attempt authenticated) {
-    recordAccepted(authenticated, new Object());
-  }
-
-  /**
-   * {@link #recordAccepted(Attempt)}, and the account is counted online on its address for the cap
-   * ({@code max-online-per-address}) until {@link #sessionEnded}.
-   *
-   * @param authenticated the login
-   * @param session tells this session from a later one of the same account (the player object)
-   */
-  public void recordAccepted(final Attempt authenticated, final Object session) {
     final UUID account = authenticated.uuid();
     if (account == null || !this.settings.enabled()) {
       return;
@@ -212,9 +216,6 @@ public final class AccountLinks {
     final @Nullable Sighting sighting = subject.isEmpty()
         || authenticated.viaGeyserListener() && !authenticated.floodgatePlayer() ? null
         : this.key.sighting(account, subject.get(), now);
-    if (sighting != null && this.settings.maxOnlinePerAddress() > 0) {
-      this.online.enter(sighting.account(), sighting.ipDigest(), session);
-    }
     try {
       this.sessionExecutor.execute(() -> {
         try {
@@ -236,14 +237,16 @@ public final class AccountLinks {
   }
 
   /**
-   * An account's session ended: it no longer counts online. Ignored when the account has since come
-   * back under another session.
+   * A session ended, whatever became of its login (refused by anyone, a duplicate connection, a
+   * client gone before it reached a server): its place under the cap is freed, and it can no longer
+   * take one. Only this session's own place goes: another session of the same account keeps its.
    *
-   * @param account the account
-   * @param session the session {@link #recordAccepted(Attempt, Object)} was given
+   * @param session the session {@link #judge} was given
    */
-  public void sessionEnded(final UUID account, final Object session) {
-    this.online.leave(account, session);
+  public void sessionEnded(final Object session) {
+    if (this.settings.maxOnlinePerAddress() > 0) {
+      this.online.leave(session);
+    }
   }
 
   /**
