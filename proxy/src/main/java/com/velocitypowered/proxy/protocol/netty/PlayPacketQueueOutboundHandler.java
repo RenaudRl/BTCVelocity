@@ -65,7 +65,16 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
   static final int DEFAULT_MAXIMUM_PACKETS =
       bounded("velocity.maximum-play-queue-outbound-packets", 4096, MINIMUM_PACKETS);
   static final int DEFAULT_MAXIMUM_SIZE =
-      bounded("velocity.maximum-play-queue-outbound-size", 128 * 1024 * 1024, MINIMUM_SIZE); // 128MiB
+      bounded("velocity.maximum-play-queue-outbound-size", 8 * 1024 * 1024, MINIMUM_SIZE); // 8MiB
+
+  /** A close notice without a stack trace: one shared instance, as it only ever signals a close. */
+  private static final ClosedChannelException CLOSED = closedWithoutStackTrace();
+
+  private static ClosedChannelException closedWithoutStackTrace() {
+    final ClosedChannelException closed = new ClosedChannelException();
+    closed.setStackTrace(new StackTraceElement[0]);
+    return closed;
+  }
 
   /** A system property, never below its minimum (0 or a negative value would close every login). */
   static int bounded(final String name, final int fallback, final int minimum) {
@@ -82,6 +91,8 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
 
   private final Queue<Parked> queue = new ArrayDeque<>();
   private long queueSize = 0;
+  /** Set by the overflow: the connection is closing, so what is written after is released at once. */
+  private boolean closing = false;
 
   /**
    * Provides registries for "client" &amp; server bound packets.
@@ -114,16 +125,28 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
       return;
     }
 
+    // The overflow has already closed the connection: release what is still written, quietly
+    if (this.closing) {
+      ReferenceCountUtil.release(packet);
+      if (!promise.isVoid()) {
+        promise.tryFailure(CLOSED);
+      }
+      return;
+    }
+
     // Otherwise, queue the packet, unless the peer has stayed in CONFIG long enough to overflow us.
     final long length = PACKET_WEIGHT
         + (packet instanceof final ByteBufHolder holder ? holder.content().readableBytes() : 0);
     final boolean tooMany = this.queue.size() >= this.maximumPackets;
     if (tooMany || this.queueSize + length > this.maximumSize) {
+      this.closing = true;
       ReferenceCountUtil.release(packet);
       final QuietDecoderException overflow = new QuietDecoderException(tooMany
           ? "Outbound queue too big (more than " + this.maximumPackets + " packets)"
           : "Outbound queue too big (greater than " + this.maximumSize + " bytes)");
-      promise.tryFailure(overflow);
+      if (!promise.isVoid()) {
+        promise.tryFailure(overflow);
+      }
       LOGGER.warn("Closing the connection of {}: its PLAY queue toward a client still in CONFIG is full"
           + " ({} packets queued, {} bytes counted; limits {} packets, {} bytes)",
           playerOf(ctx), this.queue.size(), this.queueSize, this.maximumPackets, this.maximumSize);
@@ -162,7 +185,9 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
         ctx.write(parked.packet(), parked.promise());
       } else {
         ReferenceCountUtil.release(parked.packet());
-        parked.promise().tryFailure(new ClosedChannelException());
+        if (!parked.promise().isVoid()) {
+          parked.promise().tryFailure(CLOSED);
+        }
       }
     }
 

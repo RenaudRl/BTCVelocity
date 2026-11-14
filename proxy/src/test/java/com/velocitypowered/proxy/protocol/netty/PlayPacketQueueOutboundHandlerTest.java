@@ -230,6 +230,47 @@ class PlayPacketQueueOutboundHandlerTest {
     channel.finishAndReleaseAll();
   }
 
+  /**
+   * Once the overflow has closed the connection, the packets still parked and those written after
+   * are released quietly: void promises fire nothing, and the overflow is logged once.
+   */
+  @Test
+  void overflowThenInactivityWithVoidPromisesRethrowsNothingAndWarnsOnce() {
+    final List<LogEvent> events = new CopyOnWriteArrayList<>();
+    final AbstractAppender appender = new AbstractAppender("outbound-overflow-once", null, null, true,
+        Property.EMPTY_ARRAY) {
+      @Override
+      public void append(final LogEvent event) {
+        events.add(event.toImmutable());
+      }
+    };
+    appender.start();
+    final org.apache.logging.log4j.core.Logger logger = (org.apache.logging.log4j.core.Logger)
+        LogManager.getLogger(PlayPacketQueueOutboundHandler.class);
+    logger.addAppender(appender);
+    Tail tail = new Tail();
+    EmbeddedChannel channel = channel(tail, 2, 1024 * 1024);
+    try {
+      for (int i = 0; i < 3; i++) {
+        channel.writeOneOutbound(new ChatAcknowledgementPacket(i), channel.voidPromise());
+      }
+      assertFalse(channel.isActive(), "overflow closes the connection");
+      assertEquals(1, tail.caught.size(), "the overflow alone reaches exceptionCaught");
+
+      // written through the pipeline, as the connection still does while it closes
+      for (int i = 3; i < 6; i++) {
+        channel.pipeline().write(new ChatAcknowledgementPacket(i), channel.voidPromise());
+      }
+
+      assertEquals(1, tail.caught.size(), "nothing is rethrown on inactivity or after");
+      assertEquals(1, events.size(), "one WARN for the overflow");
+    } finally {
+      logger.removeAppender(appender);
+      appender.stop();
+      channel.finishAndReleaseAll();
+    }
+  }
+
   @Test
   void theSystemPropertiesAreClampedToAReasonableMinimum() {
     final String name = "velocity.test-queue-bound";

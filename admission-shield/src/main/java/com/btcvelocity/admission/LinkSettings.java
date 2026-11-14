@@ -53,7 +53,7 @@ import org.spongepowered.configurate.ConfigurationNode;
  * @param retention how long a sighting is kept after it was last seen
  * @param knownRetention how long an account (its UUID and two times, no address) stays known after
  *     it was last seen; what tells an account that played before a ban from one made after it, so it
- *     outlives {@code retention} and an erasure ({@code forget})
+ *     outlives {@code retention}, but {@code forget} erases it too
  * @param message the MiniMessage text shown to a refused player, with {@code {code}}
  * @param maxOnlinePerAddress how many accounts may be online at once on one address, the entering
  *     one included (a login is refused when that many OTHER accounts, its declared household not
