@@ -21,6 +21,8 @@ import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import com.velocitypowered.proxy.protocol.StateRegistry;
+import com.velocitypowered.proxy.util.except.QuietDecoderException;
+import io.netty.buffer.ByteBufHolder;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -42,9 +44,18 @@ import org.jetbrains.annotations.NotNull;
  */
 public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
 
+  // Mirrors the inbound bounds: packets parked for a client stuck in CONFIG must not grow forever.
+  static final int DEFAULT_MAXIMUM_PACKETS =
+      Integer.getInteger("velocity.maximum-play-queue-outbound-packets", 4096);
+  static final int DEFAULT_MAXIMUM_SIZE =
+      Integer.getInteger("velocity.maximum-play-queue-outbound-size", 128 * 1024 * 1024); // 128MiB
+
   private final StateRegistry.PacketRegistry.ProtocolRegistry registry;
+  private final int maximumPackets;
+  private final int maximumSize;
 
   private final Queue<MinecraftPacket> queue = new ArrayDeque<>();
+  private int queueSize = 0;
 
   /**
    * Provides registries for "client" &amp; server bound packets.
@@ -53,7 +64,14 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
    * @param direction the direction of packet flow (typically {@code CLIENTBOUND})
    */
   public PlayPacketQueueOutboundHandler(final ProtocolVersion version, final ProtocolUtils.Direction direction) {
+    this(version, direction, DEFAULT_MAXIMUM_PACKETS, DEFAULT_MAXIMUM_SIZE);
+  }
+
+  PlayPacketQueueOutboundHandler(final ProtocolVersion version, final ProtocolUtils.Direction direction,
+      final int maximumPackets, final int maximumSize) {
     this.registry = StateRegistry.CONFIG.getProtocolRegistry(direction, version);
+    this.maximumPackets = maximumPackets;
+    this.maximumSize = maximumSize;
   }
 
   @Override
@@ -70,7 +88,20 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
       return;
     }
 
-    // Otherwise, queue the packet
+    // Otherwise, queue the packet, unless the peer has stayed in CONFIG long enough to overflow us.
+    final int length = packet instanceof final ByteBufHolder holder ? holder.content().readableBytes() : 0;
+    final boolean tooMany = this.queue.size() >= this.maximumPackets;
+    if (tooMany || this.queueSize + length > this.maximumSize) {
+      ReferenceCountUtil.release(packet);
+      final QuietDecoderException overflow = new QuietDecoderException(tooMany
+          ? "Outbound queue too big (more than " + this.maximumPackets + " packets)"
+          : "Outbound queue too big (greater than " + this.maximumSize + " bytes)");
+      promise.tryFailure(overflow);
+      // Reaches MinecraftConnection#exceptionCaught, which closes the connection quietly.
+      ctx.fireExceptionCaught(overflow);
+      return;
+    }
+    this.queueSize += length;
     this.queue.offer(packet);
   }
 
@@ -96,6 +127,8 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
         ReferenceCountUtil.release(packet);
       }
     }
+
+    this.queueSize = 0;
 
     if (active) {
       ctx.flush();
