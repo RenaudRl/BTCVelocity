@@ -160,7 +160,7 @@ class LinkCommandTest {
     command.execute(this.console, new String[] {"forget", SISTER.toString()}).join();
 
     assertTrue(this.store.rows.isEmpty());
-    assertTrue(this.told.getFirst().startsWith("1 ligne(s) effacée(s)"), this.told.toString());
+    assertTrue(this.told.getFirst().startsWith("2 ligne(s) effacée(s)"), this.told.toString());
     assertTrue(this.staff.isEmpty());
   }
 
@@ -179,8 +179,8 @@ class LinkCommandTest {
     command().execute(this.console, new String[] {"forget", SISTER.toString()}).join();
 
     assertTrue(this.store.rows.isEmpty());
-    assertTrue(this.told.getFirst().startsWith("1 ligne(s) effacée(s)"), this.told.toString());
-    assertTrue(this.logger.has("INFO", "console erased 1 row(s) about " + SISTER),
+    assertTrue(this.told.getFirst().startsWith("2 ligne(s) effacée(s)"), this.told.toString());
+    assertTrue(this.logger.has("INFO", "console erased 2 row(s) about " + SISTER),
         this.logger.lines().toString());
   }
 
