@@ -78,11 +78,16 @@ class AccountLinksTest {
   }
 
   private AccountLinks links(final String mode, final LinkStore over, final Executor executor) {
+    return links(mode, over, executor, executor);
+  }
+
+  private AccountLinks links(final String mode, final LinkStore over, final Executor logins,
+      final Executor sessions) {
     final AdmissionConfig config = AccountLinkRuleTest.config(AccountLinkRuleTest.ON
         .formatted(mode) + "    lookup-timeout-ms: 100\n");
     return new AccountLinks(new AdmissionEngine(config, address -> Optional.empty()),
-        config.links(), LinkKeyTest.key(LinkKeyTest.TEST_KEY), over, this.bans, executor,
-        this.clock, this.logger.logger());
+        config.links(), LinkKeyTest.key(LinkKeyTest.TEST_KEY), over, this.bans, logins,
+        sessions, this.clock, this.logger.logger());
   }
 
   private static Attempt login(final UUID uuid, final InetAddress from) {
@@ -232,7 +237,7 @@ class AccountLinksTest {
         .formatted("enforce") + "    lookup-timeout-ms: 100\n");
     final AccountLinks links = new AccountLinks(new AdmissionEngine(config,
         address -> Optional.empty()), config.links(), LinkKeyTest.key(LinkKeyTest.TEST_KEY), slow,
-        this.bans, pool, this.clock, this.logger.logger());
+        this.bans, pool, pool, this.clock, this.logger.logger());
     try {
       final long start = System.nanoTime();
       assertEquals(Optional.empty(), links.judge(login(NEWCOMER, HOME)).get(2, TimeUnit.SECONDS));
@@ -349,6 +354,98 @@ class AccountLinksTest {
     links("observe", this.store).recordAccepted(login(BANNED, HOME));
 
     assertTrue(this.store.rows.isEmpty());
+    assertTrue(this.store.known.isEmpty(), "not even as a known account");
+  }
+
+  @Test
+  void aSisterErasedByForgetIsStillKnownToHavePlayedBeforeTheBan() {
+    final AccountLinks links = links("enforce", this.store);
+    links.recordAccepted(login(SISTER, HOME));
+    seenBeforeTheBan(BANNED, HOME);
+    this.clock.advance(Duration.ofDays(2));
+    this.bannedAt = this.clock.instant();
+    this.clock.advance(Duration.ofHours(1));
+
+    links.run(kept -> kept.forget(SISTER)).join();
+    final Verdict sister = now(links, login(SISTER, HOME)).orElseThrow();
+
+    assertTrue(this.store.rows.stream().noneMatch(row -> row.account().equals(SISTER)),
+        "her sightings are gone");
+    assertEquals(Action.ADMIT, sister.action(), "known before the ban, though nothing else is kept");
+    assertEquals(Basis.LINKED_ACCOUNT, sister.basis());
+  }
+
+  @Test
+  void aSightingsPurgeLeavesTheAccountKnownUntilItsOwnRetentionEnds() {
+    final AccountLinks links = links("observe", this.store);
+    links.recordAccepted(login(SISTER, HOME));
+
+    this.clock.advance(Duration.ofDays(180).plusMinutes(1));
+    assertEquals(1, links.purge(), "the sighting, not the account");
+    assertTrue(this.store.rows.isEmpty());
+    assertTrue(this.store.known.containsKey(SISTER));
+
+    this.clock.advance(Duration.ofDays(550));
+    assertEquals(1, links.purge(), "two years after her last visit she is as good as new");
+    assertTrue(this.store.known.isEmpty());
+  }
+
+  @Test
+  void aBedrockPlayerWithoutARealAddressIsKnownThoughNeverSeenOnAnAddress() {
+    final InetAddress geyser = InetAddress.ofLiteral("198.51.100.50");
+    final UUID bedrockSister = new UUID(0L, 2535400000000011L);
+    final AccountLinks links = links("enforce", this.store);
+
+    links.recordAccepted(Attempt.claimed(".Sis", geyser)
+        .authenticated(".Sis", bedrockSister, true, null));
+    assertTrue(this.store.rows.isEmpty(), "Geyser's address is never kept for her");
+    assertTrue(this.store.known.containsKey(bedrockSister));
+    seenBeforeTheBan(BANNED, HOME);
+    this.clock.advance(Duration.ofDays(1));
+    this.bannedAt = this.clock.instant();
+    this.clock.advance(Duration.ofHours(1));
+
+    final Verdict back = now(links, Attempt.claimed(".Sis", geyser)
+        .authenticated(".Sis", bedrockSister, true, HOME)).orElseThrow();
+
+    assertEquals(Action.ADMIT, back.action(), "she was there before the ban");
+    assertEquals(Basis.LINKED_ACCOUNT, back.basis());
+  }
+
+  @Test
+  void aWaveOfSessionsNeverFillsTheQueueTheLoginsAreJudgedThrough() throws Exception {
+    final CountDownLatch release = new CountDownLatch(1);
+    // A database that is slow to write: every session write stays stuck on it.
+    final MemoryLinkStore slowWrites = new MemoryLinkStore() {
+      @Override
+      public void record(final Sighting sighting) throws SQLException {
+        await(release);
+        super.record(sighting);
+      }
+    };
+    final ThreadPoolExecutor sessions = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<>(1));
+    final ThreadPoolExecutor logins = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<>(1));
+    try {
+      seenBeforeTheBan(BANNED, HOME);
+      slowWrites.rows.addAll(this.store.rows);
+      final AccountLinks links = links("enforce", slowWrites, logins, sessions);
+
+      // One write stuck, one queued, the third turned away: the session queue is full.
+      for (UUID account : Set.of(BROTHER, SISTER, UUID.randomUUID())) {
+        links.recordAccepted(login(account, ELSEWHERE));
+      }
+      final Verdict alt = links.judge(login(NEWCOMER, HOME)).get(2, TimeUnit.SECONDS)
+          .orElseThrow();
+
+      assertTrue(this.logger.has("WARN", "session queue is full"), this.logger.lines().toString());
+      assertEquals(Action.REFUSE, alt.action(), "still judged: the session writes queue elsewhere");
+    } finally {
+      release.countDown();
+      sessions.shutdownNow();
+      logins.shutdownNow();
+    }
   }
 
   @Test

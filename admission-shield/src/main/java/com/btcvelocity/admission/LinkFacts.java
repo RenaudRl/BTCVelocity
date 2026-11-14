@@ -34,8 +34,9 @@ import org.jspecify.annotations.Nullable;
  * @param onNetwork the accounts seen on the same /24 or /48, with when they were last seen there
  * @param household the accounts declared in the same household as the entering one (itself
  *     included when it has one)
- * @param firstSeen the oldest sighting of the entering account, anywhere, or {@code null} when it
- *     was never accepted before
+ * @param firstSeen when the entering account was first accepted, anywhere (from the known accounts,
+ *     which outlive an erasure, or from a sighting), or {@code null} when it was never accepted
+ *     before
  */
 public record LinkFacts(Map<UUID, Instant> onAddress, Map<UUID, Instant> onNetwork,
     Set<UUID> household, @Nullable Instant firstSeen) {

@@ -64,20 +64,20 @@ class LinkStorageSqlTest {
     store.record(SEEN);
     store.record(SEEN);
 
-    assertEquals(1 + 6 + 2, db.calls.size(),
-        "the tables looked for once after the refusal, the schema once, then the two sightings");
+    assertEquals(1 + 8 + 4, db.calls.size(), "the tables looked for once after the refusal, the"
+        + " schema once, then the sighting and the known account of each of the two sessions");
     assertTrue(db.calls.get(0).sql().contains("to_regclass"), db.calls.get(0).sql());
     assertTrue(db.calls.get(1).sql().startsWith("CREATE TABLE IF NOT EXISTS"),
         db.calls.get(1).sql());
-    assertTrue(db.calls.get(7).sql().startsWith("INSERT INTO"), db.calls.get(7).sql());
+    assertTrue(db.calls.get(9).sql().startsWith("INSERT INTO"), db.calls.get(9).sql());
   }
 
-  private static final Object[] BOTH_TABLES = {
-      "btc_admission_sightings", "btc_admission_households"};
+  private static final Object[] ALL_TABLES = {
+      "btc_admission_sightings", "btc_admission_households", "btc_admission_known"};
 
   @Test
   void aRoleThatCannotCreateButOwnsTheTablesStillReadsAndWrites() throws SQLException {
-    final FakeJdbc db = new FakeJdbc().answer(BOTH_TABLES);
+    final FakeJdbc db = new FakeJdbc().answer(ALL_TABLES);
     db.failingExecutes = 100;
     final JdbcLinkStore store = new JdbcLinkStore(db.dataSource(), "btc_");
 
@@ -88,6 +88,7 @@ class LinkStorageSqlTest {
     assertTrue(db.calls.getFirst().sql().contains("to_regclass(?)"), db.calls.getFirst().sql());
     assertEquals("btc_admission_sightings", db.calls.getFirst().params().get(1));
     assertEquals("btc_admission_households", db.calls.getFirst().params().get(2));
+    assertEquals("btc_admission_known", db.calls.getFirst().params().get(3));
     assertEquals(1, db.calls.stream().filter(call -> call.sql().contains("to_regclass")).count(),
         "the tables are found once, then the store is ready");
   }
@@ -96,13 +97,14 @@ class LinkStorageSqlTest {
   void aRefusedSchemaWithMissingTablesFailsAndIsTriedAgain() throws SQLException {
     final FakeJdbc none = new FakeJdbc();
     none.failingExecutes = 100;
-    final FakeJdbc oneOfTwo = new FakeJdbc().answer(new Object[] {"btc_admission_sightings", null});
+    final FakeJdbc oneOfTwo = new FakeJdbc().answer(
+        new Object[] {"btc_admission_sightings", "btc_admission_households", null});
     oneOfTwo.failingExecutes = 100;
 
     assertThrows(SQLException.class, () -> new JdbcLinkStore(none.dataSource(), "btc_")
         .record(SEEN), "no table, no right to create it");
     assertThrows(SQLException.class, () -> new JdbcLinkStore(oneOfTwo.dataSource(), "btc_")
-        .record(SEEN), "one table of the two is not enough");
+        .record(SEEN), "one table of the three missing is not enough");
     final FakeJdbc later = new FakeJdbc().answer();
     later.failingExecutes = 1;
     final JdbcLinkStore store = new JdbcLinkStore(later.dataSource(), "btc_");
@@ -120,8 +122,9 @@ class LinkStorageSqlTest {
 
     store.forget(ENTRANT);
     store.purgeOlderThan(NOW);
+    store.purgeKnownOlderThan(NOW);
 
-    assertEquals(4, db.calls.size(), db.calls.toString());
+    assertEquals(5, db.calls.size(), db.calls.toString());
     assertTrue(db.calls.stream().allMatch(call -> call.sql().startsWith("DELETE FROM")),
         db.calls.toString());
   }
@@ -171,15 +174,21 @@ class LinkStorageSqlTest {
   }
 
   @Test
-  void theSchemaIsTwoTablesOfItsOwnAndCanRunAgain() throws SQLException {
+  void theSchemaIsThreeTablesOfItsOwnAndCanRunAgain() throws SQLException {
     final FakeJdbc db = new FakeJdbc();
     new JdbcLinkStore(db.dataSource(), "sent_").createTables();
 
-    assertEquals(6, db.calls.size());
+    assertEquals(8, db.calls.size());
     for (FakeJdbc.Call call : db.calls) {
       assertTrue(call.sql().contains("IF NOT EXISTS sent_admission_"), call.sql());
       assertFalse(call.sql().contains("sanctions"), call.sql());
     }
+    final String known = db.calls.stream().map(FakeJdbc.Call::sql)
+        .filter(sql -> sql.startsWith("CREATE TABLE IF NOT EXISTS sent_admission_known"))
+        .findFirst().orElseThrow();
+    assertEquals("CREATE TABLE IF NOT EXISTS sent_admission_known (uuid VARCHAR(36) PRIMARY KEY,"
+        + " first_seen BIGINT NOT NULL, last_seen BIGINT NOT NULL)", known,
+        "an account and two times: no address, no digest");
   }
 
   @Test
@@ -193,6 +202,37 @@ class LinkStorageSqlTest {
     assertArrayEquals(SEEN.ipDigest(), (byte[]) call.params().get(2));
     assertArrayEquals(SEEN.netDigest(), (byte[]) call.params().get(3));
     assertEquals(NOW.toEpochMilli(), call.params().get(5));
+    final FakeJdbc.Call known = db.calls.get(1);
+    assertTrue(known.sql().startsWith("INSERT INTO btc_admission_known"), known.sql());
+    assertEquals(Map.of(1, ENTRANT.toString(), 2, ENTRANT.toString(), 3, NOW.toEpochMilli(),
+        4, NOW.toEpochMilli()), known.params(), "the account and the time, nothing of the address");
+  }
+
+  @Test
+  void aKnownAccountIsOneRowKeepingItsEarliestFirstTimeAndItsLatestLastTime() throws SQLException {
+    final FakeJdbc db = new FakeJdbc();
+    ready(db).recordKnown(ENTRANT, NOW);
+
+    assertEquals(1, db.calls.size());
+    final String sql = db.calls.getFirst().sql();
+    assertTrue(sql.contains("ON CONFLICT (uuid) DO UPDATE SET first_seen = LEAST(btc_admission_known"
+        + ".first_seen, EXCLUDED.first_seen), last_seen = GREATEST(btc_admission_known.last_seen,"
+        + " EXCLUDED.last_seen)"), sql);
+    assertTrue(sql.contains("COALESCE((SELECT MIN(first_seen) FROM btc_admission_sightings WHERE"
+        + " uuid = ?), ?)"), "a first row takes the date of a sighting that came before: " + sql);
+    assertFalse(sql.contains("digest"), sql);
+  }
+
+  @Test
+  void aKnownAccountIsPurgedByItsOwnRetentionAlone() throws SQLException {
+    final FakeJdbc db = new FakeJdbc();
+    final Instant cutoff = NOW.minus(java.time.Duration.ofDays(730));
+
+    ready(db).purgeKnownOlderThan(cutoff);
+
+    assertEquals(1, db.calls.size());
+    assertEquals("DELETE FROM btc_admission_known WHERE last_seen < ?", db.calls.getFirst().sql());
+    assertEquals(cutoff.toEpochMilli(), db.calls.getFirst().params().get(1));
   }
 
   @Test
@@ -215,9 +255,11 @@ class LinkStorageSqlTest {
     assertEquals(Map.of(BANNED, NOW.minusSeconds(120)), facts.onNetwork());
     assertEquals(Set.of(SISTER), facts.household());
     assertEquals(NOW.minusSeconds(86_400), facts.firstSeen());
-    assertTrue(db.calls.get(3).sql().contains("MIN(first_seen) FROM btc_admission_sightings"
-        + " WHERE uuid = ?"), db.calls.get(3).sql());
+    assertTrue(db.calls.get(3).sql().contains("SELECT first_seen AS seen FROM btc_admission_known"
+        + " WHERE uuid = ? UNION ALL SELECT first_seen FROM btc_admission_sightings WHERE uuid = ?"),
+        db.calls.get(3).sql());
     assertEquals(ENTRANT.toString(), db.calls.get(3).params().get(1));
+    assertEquals(ENTRANT.toString(), db.calls.get(3).params().get(2));
     assertNull(unknown.firstSeen(), "MIN over no row is NULL: never seen");
     final List<FakeJdbc.Call> calls = db.calls;
     assertTrue(calls.get(0).sql().contains("WHERE ip_digest = ?"), calls.get(0).sql());
@@ -258,7 +300,8 @@ class LinkStorageSqlTest {
 
     assertEquals(List.of("DELETE FROM btc_admission_sightings WHERE uuid = ?",
         "DELETE FROM btc_admission_households WHERE uuid = ?"),
-        db.calls.stream().map(FakeJdbc.Call::sql).toList());
+        db.calls.stream().map(FakeJdbc.Call::sql).toList(),
+        "the known account (no address) is not erased: it is what dates the account");
     assertTrue(db.calls.stream().allMatch(call -> ENTRANT.toString().equals(call.params().get(1))));
     assertEquals(List.of("autoCommit=false", "commit", "autoCommit=true"), db.transaction);
   }

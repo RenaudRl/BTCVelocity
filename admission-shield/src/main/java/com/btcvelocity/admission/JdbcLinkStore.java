@@ -34,9 +34,10 @@ import javax.sql.DataSource;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The sightings and the households in the Sentinel PostgreSQL database, in two tables of their own
- * ({@code <prefix>admission_sightings}, {@code <prefix>admission_households}). Nothing of
- * Sentinel's own tables is written.
+ * The sightings, the households and the known accounts in the Sentinel PostgreSQL database, in
+ * three tables of their own ({@code <prefix>admission_sightings}, {@code <prefix>admission_households},
+ * {@code <prefix>admission_known}). Nothing of Sentinel's own tables is written. The known accounts
+ * hold an account and two times, never an address nor a digest of one.
  *
  * <p>Every value is bound; only the prefix, checked against {@link LinkSettings#PREFIX}, is pasted
  * into the statements.
@@ -48,6 +49,7 @@ public final class JdbcLinkStore implements LinkStore {
   private final DataSource database;
   private final String sightings;
   private final String households;
+  private final String known;
   private volatile boolean tablesReady;
 
   /**
@@ -63,10 +65,12 @@ public final class JdbcLinkStore implements LinkStore {
     this.database = database;
     this.sightings = prefix + "admission_sightings";
     this.households = prefix + "admission_households";
+    this.known = prefix + "admission_known";
   }
 
   /**
-   * The statements that create the two tables and their indexes; each one can run again.
+   * The statements that create the three tables and their indexes; each one can run again. Only
+   * additions: a database set up by an earlier version just gains the table of known accounts.
    *
    * @return the statements, in order
    */
@@ -85,11 +89,14 @@ public final class JdbcLinkStore implements LinkStore {
             + " household_id VARCHAR(36) NOT NULL, declared_by VARCHAR(36) NOT NULL,"
             + " declared_at BIGINT NOT NULL, reason VARCHAR(255))",
         "CREATE INDEX IF NOT EXISTS " + this.households + "_id ON " + this.households
-            + " (household_id)");
+            + " (household_id)",
+        "CREATE TABLE IF NOT EXISTS " + this.known + " (uuid VARCHAR(36) PRIMARY KEY,"
+            + " first_seen BIGINT NOT NULL, last_seen BIGINT NOT NULL)",
+        "CREATE INDEX IF NOT EXISTS " + this.known + "_seen ON " + this.known + " (last_seen)");
   }
 
   /**
-   * Creates the two tables when they are missing. Every other call does it first until it has
+   * Creates the three tables when they are missing. Every other call does it first until it has
    * succeeded once, so a database absent at start is set up on its first answer.
    *
    * @throws SQLException if the database refuses (the role must own the two tables)
@@ -124,11 +131,13 @@ public final class JdbcLinkStore implements LinkStore {
 
   private boolean tablesExist(final Connection connection) throws SQLException {
     try (PreparedStatement query = connection.prepareStatement("SELECT to_regclass(?),"
-        + " to_regclass(?)")) {
+        + " to_regclass(?), to_regclass(?)")) {
       query.setString(1, this.sightings);
       query.setString(2, this.households);
+      query.setString(3, this.known);
       try (ResultSet rows = query.executeQuery()) {
-        return rows.next() && rows.getString(1) != null && rows.getString(2) != null;
+        return rows.next() && rows.getString(1) != null && rows.getString(2) != null
+            && rows.getString(3) != null;
       }
     }
   }
@@ -185,11 +194,14 @@ public final class JdbcLinkStore implements LinkStore {
     }
   }
 
+  /** The earlier of the known account's first time and its oldest sighting, if it has either. */
   private @Nullable Instant firstSeen(final Connection connection, final UUID account)
       throws SQLException {
-    try (PreparedStatement query = connection.prepareStatement("SELECT MIN(first_seen) FROM "
-        + this.sightings + " WHERE uuid = ?")) {
+    try (PreparedStatement query = connection.prepareStatement("SELECT MIN(seen) FROM (SELECT"
+        + " first_seen AS seen FROM " + this.known + " WHERE uuid = ? UNION ALL SELECT first_seen"
+        + " FROM " + this.sightings + " WHERE uuid = ?) AS firsts")) {
       query.setString(1, account.toString());
+      query.setString(2, account.toString());
       try (ResultSet rows = query.executeQuery()) {
         if (!rows.next()) {
           return null;
@@ -229,6 +241,33 @@ public final class JdbcLinkStore implements LinkStore {
       upsert.setBytes(3, sighting.netDigest());
       upsert.setLong(4, at);
       upsert.setLong(5, at);
+      upsert.executeUpdate();
+      upsertKnown(connection, sighting.account(), sighting.at());
+    }
+  }
+
+  @Override
+  public void recordKnown(final UUID account, final Instant at) throws SQLException {
+    try (Connection connection = open()) {
+      upsertKnown(connection, account, at);
+    }
+  }
+
+  /**
+   * Notes the account as known. A first row takes the oldest sighting the account already has, so
+   * that an account recorded before this table existed keeps the date it was first seen.
+   */
+  private void upsertKnown(final Connection connection, final UUID account, final Instant at)
+      throws SQLException {
+    try (PreparedStatement upsert = connection.prepareStatement("INSERT INTO " + this.known
+        + " (uuid, first_seen, last_seen) VALUES (?, COALESCE((SELECT MIN(first_seen) FROM "
+        + this.sightings + " WHERE uuid = ?), ?), ?) ON CONFLICT (uuid) DO UPDATE SET"
+        + " first_seen = LEAST(" + this.known + ".first_seen, EXCLUDED.first_seen),"
+        + " last_seen = GREATEST(" + this.known + ".last_seen, EXCLUDED.last_seen)")) {
+      upsert.setString(1, account.toString());
+      upsert.setString(2, account.toString());
+      upsert.setLong(3, at.toEpochMilli());
+      upsert.setLong(4, at.toEpochMilli());
       upsert.executeUpdate();
     }
   }
@@ -274,6 +313,16 @@ public final class JdbcLinkStore implements LinkStore {
       households.setLong(1, cutoff.toEpochMilli());
       households.setLong(2, cutoff.toEpochMilli());
       return sightings.executeUpdate() + households.executeUpdate();
+    }
+  }
+
+  @Override
+  public int purgeKnownOlderThan(final Instant cutoff) throws SQLException {
+    try (Connection connection = openWithoutSchema();
+        PreparedStatement delete = connection.prepareStatement("DELETE FROM " + this.known
+            + " WHERE last_seen < ?")) {
+      delete.setLong(1, cutoff.toEpochMilli());
+      return delete.executeUpdate();
     }
   }
 

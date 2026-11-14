@@ -69,6 +69,7 @@ class AccountLinkConfigAndReportTest {
       assertEquals(Duration.ofDays(7), links.strongWindow());
       assertEquals(4, links.sharedAddressAccounts());
       assertEquals(Duration.ofDays(180), links.retention());
+      assertEquals(Duration.ofDays(730), links.knownRetention(), "two years, no address in it");
       assertEquals("borntocraft", links.networkId());
       assertEquals(Map.of("socketTimeout", "5", "options", "-c statement_timeout=2000"),
           links.driverProperties(), "no statement nor silent socket holds a thread for long");
@@ -79,6 +80,24 @@ class AccountLinkConfigAndReportTest {
           database:
             jdbc-url: "jdbc:postgresql://db.invalid:5432/sentinel"
         """, new ArrayList<>()).links().enabled(), "a database alone does not switch them on");
+  }
+
+  @Test
+  void theKnownAccountsRetentionIsTunableAndNeverBelowAMonth() {
+    final List<String> warnings = new ArrayList<>();
+    final String section = AccountLinkRuleTest.ON.formatted("observe");
+
+    try {
+      assertEquals(Duration.ofDays(365), AdmissionConfig.parseYaml(new StringReader(section
+          + "  known-retention-days: 365\n"), warnings::add).links().knownRetention());
+      assertEquals(Duration.ofDays(730), AdmissionConfig.parseYaml(new StringReader(section
+          + "  known-retention-days: 3\n"), warnings::add).links().knownRetention(),
+          "a value that makes no sense falls back to the default");
+    } catch (IOException malformed) {
+      throw new IllegalStateException(malformed);
+    }
+    assertEquals(1, warnings.size(), warnings.toString());
+    assertTrue(warnings.getFirst().contains("known-retention-days"), warnings.getFirst());
   }
 
   @Test

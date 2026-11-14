@@ -114,6 +114,12 @@ public final class BtcAdmissionShieldPlugin {
   private static final long MIN_POOL_TIMEOUT_MS = 250;
   /** Lookups waiting for a connection beyond this are admitted unjudged, with a warning. */
   private static final int LINK_QUEUE = 256;
+  /**
+   * Session writes and staff requests, on a queue of their own and one thread (a reconnection wave
+   * must not fill the queue the logins are judged through); a write beyond this is dropped with a
+   * warning, which fails open.
+   */
+  private static final int SESSION_QUEUE = 1024;
 
   private final ProxyServer proxy;
   private final Logger logger;
@@ -137,6 +143,7 @@ public final class BtcAdmissionShieldPlugin {
   private volatile @Nullable AccountLinks links;
   private volatile @Nullable HikariDataSource linkPool;
   private volatile @Nullable ExecutorService linkExecutor;
+  private volatile @Nullable ExecutorService sessionExecutor;
   private volatile @Nullable ScheduledTask purgeTask;
 
   /**
@@ -247,9 +254,11 @@ public final class BtcAdmissionShieldPlugin {
     if (purge != null) {
       purge.cancel();
     }
-    final ExecutorService executor = this.linkExecutor;
-    if (executor != null) {
-      executor.shutdownNow();
+    for (ExecutorService executor : new ExecutorService[] {this.linkExecutor,
+        this.sessionExecutor}) {
+      if (executor != null) {
+        executor.shutdownNow();
+      }
     }
     final HikariDataSource pool = this.linkPool;
     if (pool != null) {
@@ -281,22 +290,23 @@ public final class BtcAdmissionShieldPlugin {
     pool.setJdbcUrl(settings.jdbcUrl());
     pool.setUsername(settings.username());
     pool.setPassword(password);
-    pool.setMaximumPoolSize(settings.maxPoolSize());
+    // One connection more than the lookup threads, for the session thread: it never takes theirs.
+    pool.setMaximumPoolSize(settings.maxPoolSize() + 1);
     pool.setConnectionTimeout(Math.max(MIN_POOL_TIMEOUT_MS, settings.lookupTimeout().toMillis()));
     settings.driverProperties().forEach(pool::addDataSourceProperty);
     // A database down at start must not stop the proxy: the logins are admitted until it is back.
     pool.setInitializationFailTimeout(-1);
     final HikariDataSource database = new HikariDataSource(pool);
-    final ExecutorService executor = new ThreadPoolExecutor(settings.maxPoolSize(),
-        settings.maxPoolSize(), 0, TimeUnit.MILLISECONDS,
-        new ArrayBlockingQueue<>(LINK_QUEUE), Thread.ofPlatform().daemon().name(
-            "btc-admission-links-", 0).factory());
+    final ExecutorService executor = boundedExecutor(settings.maxPoolSize(), LINK_QUEUE,
+        "btc-admission-links-");
+    final ExecutorService sessions = boundedExecutor(1, SESSION_QUEUE, "btc-admission-sessions-");
     this.linkPool = database;
     this.linkExecutor = executor;
+    this.sessionExecutor = sessions;
     final JdbcLinkStore linkStore = new JdbcLinkStore(database, settings.tablePrefix());
     final AccountLinks accountLinks = new AccountLinks(admission, settings, key.get(), linkStore,
         new JdbcBanLookup(database, settings.tablePrefix(), settings.networkId()), executor,
-        this.clock, this.logger);
+        sessions, this.clock, this.logger);
     // The tables are created by the first call that reaches the database (JdbcLinkStore#open).
     this.purgeTask = AccountLinks.schedulePurge(this.proxy.getScheduler()
         .buildTask(this, () -> {
@@ -310,6 +320,12 @@ public final class BtcAdmissionShieldPlugin {
         + " {} ms.", this.config.linksMode(), settings.jdbcUrl(), settings.tablePrefix(),
         settings.lookupTimeout().toMillis());
     return accountLinks;
+  }
+
+  /** A fixed pool of daemon threads over a bounded queue: a full queue rejects, never grows. */
+  static ExecutorService boundedExecutor(final int threads, final int queue, final String name) {
+    return new ThreadPoolExecutor(threads, threads, 0, TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<>(queue), Thread.ofPlatform().daemon().name(name, 0).factory());
   }
 
   /**

@@ -243,8 +243,8 @@ lists:
 # ADM-ALT-BAN). An account already known before the ban is only signalled. Everything else is a
 # journal line and a staff message. Nobody is ever banned by this module.
 #
-# What is stored (Sentinel database, tables <prefix>admission_sightings and
-# <prefix>admission_households): for each session a SERVER ACCEPTED, the account UUID and two
+# What is stored (Sentinel database, tables <prefix>admission_sightings,
+# <prefix>admission_households and <prefix>admission_known, see known-retention-days): for each session a SERVER ACCEPTED, the account UUID and two
 # HMAC-SHA256 digests (the address or /64, the /24 or /48), with first and last seen times. Never the
 # address itself. Kept retention-days after the last sighting, then purged daily.
 # /admission forget <uuid> erases an account. Sentinel's sanctions are only READ.
@@ -264,7 +264,7 @@ links:
   database:
     # The Sentinel database (PostgreSQL). A URL holding a password is refused.
     jdbc-url: ""
-    # A role owning its two tables, with SELECT only on <prefix>sanctions.
+    # A role owning its three tables, with SELECT only on <prefix>sanctions.
     username: btc_admission
     # Environment variable holding that role's password.
     password-env: BTC_ADMISSION_DB_PASSWORD
@@ -274,6 +274,8 @@ links:
     network-id: borntocraft
     # A login waits at most this long for the database, then is ADMITTED anyway (fail open).
     lookup-timeout-ms: 1500
+    # Connections for the login lookups. One more is held for the writes of a session (a separate
+    # queue: a wave of reconnections cannot starve the lookups of the logins).
     max-pool-size: 2
     # PostgreSQL cancels a statement running longer than this (a lock, a slow plan): no thread of
     # this module stays stuck on it.
@@ -289,6 +291,15 @@ links:
   # is signalled to the staff. Never refused.
   max-accounts-per-household: 5
   retention-days: 180
+  # KNOWN ACCOUNTS (table <prefix>admission_known): for each session a server accepted, whatever its
+  # address (a Bedrock player without a real address included), the account UUID and its first and
+  # last time. NO address, NO digest. It is what tells an account that already played before a ban
+  # (only signalled) from one made after it (refused): so it outlives /admission forget and the
+  # purge of the sightings, and is deleted only when the account has not come back for this many
+  # days (minimum 30). Not known = "new": a sister who never connected since `enabled: true` is
+  # still taken for new and refused for the strong window if she shares a banned account's address.
+  # That false positive is accepted (the staff declares her household, /admission household add).
+  known-retention-days: 730
   # CAP OF ACCOUNTS ONLINE AT ONCE ON ONE ADDRESS. 0 (the default) = no cap: nothing is counted and
   # a family of any size plays. N >= 1: a login is turned away (code ADM-ALT-MAX) when N OTHER
   # accounts are already online on its address (an IPv4, or an IPv6 /64), a declared household

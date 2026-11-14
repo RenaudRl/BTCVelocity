@@ -63,6 +63,7 @@ public final class AccountLinks {
   private final LinkStore store;
   private final BanLookup bans;
   private final Executor executor;
+  private final Executor sessionExecutor;
   private final Clock clock;
   private final Logger logger;
   private final AtomicReference<@Nullable Instant> lastWarning = new AtomicReference<>();
@@ -76,19 +77,24 @@ public final class AccountLinks {
    * @param key the address key
    * @param store the sightings and the households
    * @param bans the Sentinel bans, read only
-   * @param executor where the database is waited on; never a network thread
+   * @param executor where the lookups of a login wait on the database; never a network thread
+   * @param sessionExecutor where the writes and the ban check of an accepted session, and the staff
+   *     requests, wait on it: apart from {@code executor}, so that a wave of sessions cannot fill the
+   *     queue the logins are judged through
    * @param clock the time
    * @param logger where the failures are told, without any address
    */
   public AccountLinks(final AdmissionEngine engine, final LinkSettings settings,
       final LinkKey key, final LinkStore store,
-      final BanLookup bans, final Executor executor, final Clock clock, final Logger logger) {
+      final BanLookup bans, final Executor executor, final Executor sessionExecutor,
+      final Clock clock, final Logger logger) {
     this.engine = engine;
     this.settings = settings;
     this.key = key;
     this.store = store;
     this.bans = bans;
     this.executor = executor;
+    this.sessionExecutor = sessionExecutor;
     this.clock = clock;
     this.logger = logger;
   }
@@ -175,12 +181,13 @@ public final class AccountLinks {
   }
 
   /**
-   * Records that a server accepted the player, off the calling thread. Nothing for a login the
-   * links do not judge (exempted, Bedrock without a real address, links off), nor for a client of
-   * the Geyser listener that is not a Floodgate player (no attested address: Geyser's own, if it is
-   * not listed, would be shared by every Bedrock player), nor for an account under a network ban
-   * in force (let in by an exemption or a ban pronounced while it was online): its sightings would
-   * only stretch its links.
+   * Records that a server accepted the player, off the calling thread. The account is noted as
+   * known (no address) for every login but an account under a network ban in force (let in by an
+   * exemption or a ban pronounced while it was online: its sightings would only stretch its links).
+   * Its sighting (the address digests) is recorded only when the links judge the login: not an
+   * exempted one, not a Floodgate player without a real address, and not a client of the Geyser
+   * listener that is not a Floodgate player (no attested address: Geyser's own, if it is not
+   * listed, would be shared by every Bedrock player).
    *
    * @param authenticated the login
    */
@@ -196,29 +203,35 @@ public final class AccountLinks {
    * @param session tells this session from a later one of the same account (the player object)
    */
   public void recordAccepted(final Attempt authenticated, final Object session) {
-    final Optional<InetAddress> subject = this.engine.linkSubject(authenticated);
-    if (subject.isEmpty()
-        || authenticated.viaGeyserListener() && !authenticated.floodgatePlayer()) {
+    final UUID account = authenticated.uuid();
+    if (account == null || !this.settings.enabled()) {
       return;
     }
+    final Optional<InetAddress> subject = this.engine.linkSubject(authenticated);
     final Instant now = this.clock.instant();
-    final Sighting sighting = this.key.sighting(authenticated.uuid(), subject.get(), now);
-    if (this.settings.maxOnlinePerAddress() > 0) {
+    final @Nullable Sighting sighting = subject.isEmpty()
+        || authenticated.viaGeyserListener() && !authenticated.floodgatePlayer() ? null
+        : this.key.sighting(account, subject.get(), now);
+    if (sighting != null && this.settings.maxOnlinePerAddress() > 0) {
       this.online.enter(sighting.account(), sighting.ipDigest(), session);
     }
     try {
-      this.executor.execute(() -> {
+      this.sessionExecutor.execute(() -> {
         try {
-          if (!this.bans.activeNetworkBans(Set.of(sighting.account()), now).isEmpty()) {
+          if (!this.bans.activeNetworkBans(Set.of(account), now).isEmpty()) {
             return;
           }
-          this.store.record(sighting);
+          if (sighting != null) {
+            this.store.record(sighting);
+          } else {
+            this.store.recordKnown(account, now);
+          }
         } catch (SQLException | RuntimeException failed) {
           warn("a session was not recorded", failed);
         }
       });
     } catch (RejectedExecutionException full) {
-      warn("the lookup queue is full; a session was not recorded", full);
+      warn("the session queue is full; a session was not recorded", full);
     }
   }
 
@@ -234,13 +247,16 @@ public final class AccountLinks {
   }
 
   /**
-   * Deletes the sightings older than the retention. Blocks: for a scheduler thread.
+   * Deletes the sightings older than the retention, and the known accounts absent for longer than
+   * their own. Blocks: for a scheduler thread.
    *
    * @return the rows removed, or -1 when the database could not be reached
    */
   public int purge() {
     try {
-      return this.store.purgeOlderThan(this.clock.instant().minus(this.settings.retention()));
+      final Instant now = this.clock.instant();
+      return this.store.purgeOlderThan(now.minus(this.settings.retention()))
+          + this.store.purgeKnownOlderThan(now.minus(this.settings.knownRetention()));
     } catch (SQLException | RuntimeException failed) {
       warn("the purge of old sightings failed; it is tried again in 24 h", failed);
       return -1;
@@ -279,7 +295,7 @@ public final class AccountLinks {
   }
 
   /**
-   * Runs a staff request off the calling thread.
+   * Runs a staff request off the calling thread, on the session executor: never in the way of a\n   * login.
    *
    * @param request the request
    * @param <T> its answer
@@ -293,7 +309,7 @@ public final class AccountLinks {
         } catch (SQLException failed) {
           throw new CompletionException(failed);
         }
-      }, this.executor);
+      }, this.sessionExecutor);
     } catch (RejectedExecutionException full) {
       return CompletableFuture.failedFuture(full);
     }

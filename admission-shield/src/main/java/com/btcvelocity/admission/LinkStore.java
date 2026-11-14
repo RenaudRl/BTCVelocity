@@ -50,7 +50,8 @@ public interface LinkStore {
 
   /**
    * Records that an account was accepted by a server from an address; a second sighting of the
-   * same pair only moves its last-seen time.
+   * same pair only moves its last-seen time. The account is also recorded as known, as by
+   * {@link #recordKnown}.
    *
    * @param sighting the accepted session
    * @throws SQLException if the store cannot be written
@@ -58,7 +59,20 @@ public interface LinkStore {
   void record(Sighting sighting) throws SQLException;
 
   /**
-   * Erases everything kept about an account: its sightings and its household membership.
+   * Records that an account was accepted by a server, with no address at all: its first and last
+   * time are all that is kept. This is what tells an account that was already playing before a ban
+   * from one made after it ({@link LinkFacts#firstSeen()}); it outlives {@link #forget} and the
+   * purge of the sightings, and is deleted by {@link #purgeKnownOlderThan} alone.
+   *
+   * @param account the account
+   * @param at when
+   * @throws SQLException if the store cannot be written
+   */
+  void recordKnown(UUID account, Instant at) throws SQLException;
+
+  /**
+   * Erases what is kept about an account: its sightings and its household membership. The
+   * account's first and last time ({@link #recordKnown}) stay until their own retention ends.
    *
    * @param account the account
    * @return the rows removed
@@ -74,6 +88,15 @@ public interface LinkStore {
    * @throws SQLException if the store cannot be written
    */
   int purgeOlderThan(Instant cutoff) throws SQLException;
+
+  /**
+   * Deletes the accounts last seen before a time, from the list of known accounts.
+   *
+   * @param cutoff the oldest last-seen time kept
+   * @return the rows removed
+   * @throws SQLException if the store cannot be written
+   */
+  int purgeKnownOlderThan(Instant cutoff) throws SQLException;
 
   /**
    * Declares two accounts one household: the one that has a household brings the other in, or a

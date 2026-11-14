@@ -79,7 +79,7 @@ class LinkCommandTest {
           accounts.stream().filter(this.banned::contains)
               .forEach(account -> found.put(account, new BanLookup.ActiveBan(7L, now)));
           return found;
-        }, Runnable::run, this.clock, this.logger.logger());
+        }, Runnable::run, Runnable::run, this.clock, this.logger.logger());
     links.recordAccepted(Attempt.claimed("Sister", InetAddress.ofLiteral("198.51.100.7"))
         .authenticated("Sister", SISTER, false, null));
     return new LinkCommand(links, this.logger.logger(), this.clock,

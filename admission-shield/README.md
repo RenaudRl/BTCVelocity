@@ -58,6 +58,18 @@ module entier est en `observe`) la même situation est journalisée `decision=ob
 FAIBLE avec un banni, ou plus de `max-accounts-per-household` comptes sur une adresse (un foyer
 compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ban automatique.
 
+**« Connu avant le ban »** (le compte plus ancien que le ban n'est pas refusé) se date par une
+table **sans adresse**, `<prefix>admission_known` : UUID (ou `(0, xuid)` pour Bedrock), première et
+dernière date, écrite à **chaque** connexion admise, même celle d'un joueur Bedrock sans adresse
+réelle. Elle survit à `/admission forget` et à la purge des passages ; elle a sa propre rétention,
+`known-retention-days` (730 j par défaut, 30 j au plus bas), purgée sur absence. Un compte absent de
+la table, ou dont la première date suit le ban, est « nouveau ». **Faux positif accepté** : une sœur
+qui ne s'est jamais connectée depuis `enabled: true` (le module n'a rien d'elle, on ne va pas
+chercher les données du serveur) est prise pour nouvelle et refusée pendant la fenêtre FORTE si elle
+partage l'adresse d'un banni : le staff la déclare du même foyer (`household add`). Les comptes déjà
+passés en `sightings` avant cette table gardent leur date (relue, puis reprise à la première
+reconnexion).
+
 - **Une connexion Java venue d'une adresse Geyser** (`geyser-addresses`) n'est jamais jugée ni
   enregistrée ici : l'adresse de Geyser ne lie personne. Un client non-Floodgate vu d'une autre
   adresse, même sur l'écoute Geyser (PROXY protocol : son adresse réelle), est jugé comme un autre.
@@ -89,8 +101,9 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
 - **Ban réseau actif** : lu en LECTURE SEULE dans `<prefix>sanctions` de Sentinel : `type = 'BAN'`,
   `scope = 'NETWORK'`, `network_id` = `links.database.network-id`, `revoked_at IS NULL`,
   `expires_at IS NULL OR expires_at > maintenant` (millisecondes).
-- **Stockage** : deux tables à lui dans la base Sentinel, `<prefix>admission_sightings` (uuid,
-  `ip_digest`, `net_digest`, `first_seen`, `last_seen`) et `<prefix>admission_households`. Les
+- **Stockage** : trois tables à lui dans la base Sentinel, `<prefix>admission_sightings` (uuid,
+  `ip_digest`, `net_digest`, `first_seen`, `last_seen`), `<prefix>admission_households` et
+  `<prefix>admission_known` (uuid, `first_seen`, `last_seen`, sans adresse ni empreinte). Les
   adresses n'y sont **jamais en clair** : HMAC-SHA256 avec la clé de `BTC_ADMISSION_LINK_KEY`
   (base64, 32 octets au moins ; absente ou courte : fonction coupée avec une erreur, le proxy
   démarre ; une clé de moins de 16 valeurs d'octet distinctes est refusée). La générer par un
@@ -101,7 +114,8 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
   enregistrée qu'une fois acceptée par un serveur (`ServerPostConnectEvent`), purgée 180 jours
   (`retention-days`) après son dernier passage ; un foyer déclaré avant ce délai et dont aucun
   membre n'a été vu depuis est purgé aussi. `/admission forget <uuid>` efface les passages et le
-  foyer d'un compte, **pas** le journal (/24, pseudo, `linked=`, retenu selon sa propre purge), ni
+  foyer d'un compte, **pas** sa ligne de `<prefix>admission_known` (UUID et deux dates : elle date
+  le compte, jusqu'à `known-retention-days` d'absence), **pas** le journal (/24, pseudo, `linked=`, retenu selon sa propre purge), ni
   la mémoire de `/admission why` (4096 décisions, jusqu'au redémarrage), ni les lignes d'audit
   des commandes staff.
 - **Échec ouvert** : la recherche attend au plus `lookup-timeout-ms` (1,5 s) ; base lente, absente
@@ -114,8 +128,14 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
   qui échoue donne un WARN et repasse 24 h plus tard.
   Un échec au démarrage des liens (pilote, pool) les coupe seuls, avec une ERROR sans l'URL.
   Un compte sous ban réseau actif n'est jamais enregistré.
+- **Deux files, deux fils** : les recherches de connexion (`judge`) ont leur file bornée (256) et
+  `max-pool-size` fils ; les écritures de session (passage, compte connu, recherche de ban du
+  joueur accepté) et les commandes staff ont **leur propre** fil et file bornée (1024), nommés
+  `btc-admission-sessions-`. Une vague de reconnexions peut saturer les écritures (perdues avec un
+  WARN, échec ouvert) sans faire déborder les recherches de connexion, qui continuent d'être
+  jugées. Le pool JDBC compte une connexion de plus que `max-pool-size` pour ce fil.
 - **Exploitation** : un rôle PostgreSQL limité à `SELECT` sur `<prefix>sanctions` et propriétaire de
-  ses deux tables (un rôle sans droit `CREATE` sur le schéma fonctionne si les deux tables existent
+  ses trois tables (un rôle sans droit `CREATE` sur le schéma fonctionne si les trois tables existent
   déjà : le premier accès le constate par `to_regclass`, sinon la fonction reste en échec ouvert avec
   un WARN ; `forget` et la purge ne dépendent jamais de la création des tables) ; mot de passe dans la variable nommée par `password-env`, jamais dans l'URL
   (refusée sinon) ; une fiche au registre RGPD avant `enabled: true`.

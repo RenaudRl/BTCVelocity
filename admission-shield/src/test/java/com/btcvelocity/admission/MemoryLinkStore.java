@@ -40,6 +40,8 @@ class MemoryLinkStore implements LinkStore {
   final List<Row> rows = new ArrayList<>();
   final Map<UUID, String> households = new HashMap<>();
   final Map<UUID, Instant> declaredAt = new HashMap<>();
+  /** The known accounts: first and last time, no address. Outlives {@link #forget}. */
+  final Map<UUID, Instant[]> known = new HashMap<>();
 
   @Override
   public synchronized LinkFacts factsFor(final Sighting entering, final Instant addressSince,
@@ -55,8 +57,11 @@ class MemoryLinkStore implements LinkStore {
         seen((row, since) -> Arrays.equals(row.ip(), entering.ipDigest()), addressSince),
         seen((row, since) -> Arrays.equals(row.net(), entering.netDigest()), networkSince),
         household,
-        this.rows.stream().filter(row -> row.account().equals(entering.account()))
-            .map(Row::first).min(Instant::compareTo).orElse(null));
+        java.util.stream.Stream.concat(
+            this.rows.stream().filter(row -> row.account().equals(entering.account()))
+                .map(Row::first),
+            java.util.stream.Stream.ofNullable(this.known.get(entering.account()))
+                .map(times -> times[0])).min(Instant::compareTo).orElse(null));
   }
 
   private Map<UUID, Instant> seen(final BiPredicate<Row, Instant> matches, final Instant since) {
@@ -70,7 +75,21 @@ class MemoryLinkStore implements LinkStore {
   }
 
   @Override
+  public synchronized void recordKnown(final UUID account, final Instant at) {
+    this.known.merge(account, new Instant[] {at, at}, (old, added) -> new Instant[] {
+        old[0].isBefore(at) ? old[0] : at, old[1].isAfter(at) ? old[1] : at});
+  }
+
+  @Override
+  public synchronized int purgeKnownOlderThan(final Instant cutoff) {
+    final int before = this.known.size();
+    this.known.values().removeIf(times -> times[1].isBefore(cutoff));
+    return before - this.known.size();
+  }
+
+  @Override
   public synchronized void record(final Sighting sighting) throws SQLException {
+    recordKnown(sighting.account(), sighting.at());
     for (int i = 0; i < this.rows.size(); i++) {
       final Row row = this.rows.get(i);
       if (row.account().equals(sighting.account()) && Arrays.equals(row.ip(), sighting.ipDigest())) {

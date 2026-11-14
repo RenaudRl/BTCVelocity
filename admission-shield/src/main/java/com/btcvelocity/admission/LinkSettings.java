@@ -51,6 +51,9 @@ import org.spongepowered.configurate.ConfigurationNode;
  * @param maxAccountsPerAddress above this many distinct accounts over {@link #ADDRESS_HISTORY}
  *     (the entrant's declared household counted once), a login is signalled; never refused
  * @param retention how long a sighting is kept after it was last seen
+ * @param knownRetention how long an account (its UUID and two times, no address) stays known after
+ *     it was last seen; what tells an account that played before a ban from one made after it, so it
+ *     outlives {@code retention} and an erasure ({@code forget})
  * @param message the MiniMessage text shown to a refused player, with {@code {code}}
  * @param maxOnlinePerAddress how many other accounts may be online at once on the address of an
  *     entering account (its declared household not counted); {@code 0} (the default) switches the
@@ -77,6 +80,7 @@ public record LinkSettings(
     int sharedAddressAccounts,
     int maxAccountsPerAddress,
     Duration retention,
+    Duration knownRetention,
     String message,
     int maxOnlinePerAddress,
     AdmissionConfig.Mode onlineMode,
@@ -100,6 +104,9 @@ public record LinkSettings(
   static final int DEFAULT_SHARED_ACCOUNTS = 4;
   static final int DEFAULT_MAX_ACCOUNTS = 5;
   static final int DEFAULT_RETENTION_DAYS = 180;
+  /** Two years: an account away that long is as good as new for a ban pronounced since. */
+  static final int DEFAULT_KNOWN_RETENTION_DAYS = 730;
+  private static final int MIN_KNOWN_RETENTION_DAYS = 30;
   /** 0 = no cap: a family of any size plays, nothing is counted online. */
   static final int DEFAULT_MAX_ONLINE = 0;
   private static final int MAX_ONLINE = 64;
@@ -188,6 +195,8 @@ public record LinkSettings(
             LinkStore.MAX_ACCOUNTS_PER_LOOKUP - 1, warnings),
         Duration.ofDays(within(section, "retention-days", DEFAULT_RETENTION_DAYS,
             (int) ADDRESS_HISTORY.toDays(), Integer.MAX_VALUE, warnings)),
+        Duration.ofDays(within(section, "known-retention-days", DEFAULT_KNOWN_RETENTION_DAYS,
+            MIN_KNOWN_RETENTION_DAYS, Integer.MAX_VALUE, warnings)),
         message,
         within(section, "max-online-per-address", DEFAULT_MAX_ONLINE, 0, MAX_ONLINE, warnings),
         onlineMode(section.node("online-mode").getString("observe"), warnings),

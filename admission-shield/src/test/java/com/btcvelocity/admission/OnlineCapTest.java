@@ -66,7 +66,8 @@ class OnlineCapTest {
         + CAP.formatted(cap, onlineMode));
     return new AccountLinks(new AdmissionEngine(config, address -> Optional.empty()),
         config.links(), LinkKeyTest.key(LinkKeyTest.TEST_KEY), this.store,
-        (accounts, now) -> Map.of(), Runnable::run, this.clock, this.logger.logger());
+        (accounts, now) -> Map.of(), Runnable::run, Runnable::run, this.clock,
+        this.logger.logger());
   }
 
   private AccountLinks links(final int cap, final String onlineMode) {
