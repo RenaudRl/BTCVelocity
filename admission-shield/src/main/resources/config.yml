@@ -301,16 +301,21 @@ links:
   # That false positive is accepted (the staff declares her household, /admission household add).
   known-retention-days: 730
   # CAP OF ACCOUNTS ONLINE AT ONCE ON ONE ADDRESS. 0 (the default) = no cap: nothing is counted and
-  # a family of any size plays. N >= 1: a login is turned away (code ADM-ALT-MAX) when N OTHER
-  # accounts are already online on its address (an IPv4, or an IPv6 /64), a declared household
-  # (/admission household add) not counted, so two siblings play together under any cap >= 1 and
-  # three accounts do not trip a cap of 3. Counted in memory by address digest from the moment a
-  # server accepts the session until the player leaves: a burst of logins at the very same instant
-  # can slip past it by the size of the burst. Blocks the extra SESSION, never bans anyone.
+  # a family of any size plays. Otherwise 2 to 64, the accounts online AT ONCE, the entrant included:
+  # a login is turned away (code ADM-ALT-MAX) when that many OTHER accounts already hold a place on
+  # its address (an IPv4, or an IPv6 /64), a declared household (/admission household add) not
+  # counted. 1 is refused as a setting (back to 0, with a warning): it would turn away two siblings
+  # who are not declared a household. Distinct accounts are counted, one place per connection: a
+  # second connection of an account already online, refused as a duplicate, takes and frees only its
+  # own place. Counted in memory by address digest; the place is taken when the login is JUDGED, in
+  # the same step as the count, and freed at the disconnection, whatever became of the login.
+  # LIMITS: a login admitted unjudged (database down or slow, queue full) is not capped but takes its
+  # place; the count is per proxy (N proxies allow N times the cap); behind a carrier NAT (CGNAT) many
+  # homes share one address, so a cap can turn away strangers: start with `observe`. Blocks the extra
+  # SESSION, never bans anyone.
   # A Bedrock player counts on the real address Floodgate recorded, like a Java account of the same
   # home; without one (or from an address of geyser-addresses) it is never counted nor judged:
   # Geyser's own address is never a player's. Raising it above a household's size is the way to
-  # be generous; start with `observe`.
-  max-online-per-address: 0
+  # be generous.  max-online-per-address: 0
   # observe | enforce, for this cap alone. `mode` above and the module-wide `mode` hold it back.
   online-mode: observe

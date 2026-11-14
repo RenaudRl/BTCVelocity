@@ -55,9 +55,11 @@ import org.spongepowered.configurate.ConfigurationNode;
  *     it was last seen; what tells an account that played before a ban from one made after it, so it
  *     outlives {@code retention} and an erasure ({@code forget})
  * @param message the MiniMessage text shown to a refused player, with {@code {code}}
- * @param maxOnlinePerAddress how many other accounts may be online at once on the address of an
- *     entering account (its declared household not counted); {@code 0} (the default) switches the
- *     cap off. A sibling pair plays together under any cap of 1 or more
+ * @param maxOnlinePerAddress how many accounts may be online at once on one address, the entering
+ *     one included (a login is refused when that many OTHER accounts, its declared household not
+ *     counted, are already there); {@code 0} (the default) switches the cap off. Never 1: two
+ *     siblings who are not declared a household would be turned away. A value of 1 or beyond 64
+ *     is replaced by the default, with a warning
  * @param onlineMode {@code observe} or {@code enforce} for that cap alone; held back by the
  *     {@code mode} of the links and of the module
  * @param onlineMessage the MiniMessage text shown to a player the cap refuses, with {@code {code}}
@@ -198,9 +200,23 @@ public record LinkSettings(
         Duration.ofDays(within(section, "known-retention-days", DEFAULT_KNOWN_RETENTION_DAYS,
             MIN_KNOWN_RETENTION_DAYS, Integer.MAX_VALUE, warnings)),
         message,
-        within(section, "max-online-per-address", DEFAULT_MAX_ONLINE, 0, MAX_ONLINE, warnings),
+        onlineCap(section, warnings),
         onlineMode(section.node("online-mode").getString("observe"), warnings),
         onlineMessage);
+  }
+
+  /**
+   * 0 (no cap) or 2 to {@link #MAX_ONLINE}: the number is the accounts online at once, the entrant
+   * included, so a cap of 1 would turn away a brother and sister who are not declared a household.
+   */
+  private static int onlineCap(final ConfigurationNode section, final Consumer<String> warnings) {
+    final int cap = section.node("max-online-per-address").getInt(DEFAULT_MAX_ONLINE);
+    if (cap == 0 || cap >= 2 && cap <= MAX_ONLINE) {
+      return cap;
+    }
+    warnings.accept("links.max-online-per-address: " + cap + " is neither 0 (no cap) nor within 2.."
+        + MAX_ONLINE + " (a cap of 1 would refuse two siblings); using " + DEFAULT_MAX_ONLINE);
+    return DEFAULT_MAX_ONLINE;
   }
 
   private static AdmissionConfig.Mode onlineMode(final String text,

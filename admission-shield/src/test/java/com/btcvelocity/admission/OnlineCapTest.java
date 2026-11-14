@@ -379,6 +379,24 @@ class OnlineCapTest {
   }
 
   @Test
+  void aCapOfOneIsRefusedAsASettingBecauseItWouldTurnAwayASiblingPair() {
+    final List<String> warnings = new ArrayList<>();
+    final AdmissionConfig config;
+    try {
+      config = AdmissionConfig.parseYaml(new java.io.StringReader(CAP.formatted(1, "enforce")),
+          warnings::add);
+    } catch (java.io.IOException malformed) {
+      throw new IllegalStateException(malformed);
+    }
+
+    assertEquals(0, config.links().maxOnlinePerAddress(), "back to the default: no cap");
+    assertEquals(1, warnings.size(), warnings.toString());
+    assertTrue(warnings.getFirst().contains("max-online-per-address"), warnings.getFirst());
+    assertEquals(2, AccountLinkRuleTest.config(CAP.formatted(2, "enforce")).links()
+        .maxOnlinePerAddress(), "two is the smallest cap: two siblings play together");
+  }
+
+  @Test
   void outOfRangeCapFallsBackToOffWithAWarning() {
     final List<String> warnings = new ArrayList<>();
     final AdmissionConfig config;

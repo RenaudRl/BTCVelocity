@@ -78,18 +78,23 @@ reconnexion).
   `max-accounts-per-household`). Un essai à blanc prolongé peut donc rendre une adresse partagée,
   et ses liens FAIBLES, au passage en `enforce`.
 - **Plafond de comptes en ligne par adresse** (`max-online-per-address`, **0 = aucun plafond**, le
-  défaut : une famille de toute taille joue). À N >= 1, une connexion est refusée (code
-  **`ADM-ALT-MAX`**, texte `messages.online-cap`) quand N **autres** comptes sont déjà en ligne sur
-  son adresse (IPv4, ou /64 en IPv6), **hors foyer déclaré** : deux frères déclarés jouent ensemble
-  sous tout plafond >= 1, un troisième compte étranger est compté. `online-mode` (`observe` par
-  défaut) et `links.mode` / `mode` du module le retiennent : en `observe`, `decision=observed`
+  défaut : une famille de toute taille joue). Sinon de **2 à 64** : le nombre de comptes en ligne
+  **en même temps**, l'entrant compris ; une connexion est refusée (code **`ADM-ALT-MAX`**, texte
+  `messages.online-cap`) quand ce nombre de **autres** comptes occupent déjà son adresse (IPv4, ou
+  /64 en IPv6), **hors foyer déclaré**. **1 est refusé** comme réglage (repli à 0, avec un
+  WARN) : il renverrait une fratrie non déclarée. `online-mode` (`observe` par défaut) et
+  `links.mode` / `mode` du module le retiennent : en `observe`, `decision=observed`
   `basis=online-per-address`, `accounts=` = les autres comptes en ligne. Compté **en mémoire**, par
-  empreinte d'adresse (aucune adresse en clair, rien qui survive au proxy), de l'acceptation par un
-  serveur (`ServerPostConnectEvent`) jusqu'à la déconnexion (`DisconnectEvent`, par objet joueur : la
-  fin tardive d'une ancienne session ne libère pas la nouvelle). **Plafond souple** : une rafale de
-  connexions au même instant peut le dépasser de la taille de la rafale (la borne par réseau,
-  `network-rate`, traite les rafales). Bloque la session en trop, ne bannit jamais.
-- **Java / Bedrock** : un joueur Floodgate n'est jugé, compté et enregistré que sur l'adresse
+  empreinte d'adresse (aucune adresse en clair, rien qui survive au proxy), **comptes distincts**,
+  une place par **connexion** : la place est prise **au jugement** (`LoginEvent`), dans le même
+  pas que le décompte, pas à l'arrivée sur un serveur (un client qui traîne dans la configuration
+  ne contourne pas le plafond), et rendue à la déconnexion (`DisconnectEvent`, par objet joueur),
+  quelle qu'ait été l'issue de la connexion (refusée, doublon, partie avant tout serveur). Une
+  seconde connexion d'un compte déjà en ligne, refusée comme doublon, ne prend ni ne libère que sa
+  propre place. **Limites** : un joueur admis sans jugement (base absente, lente ou file pleine)
+  échappe au plafond mais prend sa place ; le décompte est **par proxy** (N proxys laissent N fois
+  le plafond) ; derrière un **CGNAT** de nombreux foyers partagent une adresse et le plafond peut
+  refuser des inconnus : démarrer en `observe`. Bloque la session en trop, ne bannit jamais.- **Java / Bedrock** : un joueur Floodgate n'est jugé, compté et enregistré que sur l'adresse
   **réelle** que Floodgate a retenue, jamais sur l'adresse de sa connexion (celle de Geyser), que
   `geyser-addresses` soit renseignée ou non ; sans adresse réelle, ou avec une adresse listée, il
   n'est ni compté ni jugé. Sur son adresse réelle il rejoint les comptes Java du même foyer : lien
