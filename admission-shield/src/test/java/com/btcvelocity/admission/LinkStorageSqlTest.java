@@ -124,7 +124,7 @@ class LinkStorageSqlTest {
     store.purgeOlderThan(NOW);
     store.purgeKnownOlderThan(NOW);
 
-    assertEquals(5, db.calls.size(), db.calls.toString());
+    assertEquals(6, db.calls.size(), db.calls.toString());
     assertTrue(db.calls.stream().allMatch(call -> call.sql().startsWith("DELETE FROM")),
         db.calls.toString());
   }
@@ -292,16 +292,17 @@ class LinkStorageSqlTest {
   }
 
   @Test
-  void forgetEmptiesBothTablesForTheAccountInOneTransaction() throws SQLException {
+  void forgetEmptiesTheThreeTablesForTheAccountInOneTransaction() throws SQLException {
     final FakeJdbc db = new FakeJdbc();
     db.updateCount = 2;
 
-    assertEquals(4, ready(db).forget(ENTRANT));
+    assertEquals(6, ready(db).forget(ENTRANT));
 
     assertEquals(List.of("DELETE FROM btc_admission_sightings WHERE uuid = ?",
-        "DELETE FROM btc_admission_households WHERE uuid = ?"),
+        "DELETE FROM btc_admission_households WHERE uuid = ?",
+        "DELETE FROM btc_admission_known WHERE uuid = ?"),
         db.calls.stream().map(FakeJdbc.Call::sql).toList(),
-        "the known account (no address) is not erased: it is what dates the account");
+        "the known account goes with the rest: an erasure asked for leaves no row");
     assertTrue(db.calls.stream().allMatch(call -> ENTRANT.toString().equals(call.params().get(1))));
     assertEquals(List.of("autoCommit=false", "commit", "autoCommit=true"), db.transaction);
   }

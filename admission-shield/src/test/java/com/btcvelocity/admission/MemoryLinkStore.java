@@ -40,7 +40,7 @@ class MemoryLinkStore implements LinkStore {
   final List<Row> rows = new ArrayList<>();
   final Map<UUID, String> households = new HashMap<>();
   final Map<UUID, Instant> declaredAt = new HashMap<>();
-  /** The known accounts: first and last time, no address. Outlives {@link #forget}. */
+  /** The known accounts: first and last time, no address. Goes with {@link #forget}. */
   final Map<UUID, Instant[]> known = new HashMap<>();
 
   @Override
@@ -106,7 +106,8 @@ class MemoryLinkStore implements LinkStore {
   public synchronized int forget(final UUID account) {
     final int before = this.rows.size();
     this.rows.removeIf(row -> row.account().equals(account));
-    return before - this.rows.size() + (this.households.remove(account) == null ? 0 : 1);
+    return before - this.rows.size() + (this.households.remove(account) == null ? 0 : 1)
+        + (this.known.remove(account) == null ? 0 : 1);
   }
 
   @Override

@@ -278,7 +278,8 @@ public final class JdbcLinkStore implements LinkStore {
       connection.setAutoCommit(false);
       try {
         final int removed = delete(connection, this.sightings, account)
-            + delete(connection, this.households, account);
+            + delete(connection, this.households, account)
+            + delete(connection, this.known, account);
         connection.commit();
         return removed;
       } catch (SQLException | RuntimeException failed) {

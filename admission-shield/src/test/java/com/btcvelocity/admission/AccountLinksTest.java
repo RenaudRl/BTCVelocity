@@ -343,7 +343,7 @@ class AccountLinksTest {
     seenBeforeTheBan(BANNED, HOME);
     this.store.declareHousehold(BANNED, BROTHER, "console", null, this.clock.instant());
 
-    assertEquals(2, links.run(kept -> kept.forget(BANNED)).join());
+    assertEquals(3, links.run(kept -> kept.forget(BANNED)).join(), "sighting, household, known");
     assertTrue(this.store.rows.isEmpty());
     assertTrue(this.store.households.keySet().stream().noneMatch(BANNED::equals));
     assertEquals(Optional.empty(), now(links, login(NEWCOMER, HOME)), "nothing left to link to");
@@ -358,7 +358,7 @@ class AccountLinksTest {
   }
 
   @Test
-  void aSisterErasedByForgetIsStillKnownToHavePlayedBeforeTheBan() {
+  void aSisterErasedByForgetIsNewAgainBecauseAnErasureAskedForLeavesNoRow() {
     final AccountLinks links = links("enforce", this.store);
     links.recordAccepted(login(SISTER, HOME));
     seenBeforeTheBan(BANNED, HOME);
@@ -371,8 +371,9 @@ class AccountLinksTest {
 
     assertTrue(this.store.rows.stream().noneMatch(row -> row.account().equals(SISTER)),
         "her sightings are gone");
-    assertEquals(Action.ADMIT, sister.action(), "known before the ban, though nothing else is kept");
-    assertEquals(Basis.LINKED_ACCOUNT, sister.basis());
+    assertFalse(this.store.known.containsKey(SISTER), "and so is the row that dated her");
+    assertEquals(Action.REFUSE, sister.action(), "erased on request: she is new again, on purpose");
+    assertEquals(Basis.LINKED_BAN, sister.basis());
   }
 
   @Test

@@ -61,12 +61,14 @@ compté une fois), est **admis**, journalisé et signalé au staff. Jamais de ba
 **« Connu avant le ban »** (le compte plus ancien que le ban n'est pas refusé) se date par une
 table **sans adresse**, `<prefix>admission_known` : UUID (ou `(0, xuid)` pour Bedrock), première et
 dernière date, écrite à **chaque** connexion admise, même celle d'un joueur Bedrock sans adresse
-réelle. Elle survit à `/admission forget` et à la purge des passages ; elle a sa propre rétention,
-`known-retention-days` (730 j par défaut, 30 j au plus bas), purgée sur absence. Un compte absent de
-la table, ou dont la première date suit le ban, est « nouveau ». **Faux positif accepté** : une sœur
-qui ne s'est jamais connectée depuis `enabled: true` (le module n'a rien d'elle, on ne va pas
-chercher les données du serveur) est prise pour nouvelle et refusée pendant la fenêtre FORTE si elle
-partage l'adresse d'un banni : le staff la déclare du même foyer (`household add`). Les comptes déjà
+réelle. Elle survit à la purge des passages ; elle a sa propre rétention, `known-retention-days`
+(730 j par défaut, 30 j au plus bas), purgée sur absence, et `/admission forget` l'efface avec le
+reste, dans la même transaction. Un compte absent de la table, ou dont la première date suit le
+ban, est « nouveau » : un compte effacé sur demande l'est donc de nouveau, c'est voulu. **Faux
+positif accepté** : une sœur qui ne s'est jamais connectée depuis `enabled: true` (le module n'a
+rien d'elle, on ne va pas chercher les données du serveur), ou que le staff a effacée, est prise
+pour nouvelle et refusée pendant la fenêtre FORTE si elle partage l'adresse d'un banni : le staff
+la déclare du même foyer (`household add`). Les comptes déjà
 passés en `sightings` avant cette table gardent leur date (relue, puis reprise à la première
 reconnexion).
 
@@ -119,8 +121,8 @@ reconnexion).
   enregistrée qu'une fois acceptée par un serveur (`ServerPostConnectEvent`), purgée 180 jours
   (`retention-days`) après son dernier passage ; un foyer déclaré avant ce délai et dont aucun
   membre n'a été vu depuis est purgé aussi. `/admission forget <uuid>` efface les passages et le
-  foyer d'un compte, **pas** sa ligne de `<prefix>admission_known` (UUID et deux dates : elle date
-  le compte, jusqu'à `known-retention-days` d'absence), **pas** le journal (/24, pseudo, `linked=`, retenu selon sa propre purge), ni
+  foyer d'un compte **et sa ligne de `<prefix>admission_known`**, dans une même transaction, **pas** le
+  journal (/24, pseudo, `linked=`, retenu selon sa propre purge), ni
   la mémoire de `/admission why` (4096 décisions, jusqu'au redémarrage), ni les lignes d'audit
   des commandes staff.
 - **Échec ouvert** : la recherche attend au plus `lookup-timeout-ms` (1,5 s) ; base lente, absente

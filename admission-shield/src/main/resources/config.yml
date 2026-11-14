@@ -294,11 +294,13 @@ links:
   # KNOWN ACCOUNTS (table <prefix>admission_known): for each session a server accepted, whatever its
   # address (a Bedrock player without a real address included), the account UUID and its first and
   # last time. NO address, NO digest. It is what tells an account that already played before a ban
-  # (only signalled) from one made after it (refused): so it outlives /admission forget and the
-  # purge of the sightings, and is deleted only when the account has not come back for this many
-  # days (minimum 30). Not known = "new": a sister who never connected since `enabled: true` is
-  # still taken for new and refused for the strong window if she shares a banned account's address.
-  # That false positive is accepted (the staff declares her household, /admission household add).
+  # (only signalled) from one made after it (refused): so it outlives the purge of the sightings,
+  # and is deleted when the account has not come back for this many days (minimum 30), or by
+  # /admission forget <uuid>, which erases it with the rest. An erased account is "new" again: that
+  # is what an erasure on request means. Not known = "new": a sister who never connected since
+  # `enabled: true`, or whom the staff erased, is taken for new and refused for the strong window if
+  # she shares a banned account's address. That false positive is accepted (the staff declares her
+  # household, /admission household add).
   known-retention-days: 730
   # CAP OF ACCOUNTS ONLINE AT ONCE ON ONE ADDRESS. 0 (the default) = no cap: nothing is counted and
   # a family of any size plays. Otherwise 2 to 64, the accounts online AT ONCE, the entrant included:

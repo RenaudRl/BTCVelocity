@@ -61,8 +61,8 @@ public interface LinkStore {
   /**
    * Records that an account was accepted by a server, with no address at all: its first and last
    * time are all that is kept. This is what tells an account that was already playing before a ban
-   * from one made after it ({@link LinkFacts#firstSeen()}); it outlives {@link #forget} and the
-   * purge of the sightings, and is deleted by {@link #purgeKnownOlderThan} alone.
+   * from one made after it ({@link LinkFacts#firstSeen()}); it outlives the purge of the
+   * sightings, and goes with {@link #forget} or {@link #purgeKnownOlderThan}.
    *
    * @param account the account
    * @param at when
@@ -71,8 +71,9 @@ public interface LinkStore {
   void recordKnown(UUID account, Instant at) throws SQLException;
 
   /**
-   * Erases what is kept about an account: its sightings and its household membership. The
-   * account's first and last time ({@link #recordKnown}) stay until their own retention ends.
+   * Erases everything kept about an account, in one transaction: its sightings, its household
+   * membership and its first and last time ({@link #recordKnown}). The account is "new" again to
+   * the next ban: an erasure asked for is not undone by a leftover row.
    *
    * @param account the account
    * @return the rows removed
