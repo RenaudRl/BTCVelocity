@@ -69,6 +69,8 @@ messages:
   # ADM-ALT-BAN (see links below). The player's language is unknown at the login: French and
   # English together. Never names the linked account.
   linked-ban: "<red>Connexion refusée / Connection refused.</red>\n<gray>Contactez le staff avec le code / Contact the staff with the code <white>{code}</white>.</gray>"
+  # ADM-ALT-MAX (links.max-online-per-address). Same two languages, same rule: no account named.
+  online-cap: "<red>Trop de comptes connectés depuis cette adresse / Too many accounts online from this address.</red>\n<gray>Si vous jouez en famille, contactez le staff avec le code / If you play with family, contact the staff with the code <white>{code}</white>.</gray>"
 
 # BOUND ON CONNECTION ATTEMPTS PER NETWORK (Sentinel 13.4). Independent of the lists above.
 # Every pre-login spends one token of its network: an IPv4 /24 or an IPv6 /48 (6to4, Teredo, NAT64
@@ -287,3 +289,17 @@ links:
   # is signalled to the staff. Never refused.
   max-accounts-per-household: 5
   retention-days: 180
+  # CAP OF ACCOUNTS ONLINE AT ONCE ON ONE ADDRESS. 0 (the default) = no cap: nothing is counted and
+  # a family of any size plays. N >= 1: a login is turned away (code ADM-ALT-MAX) when N OTHER
+  # accounts are already online on its address (an IPv4, or an IPv6 /64), a declared household
+  # (/admission household add) not counted, so two siblings play together under any cap >= 1 and
+  # three accounts do not trip a cap of 3. Counted in memory by address digest from the moment a
+  # server accepts the session until the player leaves: a burst of logins at the very same instant
+  # can slip past it by the size of the burst. Blocks the extra SESSION, never bans anyone.
+  # A Bedrock player counts on the real address Floodgate recorded, like a Java account of the same
+  # home; without one (or from an address of geyser-addresses) it is never counted nor judged:
+  # Geyser's own address is never a player's. Raising it above a household's size is the way to
+  # be generous; start with `observe`.
+  max-online-per-address: 0
+  # observe | enforce, for this cap alone. `mode` above and the module-wide `mode` hold it back.
+  online-mode: observe

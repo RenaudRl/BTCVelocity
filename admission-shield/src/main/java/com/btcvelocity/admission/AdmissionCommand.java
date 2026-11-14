@@ -204,8 +204,10 @@ public final class AdmissionCommand implements SimpleCommand {
     return "Comptes liés (" + config.linksMode().name().toLowerCase(Locale.ROOT) + ") : lien FORT"
         + " = même adresse sous " + links.strongWindow().toDays() + " j, adresse partagée au-delà"
         + " de " + links.sharedAddressAccounts() + " comptes ; seul un lien FORT avec un ban réseau"
-        + " actif refuse (code " + Verdict.LINKED_BAN_CODE + ") ; conservation "
-        + links.retention().toDays() + " j.";
+        + " actif refuse (code " + Verdict.LINKED_BAN_CODE + ") ; plafond de comptes en ligne par"
+        + " adresse : " + (links.maxOnlinePerAddress() == 0 ? "aucun" : links.maxOnlinePerAddress()
+        + " (" + config.onlineMode().name().toLowerCase(Locale.ROOT) + ", code "
+        + Verdict.ONLINE_CAP_CODE + ")") + " ; conservation " + links.retention().toDays() + " j.";
   }
 
   /** One line on the per-network bound; the refusals themselves are read with {@code why <ip>}. */

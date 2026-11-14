@@ -22,6 +22,7 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.event.EventTask;
 import com.velocitypowered.api.event.ResultedEvent;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.connection.PreLoginEvent;
@@ -414,7 +415,21 @@ public final class BtcAdmissionShieldPlugin {
     }
     final Attempt attempt = attemptOf(event.getPlayer());
     if (attempt != null) {
-      accountLinks.recordAccepted(attempt);
+      accountLinks.recordAccepted(attempt, event.getPlayer());
+    }
+  }
+
+  /**
+   * Frees the account's place under the cap of accounts online on one address. The player object
+   * tells this session from a later one of the same account.
+   *
+   * @param event the disconnection
+   */
+  @Subscribe
+  public void onDisconnect(final DisconnectEvent event) {
+    final AccountLinks accountLinks = this.links;
+    if (accountLinks != null) {
+      accountLinks.sessionEnded(event.getPlayer().getUniqueId(), event.getPlayer());
     }
   }
 

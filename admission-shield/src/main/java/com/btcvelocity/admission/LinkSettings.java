@@ -52,6 +52,12 @@ import org.spongepowered.configurate.ConfigurationNode;
  *     (the entrant's declared household counted once), a login is signalled; never refused
  * @param retention how long a sighting is kept after it was last seen
  * @param message the MiniMessage text shown to a refused player, with {@code {code}}
+ * @param maxOnlinePerAddress how many other accounts may be online at once on the address of an
+ *     entering account (its declared household not counted); {@code 0} (the default) switches the
+ *     cap off. A sibling pair plays together under any cap of 1 or more
+ * @param onlineMode {@code observe} or {@code enforce} for that cap alone; held back by the
+ *     {@code mode} of the links and of the module
+ * @param onlineMessage the MiniMessage text shown to a player the cap refuses, with {@code {code}}
  */
 public record LinkSettings(
     boolean enabled,
@@ -71,7 +77,10 @@ public record LinkSettings(
     int sharedAddressAccounts,
     int maxAccountsPerAddress,
     Duration retention,
-    String message) {
+    String message,
+    int maxOnlinePerAddress,
+    AdmissionConfig.Mode onlineMode,
+    String onlineMessage) {
 
   /** How far back the sightings of an address are read. */
   public static final Duration ADDRESS_HISTORY = Duration.ofDays(30);
@@ -91,6 +100,9 @@ public record LinkSettings(
   static final int DEFAULT_SHARED_ACCOUNTS = 4;
   static final int DEFAULT_MAX_ACCOUNTS = 5;
   static final int DEFAULT_RETENTION_DAYS = 180;
+  /** 0 = no cap: a family of any size plays, nothing is counted online. */
+  static final int DEFAULT_MAX_ONLINE = 0;
+  private static final int MAX_ONLINE = 64;
   private static final int MAX_TIMEOUT_MS = 10_000;
   private static final int MIN_TIMEOUT_MS = 100;
   private static final int MAX_POOL = 16;
@@ -98,6 +110,12 @@ public record LinkSettings(
   static final String DEFAULT_MESSAGE =
       "<red>Connexion refusée / Connection refused.</red>\n<gray>Contactez le staff avec le code"
           + " / Contact the staff with the code <white>{code}</white>.</gray>";
+
+  static final String DEFAULT_ONLINE_MESSAGE =
+      "<red>Trop de comptes connectés depuis cette adresse / Too many accounts online from this"
+          + " address.</red>\n<gray>Si vous jouez en famille, contactez le staff avec le code"
+          + " / If you play with family, contact the staff with the code <white>{code}</white>."
+          + "</gray>";
 
   /**
    * Reads the {@code links} section. A value that does not make sense is reported and replaced by
@@ -110,7 +128,7 @@ public record LinkSettings(
    * @return the settings
    */
   static LinkSettings parse(final ConfigurationNode section, final String message,
-      final Consumer<String> warnings, final Consumer<String> errors) {
+      final String onlineMessage, final Consumer<String> warnings, final Consumer<String> errors) {
     final ConfigurationNode database = section.node("database");
     // A bare `off` is the YAML boolean false: both spellings switch the links off.
     final String modeText = section.node("mode").getString("observe").trim()
@@ -170,7 +188,23 @@ public record LinkSettings(
             LinkStore.MAX_ACCOUNTS_PER_LOOKUP - 1, warnings),
         Duration.ofDays(within(section, "retention-days", DEFAULT_RETENTION_DAYS,
             (int) ADDRESS_HISTORY.toDays(), Integer.MAX_VALUE, warnings)),
-        message);
+        message,
+        within(section, "max-online-per-address", DEFAULT_MAX_ONLINE, 0, MAX_ONLINE, warnings),
+        onlineMode(section.node("online-mode").getString("observe"), warnings),
+        onlineMessage);
+  }
+
+  private static AdmissionConfig.Mode onlineMode(final String text,
+      final Consumer<String> warnings) {
+    return switch (text.trim().toLowerCase(Locale.ROOT)) {
+      case "enforce" -> AdmissionConfig.Mode.ENFORCE;
+      case "observe" -> AdmissionConfig.Mode.OBSERVE;
+      default -> {
+        warnings.accept("links.online-mode '" + text + "' is not observe or enforce; using"
+            + " 'observe'");
+        yield AdmissionConfig.Mode.OBSERVE;
+      }
+    };
   }
 
   /**

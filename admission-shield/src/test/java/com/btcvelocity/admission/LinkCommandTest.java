@@ -193,6 +193,22 @@ class LinkCommandTest {
   }
 
   @Test
+  void altsNameTheJavaAndTheBedrockAccountsOfOneAddress() throws SQLException {
+    final UUID bedrock = new UUID(0L, 2535400000000001L);
+    final InetAddress home = InetAddress.ofLiteral("198.51.100.7");
+    for (UUID account : List.of(BROTHER, bedrock)) {
+      this.store.record(LinkKeyTest.key(LinkKeyTest.TEST_KEY)
+          .sighting(account, home, this.clock.instant()));
+    }
+
+    command().execute(this.console, new String[] {"alts", SISTER.toString()}).join();
+
+    final String shown = String.join("\n", this.told);
+    assertTrue(shown.contains(BROTHER + " [java]"), shown);
+    assertTrue(shown.contains(bedrock + " [bedrock]"), shown);
+  }
+
+  @Test
   void linksOffSaySo() {
     new LinkCommand(null, this.logger.logger(), this.clock, name -> Optional.empty(),
         this.staff::add).execute(this.console, new String[] {"alts", SISTER.toString()}).join();

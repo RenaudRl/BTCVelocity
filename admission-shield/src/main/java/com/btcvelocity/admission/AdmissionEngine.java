@@ -488,7 +488,9 @@ public final class AdmissionEngine {
       return Optional.empty();
     }
     InetAddress judged = authenticated.remote();
-    if (fromGeyser(authenticated) && authenticated.floodgatePlayer()) {
+    if (authenticated.floodgatePlayer()) {
+      // Whatever listener or list says Geyser's address: the address of a Floodgate player's
+      // connection is Geyser's, never the player's. Only the real one Floodgate recorded counts.
       judged = bedrockReal(authenticated);
       if (judged == null) {
         return Optional.empty();
@@ -578,8 +580,7 @@ public final class AdmissionEngine {
   public Verdict decideLinks(final Attempt authenticated, final InetAddress judged,
       final LinkFacts facts, final Map<UUID, BanLookup.ActiveBan> activeBans, final Instant now) {
     final UUID self = authenticated.uuid();
-    final Origin origin = fromGeyser(authenticated) && authenticated.floodgatePlayer()
-        ? Origin.GEYSER_FLOODGATE : Origin.DIRECT;
+    final Origin origin = originOf(authenticated);
     final int accounts = accountsOnAddress(self, facts, now);
     final Instant firstSeen = facts.firstSeen();
     Verdict weak = null;
@@ -615,6 +616,40 @@ public final class AdmissionEngine {
           null, null, new LinkEvidence(null, null, null, accounts)));
     }
     return new Verdict(Action.ADMIT, Basis.CLEAN, origin, judged, null, null);
+  }
+
+  /**
+   * {@link #decideLinks(Attempt, InetAddress, LinkFacts, Map, Instant)}, and the cap of accounts
+   * online at once on the address: when {@code max-online-per-address} is set and that many OTHER
+   * accounts (the entrant's declared household left out by the caller) are already online, the
+   * login is refused in {@code enforce}, observed otherwise. The heavier verdict of the two wins.
+   *
+   * @param authenticated the login
+   * @param judged the address from {@link #linkSubject}
+   * @param facts the sightings around the account and its household
+   * @param activeBans the linked accounts under a network ban in force, with the ban
+   * @param now the time the windows are counted back from
+   * @param othersOnline the other accounts online on the address, household members excluded
+   * @return the verdict
+   */
+  public Verdict decideLinks(final Attempt authenticated, final InetAddress judged,
+      final LinkFacts facts, final Map<UUID, BanLookup.ActiveBan> activeBans, final Instant now,
+      final int othersOnline) {
+    final Verdict byLinks = decideLinks(authenticated, judged, facts, activeBans, now);
+    final int cap = this.config.links().maxOnlinePerAddress();
+    if (cap == 0 || othersOnline < cap) {
+      return byLinks;
+    }
+    final Action action = this.config.onlineMode() == AdmissionConfig.Mode.ENFORCE
+        ? Action.REFUSE : Action.OBSERVE;
+    return stronger(byLinks, named(new Verdict(action, Basis.ONLINE_PER_ADDRESS,
+        originOf(authenticated), judged, null, null, null,
+        new LinkEvidence(null, null, null, othersOnline))));
+  }
+
+  private Origin originOf(final Attempt authenticated) {
+    return fromGeyser(authenticated) && authenticated.floodgatePlayer()
+        ? Origin.GEYSER_FLOODGATE : Origin.DIRECT;
   }
 
   private static Instant min(final Instant first, final Instant second) {

@@ -297,6 +297,7 @@ public record AdmissionConfig(
         AsnSettings.parse(root.node("asn"), warnings),
         LinkSettings.parse(root.node("links"),
             root.node("messages", "linked-ban").getString(LinkSettings.DEFAULT_MESSAGE),
+            root.node("messages", "online-cap").getString(LinkSettings.DEFAULT_ONLINE_MESSAGE),
             warnings, errors));
   }
 
@@ -321,6 +322,7 @@ public record AdmissionConfig(
     final String template = switch (refusal.basis()) {
       case RATE_NETWORK -> this.networkRate.message();
       case LINKED_BAN -> this.links.message();
+      case ONLINE_PER_ADDRESS -> this.links.onlineMessage();
       default -> messageFor(refusal.ipClass());
     };
     return template.replace("{code}", code == null ? "" : code);
@@ -357,6 +359,17 @@ public record AdmissionConfig(
   }
 
   /**
+   * The mode the online-accounts cap runs in. The module-wide and the links' {@code observe} are
+   * dry runs for everything they hold, so they also hold this back.
+   *
+   * @return {@code observe} unless the module, {@code links.mode} and {@code links.online-mode}
+   *     are all in {@code enforce}
+   */
+  public Mode onlineMode() {
+    return linksMode() == Mode.OBSERVE ? Mode.OBSERVE : this.links.onlineMode();
+  }
+
+  /**
    * The mode in force for the rule behind a verdict, as the journal states it.
    *
    * @param verdict the verdict
@@ -370,6 +383,9 @@ public record AdmissionConfig(
     }
     if (verdict.basis() == Verdict.Basis.LINKED_BAN) {
       return linksMode();
+    }
+    if (verdict.basis() == Verdict.Basis.ONLINE_PER_ADDRESS) {
+      return onlineMode();
     }
     if (verdict.basis() == Verdict.Basis.VPN_SIGNAL
         || verdict.basis() == Verdict.Basis.ASN_KEYWORD

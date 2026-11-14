@@ -94,6 +94,9 @@ public record Verdict(
   /** The cause code of a connection turned away for a strong link to a network-banned account. */
   public static final String LINKED_BAN_CODE = "ADM-ALT-BAN";
 
+  /** The cause code of a connection turned away for too many accounts online on one address. */
+  public static final String ONLINE_CAP_CODE = "ADM-ALT-MAX";
+
   /** What happens to the connection. */
   public enum Action {
     /** Let it in. */
@@ -171,7 +174,13 @@ public record Verdict(
     /** A WEAK link to an account under a network ban in force. A signal, never a refusal. */
     LINKED_ACCOUNT("linked-account"),
     /** More distinct accounts on the address than {@code max-accounts-per-household}. A signal. */
-    ACCOUNTS_PER_ADDRESS("accounts-per-address");
+    ACCOUNTS_PER_ADDRESS("accounts-per-address"),
+    /**
+     * More other accounts online on the address than {@code max-online-per-address} (the declared
+     * household not counted): refused in {@code enforce}, observed otherwise. Blocks the extra
+     * session, never bans anyone.
+     */
+    ONLINE_PER_ADDRESS("online-per-address");
 
     private final String label;
 
@@ -202,7 +211,7 @@ public record Verdict(
     return switch (this.basis) {
       case LISTED, EXEMPT_NETWORK, EXEMPT_PLAYER, BEDROCK_IP_UNKNOWN,
           GEYSER_ADDRESS_NOT_FLOODGATE, RATE_NETWORK, ASN_KEYWORD, VPN_SIGNAL, LINKED_BAN,
-          LINKED_ACCOUNT, ACCOUNTS_PER_ADDRESS -> true;
+          LINKED_ACCOUNT, ACCOUNTS_PER_ADDRESS, ONLINE_PER_ADDRESS -> true;
       case CLEAN, GEYSER_ORIGIN, AWAITING_IDENTITY -> false;
     };
   }
@@ -219,6 +228,9 @@ public record Verdict(
     }
     if (this.basis == Basis.LINKED_BAN) {
       return LINKED_BAN_CODE;
+    }
+    if (this.basis == Basis.ONLINE_PER_ADDRESS) {
+      return ONLINE_CAP_CODE;
     }
     return this.ipClass == null ? null : this.ipClass.causeCode();
   }

@@ -130,6 +130,25 @@ class AccountLinksTest {
   }
 
   @Test
+  void aBannedJavaAccountsNewBedrockAccountIsRefusedOnItsRealAddressNeverOnGeyserAddress() {
+    final InetAddress geyser = InetAddress.ofLiteral("198.51.100.50");
+    final UUID bedrockAlt = new UUID(0L, 2535400000000009L);
+    // A banned Java account once seen from Geyser's own address (a client on the Geyser host).
+    seenBeforeTheBan(BANNED, HOME);
+    final AccountLinks links = links("enforce", this.store);
+
+    final Attempt withRealAddress = Attempt.claimed(".Alt", geyser, true)
+        .authenticated(".Alt", bedrockAlt, true, HOME);
+    // Not on the geyser listener, no geyser-addresses: the connection address is still Geyser's.
+    final Attempt withoutIt = Attempt.claimed(".Alt", geyser)
+        .authenticated(".Alt", bedrockAlt, true, null);
+    seenBeforeTheBan(BANNED, geyser);
+
+    assertEquals(Action.REFUSE, now(links, withRealAddress).orElseThrow().action());
+    assertEquals(Optional.empty(), now(links, withoutIt), "Geyser's address links nobody");
+  }
+
+  @Test
   void aBannedPlayersNewAccountIsRefusedInEnforceAndOnlyObservedInObserve() {
     seenBeforeTheBan(BANNED, HOME);
 

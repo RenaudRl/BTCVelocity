@@ -144,9 +144,18 @@ final class LinkCommand {
               account);
           tell(source, others.size() + " compte(s) vu(s) sur une adresse de " + account + " en "
               + LinkSettings.ADDRESS_HISTORY.toDays() + " jours :", NamedTextColor.GRAY);
-          others.forEach((other, seen) -> tell(source, "  " + other + " (vu le " + seen + ")",
-              NamedTextColor.GRAY));
+          others.forEach((other, seen) -> tell(source, "  " + other + " [" + platformOf(other)
+              + "] (vu le " + seen + ")", NamedTextColor.GRAY));
         });
+  }
+
+  /**
+   * Which platform an account is from, so that the staff sees a person's Java and Bedrock accounts
+   * side by side: a Floodgate account's UUID is its XUID in the low 64 bits and zero in the high
+   * ones, which no Mojang UUID has.
+   */
+  static String platformOf(final UUID account) {
+    return account.getMostSignificantBits() == 0L ? "bedrock" : "java";
   }
 
   private CompletableFuture<Void> household(final CommandSource source,

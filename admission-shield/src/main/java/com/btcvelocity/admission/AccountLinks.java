@@ -66,6 +66,7 @@ public final class AccountLinks {
   private final Clock clock;
   private final Logger logger;
   private final AtomicReference<@Nullable Instant> lastWarning = new AtomicReference<>();
+  private final OnlineAddresses online = new OnlineAddresses();
 
   /**
    * Creates the service.
@@ -146,7 +147,8 @@ public final class AccountLinks {
     final UUID self = authenticated.uuid();
     final Instant now = this.clock.instant();
     try {
-      final LinkFacts facts = this.store.factsFor(this.key.sighting(self, judged, now),
+      final Sighting entering = this.key.sighting(self, judged, now);
+      final LinkFacts facts = this.store.factsFor(entering,
           now.minus(LinkSettings.ADDRESS_HISTORY), now.minus(this.settings.weakWindow()));
       final Set<UUID> linked = this.engine.linksOf(self, judged, facts, Map.of(), now).stream()
           .filter(link -> link.strength() != Link.Strength.HOUSEHOLD)
@@ -154,11 +156,22 @@ public final class AccountLinks {
           .collect(Collectors.toSet());
       final Map<UUID, BanLookup.ActiveBan> banned = linked.isEmpty() ? Map.of()
           : this.bans.activeNetworkBans(linked, now);
-      final Verdict verdict = this.engine.decideLinks(authenticated, judged, facts, banned, now);
+      final Verdict verdict = this.engine.decideLinks(authenticated, judged, facts, banned, now,
+          othersOnline(entering, facts));
       return verdict.basis() == Verdict.Basis.CLEAN ? Optional.empty() : Optional.of(verdict);
     } catch (SQLException failed) {
       throw new CompletionException(failed);
     }
+  }
+
+  /** The other accounts online on the address, the entrant's declared household left out. */
+  private int othersOnline(final Sighting entering, final LinkFacts facts) {
+    if (this.settings.maxOnlinePerAddress() == 0) {
+      return 0;
+    }
+    final Set<UUID> others = this.online.othersOn(entering.account(), entering.ipDigest());
+    others.removeAll(facts.household());
+    return others.size();
   }
 
   /**
@@ -172,6 +185,17 @@ public final class AccountLinks {
    * @param authenticated the login
    */
   public void recordAccepted(final Attempt authenticated) {
+    recordAccepted(authenticated, new Object());
+  }
+
+  /**
+   * {@link #recordAccepted(Attempt)}, and the account is counted online on its address for the cap
+   * ({@code max-online-per-address}) until {@link #sessionEnded}.
+   *
+   * @param authenticated the login
+   * @param session tells this session from a later one of the same account (the player object)
+   */
+  public void recordAccepted(final Attempt authenticated, final Object session) {
     final Optional<InetAddress> subject = this.engine.linkSubject(authenticated);
     if (subject.isEmpty()
         || authenticated.viaGeyserListener() && !authenticated.floodgatePlayer()) {
@@ -179,6 +203,9 @@ public final class AccountLinks {
     }
     final Instant now = this.clock.instant();
     final Sighting sighting = this.key.sighting(authenticated.uuid(), subject.get(), now);
+    if (this.settings.maxOnlinePerAddress() > 0) {
+      this.online.enter(sighting.account(), sighting.ipDigest(), session);
+    }
     try {
       this.executor.execute(() -> {
         try {
@@ -193,6 +220,17 @@ public final class AccountLinks {
     } catch (RejectedExecutionException full) {
       warn("the lookup queue is full; a session was not recorded", full);
     }
+  }
+
+  /**
+   * An account's session ended: it no longer counts online. Ignored when the account has since come
+   * back under another session.
+   *
+   * @param account the account
+   * @param session the session {@link #recordAccepted(Attempt, Object)} was given
+   */
+  public void sessionEnded(final UUID account, final Object session) {
+    this.online.leave(account, session);
   }
 
   /**
