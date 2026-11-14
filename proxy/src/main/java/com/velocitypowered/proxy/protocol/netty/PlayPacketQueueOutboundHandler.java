@@ -18,6 +18,8 @@
 package com.velocitypowered.proxy.protocol.netty;
 
 import com.velocitypowered.api.network.ProtocolVersion;
+import com.velocitypowered.proxy.connection.MinecraftConnection;
+import com.velocitypowered.proxy.connection.client.ConnectedPlayer;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
 import com.velocitypowered.proxy.protocol.StateRegistry;
@@ -27,8 +29,11 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.util.ReferenceCountUtil;
+import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Queue;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -44,18 +49,39 @@ import org.jetbrains.annotations.NotNull;
  */
 public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
 
+  private static final Logger LOGGER = LogManager.getLogger(PlayPacketQueueOutboundHandler.class);
+
+  /** The smallest packet bound a system property can set: below it, a normal login would trip. */
+  static final int MINIMUM_PACKETS = 64;
+  /** The smallest byte bound a system property can set. */
+  static final int MINIMUM_SIZE = 1024 * 1024;
+  /**
+   * What every parked packet weighs in the byte bound, whatever it holds: most packets are not
+   * {@link ByteBufHolder}s, so without it the byte bound would see nothing of them.
+   */
+  static final int PACKET_WEIGHT = 1024;
+
   // Mirrors the inbound bounds: packets parked for a client stuck in CONFIG must not grow forever.
   static final int DEFAULT_MAXIMUM_PACKETS =
-      Integer.getInteger("velocity.maximum-play-queue-outbound-packets", 4096);
+      bounded("velocity.maximum-play-queue-outbound-packets", 4096, MINIMUM_PACKETS);
   static final int DEFAULT_MAXIMUM_SIZE =
-      Integer.getInteger("velocity.maximum-play-queue-outbound-size", 128 * 1024 * 1024); // 128MiB
+      bounded("velocity.maximum-play-queue-outbound-size", 128 * 1024 * 1024, MINIMUM_SIZE); // 128MiB
+
+  /** A system property, never below its minimum (0 or a negative value would close every login). */
+  static int bounded(final String name, final int fallback, final int minimum) {
+    return Math.max(minimum, Integer.getInteger(name, fallback));
+  }
+
+  /** A parked packet with the promise of whoever wrote it, answered when it is sent or dropped. */
+  private record Parked(MinecraftPacket packet, ChannelPromise promise) {
+  }
 
   private final StateRegistry.PacketRegistry.ProtocolRegistry registry;
   private final int maximumPackets;
-  private final int maximumSize;
+  private final long maximumSize;
 
-  private final Queue<MinecraftPacket> queue = new ArrayDeque<>();
-  private int queueSize = 0;
+  private final Queue<Parked> queue = new ArrayDeque<>();
+  private long queueSize = 0;
 
   /**
    * Provides registries for "client" &amp; server bound packets.
@@ -68,7 +94,7 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
   }
 
   PlayPacketQueueOutboundHandler(final ProtocolVersion version, final ProtocolUtils.Direction direction,
-      final int maximumPackets, final int maximumSize) {
+      final int maximumPackets, final long maximumSize) {
     this.registry = StateRegistry.CONFIG.getProtocolRegistry(direction, version);
     this.maximumPackets = maximumPackets;
     this.maximumSize = maximumSize;
@@ -89,7 +115,8 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
     }
 
     // Otherwise, queue the packet, unless the peer has stayed in CONFIG long enough to overflow us.
-    final int length = packet instanceof final ByteBufHolder holder ? holder.content().readableBytes() : 0;
+    final long length = PACKET_WEIGHT
+        + (packet instanceof final ByteBufHolder holder ? holder.content().readableBytes() : 0);
     final boolean tooMany = this.queue.size() >= this.maximumPackets;
     if (tooMany || this.queueSize + length > this.maximumSize) {
       ReferenceCountUtil.release(packet);
@@ -97,12 +124,22 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
           ? "Outbound queue too big (more than " + this.maximumPackets + " packets)"
           : "Outbound queue too big (greater than " + this.maximumSize + " bytes)");
       promise.tryFailure(overflow);
+      LOGGER.warn("Closing the connection of {}: its PLAY queue toward a client still in CONFIG is full"
+          + " ({} packets queued, {} bytes counted; limits {} packets, {} bytes)",
+          playerOf(ctx), this.queue.size(), this.queueSize, this.maximumPackets, this.maximumSize);
       // Reaches MinecraftConnection#exceptionCaught, which closes the connection quietly.
       ctx.fireExceptionCaught(overflow);
       return;
     }
     this.queueSize += length;
-    this.queue.offer(packet);
+    this.queue.offer(new Parked(packet, promise));
+  }
+
+  /** The username only: the address of the player has no place in this log line. */
+  private static String playerOf(final ChannelHandlerContext ctx) {
+    final MinecraftConnection connection = ctx.pipeline().get(MinecraftConnection.class);
+    return connection != null && connection.getAssociation() instanceof final ConnectedPlayer player
+        ? player.getUsername() : "an unidentified player";
   }
 
   @Override
@@ -119,12 +156,13 @@ public class PlayPacketQueueOutboundHandler extends ChannelDuplexHandler {
 
   private void releaseQueue(final ChannelHandlerContext ctx, final boolean active) {
     // Send out all the queued packets
-    MinecraftPacket packet;
-    while ((packet = this.queue.poll()) != null) {
+    Parked parked;
+    while ((parked = this.queue.poll()) != null) {
       if (active) {
-        ctx.write(packet, ctx.voidPromise());
+        ctx.write(parked.packet(), parked.promise());
       } else {
-        ReferenceCountUtil.release(packet);
+        ReferenceCountUtil.release(parked.packet());
+        parked.promise().tryFailure(new ClosedChannelException());
       }
     }
 
