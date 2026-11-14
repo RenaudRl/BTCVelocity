@@ -30,8 +30,10 @@ import java.net.InetAddress;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -42,6 +44,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -334,6 +337,104 @@ class AccountLinksTest {
 
     assertEquals(-1, links("observe", down).purge());
     assertTrue(this.logger.has("WARN", "the purge of old sightings failed"),
+        this.logger.lines().toString());
+  }
+
+  @Test
+  void aSightingsPurgeThatFailsDoesNotSkipTheKnownAccountsPurge() {
+    final MemoryLinkStore half = new MemoryLinkStore() {
+      @Override
+      public synchronized int purgeOlderThan(final Instant cutoff) throws SQLException {
+        throw new SQLException("table locked");
+      }
+    };
+    final AccountLinks links = links("observe", half);
+    links.recordAccepted(login(SISTER, HOME));
+    this.clock.advance(Duration.ofDays(800));
+
+    assertEquals(-1, links.purge(), "told that one of the two failed");
+
+    assertTrue(half.known.isEmpty(), "the other one was run all the same");
+    assertTrue(this.logger.has("WARN", "the purge of old sightings failed"));
+  }
+
+  @Test
+  void theKnownAccountsPurgeThatFailsDoesNotHideTheSightingsOne() {
+    final MemoryLinkStore half = new MemoryLinkStore() {
+      @Override
+      public synchronized int purgeKnownOlderThan(final Instant cutoff) {
+        throw new IllegalStateException("table locked");
+      }
+    };
+    final AccountLinks links = links("observe", half);
+    links.recordAccepted(login(SISTER, HOME));
+    this.clock.advance(Duration.ofDays(181));
+
+    assertEquals(-1, links.purge());
+
+    assertTrue(half.rows.isEmpty(), "the sightings were purged");
+    assertTrue(this.logger.has("WARN", "the purge of old known accounts failed"),
+        this.logger.lines().toString());
+  }
+
+  @Test
+  void theScheduledPurgeRunsOnTheSessionExecutorNotOnTheCaller() {
+    final List<Runnable> parked = new ArrayList<>();
+    final AccountLinks links = links("observe", this.store, Runnable::run, parked::add);
+    links("observe", this.store).recordAccepted(login(SISTER, HOME));
+    this.clock.advance(Duration.ofDays(181));
+
+    final CompletableFuture<Integer> purged = links.purgeOnSessions();
+
+    assertEquals(1, parked.size(), "handed to the session executor");
+    assertFalse(purged.isDone());
+    assertFalse(this.store.rows.isEmpty(), "nothing touched on the calling thread");
+    parked.get(0).run();
+    assertEquals(1, purged.join());
+    assertTrue(this.store.rows.isEmpty());
+  }
+
+  @Test
+  void aPurgeTurnedAwayByAFullSessionQueueWaitsForTomorrow() {
+    final AccountLinks links = links("observe", this.store, Runnable::run, task -> {
+      throw new RejectedExecutionException("full");
+    });
+
+    assertEquals(-1, links.purgeOnSessions().join());
+    assertTrue(this.logger.has("WARN", "the session queue is full"), this.logger.lines().toString());
+  }
+
+  @Test
+  void aFloodgateRealAddressFromAnUnlistedOriginWarnsOnceAMinuteWithoutAnyAddress() {
+    final AccountLinks links = links("observe", this.store);
+    final InetAddress unlisted = InetAddress.ofLiteral("192.0.2.77");
+    final InetAddress real = InetAddress.ofLiteral("203.0.113.44");
+    final Attempt bedrock = Attempt.claimed("Bedrocker", unlisted)
+        .authenticated("Bedrocker", SISTER, true, real);
+
+    now(links, bedrock);
+    now(links, bedrock);
+
+    assertEquals(1, this.logger.lines().stream().filter(line -> line.startsWith("WARN")
+        && line.contains("geyser-addresses")).count(), this.logger.lines().toString());
+    assertTrue(this.logger.lines().stream().noneMatch(line -> line.contains("192.0.2.77")
+        || line.contains("203.0.113.44")), "no address in the log");
+
+    this.clock.advance(Duration.ofMinutes(2));
+    now(links, bedrock);
+    assertEquals(2, this.logger.lines().stream().filter(line -> line.contains("geyser-addresses"))
+        .count(), "and again a minute later");
+  }
+
+  @Test
+  void aFloodgatePlayerOfTheGeyserListenerDoesNotWarnAboutItsOrigin() {
+    final AccountLinks links = links("observe", this.store);
+    final Attempt bedrock = Attempt.claimed("Bedrocker", InetAddress.ofLiteral("192.0.2.77"), true)
+        .authenticated("Bedrocker", SISTER, true, InetAddress.ofLiteral("203.0.113.44"));
+
+    now(links, bedrock);
+
+    assertTrue(this.logger.lines().stream().noneMatch(line -> line.contains("geyser-addresses")),
         this.logger.lines().toString());
   }
 

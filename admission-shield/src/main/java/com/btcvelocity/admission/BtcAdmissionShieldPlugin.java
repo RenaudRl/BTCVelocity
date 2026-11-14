@@ -310,11 +310,12 @@ public final class BtcAdmissionShieldPlugin {
     // The tables are created by the first call that reaches the database (JdbcLinkStore#open).
     this.purgeTask = AccountLinks.schedulePurge(this.proxy.getScheduler()
         .buildTask(this, () -> {
-          final int purged = accountLinks.purge();
-          if (purged > 0) {
-            this.logger.info("links: {} sighting(s) older than {} days deleted.", purged,
-                settings.retention().toDays());
-          }
+          // Off the scheduler thread: the database may be slow or down.
+          accountLinks.purgeOnSessions().thenAccept(purged -> {
+            if (purged > 0) {
+              this.logger.info("links: {} row(s) past their retention deleted.", purged);
+            }
+          });
         }));
     this.logger.info("Account links up: mode {}, database {} (table prefix {}), lookup timeout"
         + " {} ms.", this.config.linksMode(), settings.jdbcUrl(), settings.tablePrefix(),

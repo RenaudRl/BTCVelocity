@@ -96,14 +96,20 @@ reconnexion).
   propre place. **Limites** : un joueur admis sans jugement (base absente, lente ou file pleine)
   échappe au plafond mais prend sa place ; le décompte est **par proxy** (N proxys laissent N fois
   le plafond) ; derrière un **CGNAT** de nombreux foyers partagent une adresse et le plafond peut
-  refuser des inconnus : démarrer en `observe`. Bloque la session en trop, ne bannit jamais.- **Java / Bedrock** : un joueur Floodgate n'est jugé, compté et enregistré que sur l'adresse
+  refuser des inconnus : démarrer en `observe`. Bloque la session en trop, ne bannit jamais.
+
+- **Java / Bedrock** : un joueur Floodgate n'est jugé, compté et enregistré que sur l'adresse
   **réelle** que Floodgate a retenue, jamais sur l'adresse de sa connexion (celle de Geyser), que
   `geyser-addresses` soit renseignée ou non ; sans adresse réelle, ou avec une adresse listée, il
   n'est ni compté ni jugé. Sur son adresse réelle il rejoint les comptes Java du même foyer : lien
   FORT/FAIBLE, plafond, ban réseau d'un compte Java refusant son compte Bedrock neuf, et
   réciproquement. `/admission alts` indique `[java]` ou `[bedrock]` (UUID Floodgate : 64 bits de
   poids fort à zéro) pour les voir côte à côte. Le préfixe de nom (« . ») n'est pas utilisé : il se
-  configure dans Floodgate, et l'UUID suffit.
+  configure dans Floodgate, et l'UUID suffit. Un joueur Floodgate dont la connexion ne vient ni du
+  listener Geyser ni d'une adresse de `geyser-addresses` est jugé sur l'adresse de Floodgate
+  quand même : un WARN (au plus un par minute, sans adresse) invite à y lister celle de Geyser.
+  La purge quotidienne (sightings, puis comptes connus, chacune sa tentative) tourne sur
+  l'exécuteur des sessions, jamais sur le thread du planificateur du proxy.
 
 - **Ban réseau actif** : lu en LECTURE SEULE dans `<prefix>sanctions` de Sentinel : `type = 'BAN'`,
   `scope = 'NETWORK'`, `network_id` = `links.database.network-id`, `revoked_at IS NULL`,

@@ -67,6 +67,7 @@ public final class AccountLinks {
   private final Clock clock;
   private final Logger logger;
   private final AtomicReference<@Nullable Instant> lastWarning = new AtomicReference<>();
+  private final AtomicReference<@Nullable Instant> lastOriginWarning = new AtomicReference<>();
   private final OnlineAddresses online = new OnlineAddresses();
 
   /**
@@ -142,6 +143,13 @@ public final class AccountLinks {
       return CompletableFuture.completedFuture(Optional.empty());
     }
     final InetAddress judged = subject.get();
+    if (this.engine.floodgateFromUnlistedOrigin(authenticated)
+        && due(this.lastOriginWarning)) {
+      this.logger.warn("Account links: Floodgate player {} comes from an address that is neither the"
+          + " Geyser listener nor in geyser-addresses; its Floodgate address is trusted all the"
+          + " same. If that is Geyser's own address, list it in geyser-addresses; at most one such"
+          + " warning a minute.", shortId(authenticated.uuid()));
+    }
     try {
       // orTimeout completes this very future, and a supplyAsync task whose future is already
       // complete never runs: a lookup still queued when its login went in never reaches the base.
@@ -251,18 +259,43 @@ public final class AccountLinks {
 
   /**
    * Deletes the sightings older than the retention, and the known accounts absent for longer than
-   * their own. Blocks: for a scheduler thread.
+   * their own, each in its own attempt: one failing never skips the other. Blocks: use
+   * {@link #purgeOnSessions()} from a scheduler thread.
    *
-   * @return the rows removed, or -1 when the database could not be reached
+   * @return the rows removed, or -1 when one of the two could not be done (the database is out of
+   *     reach, or a table is locked)
    */
   public int purge() {
+    final Instant now = this.clock.instant();
+    int removed = 0;
+    boolean failed = false;
     try {
-      final Instant now = this.clock.instant();
-      return this.store.purgeOlderThan(now.minus(this.settings.retention()))
-          + this.store.purgeKnownOlderThan(now.minus(this.settings.knownRetention()));
-    } catch (SQLException | RuntimeException failed) {
-      warn("the purge of old sightings failed; it is tried again in 24 h", failed);
-      return -1;
+      removed += this.store.purgeOlderThan(now.minus(this.settings.retention()));
+    } catch (SQLException | RuntimeException error) {
+      warn("the purge of old sightings failed; it is tried again in 24 h", error);
+      failed = true;
+    }
+    try {
+      removed += this.store.purgeKnownOlderThan(now.minus(this.settings.knownRetention()));
+    } catch (SQLException | RuntimeException error) {
+      warn("the purge of old known accounts failed; it is tried again in 24 h", error);
+      failed = true;
+    }
+    return failed ? -1 : removed;
+  }
+
+  /**
+   * The purge, run on the session executor: the proxy scheduler's thread must not wait for the
+   * database. A full session queue turns it away until the next day.
+   *
+   * @return the rows removed, or -1 when it failed or was turned away
+   */
+  public CompletableFuture<Integer> purgeOnSessions() {
+    try {
+      return CompletableFuture.supplyAsync(this::purge, this.sessionExecutor);
+    } catch (RejectedExecutionException full) {
+      warn("the session queue is full; the purge waits for tomorrow", full);
+      return CompletableFuture.completedFuture(-1);
     }
   }
 
@@ -298,7 +331,8 @@ public final class AccountLinks {
   }
 
   /**
-   * Runs a staff request off the calling thread, on the session executor: never in the way of a\n   * login.
+   * Runs a staff request off the calling thread, on the session executor: never in the way of a
+   * login.
    *
    * @param request the request
    * @param <T> its answer
@@ -335,11 +369,16 @@ public final class AccountLinks {
     T call(LinkStore store) throws SQLException;
   }
 
-  private void warn(final String what, final Throwable failure) {
+  /** Whether a warning kept on this clock is due: at most one per {@link #WARNING_PERIOD}. */
+  private boolean due(final AtomicReference<@Nullable Instant> lastOne) {
     final Instant now = this.clock.instant();
-    final Instant last = this.lastWarning.get();
-    if (last != null && now.isBefore(last.plus(WARNING_PERIOD))
-        || !this.lastWarning.compareAndSet(last, now)) {
+    final Instant last = lastOne.get();
+    return !(last != null && now.isBefore(last.plus(WARNING_PERIOD))
+        || !lastOne.compareAndSet(last, now));
+  }
+
+  private void warn(final String what, final Throwable failure) {
+    if (!due(this.lastWarning)) {
       return;
     }
     final Throwable cause = failure instanceof CompletionException && failure.getCause() != null

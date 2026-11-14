@@ -227,6 +227,19 @@ public final class AdmissionEngine {
   }
 
   /**
+   * Whether a Floodgate player's real address is trusted though its connection comes from neither
+   * the Geyser listener nor an address of {@code geyser-addresses}: Geyser's address is probably
+   * missing from that list, and would then be taken for a real one.
+   *
+   * @param authenticated the login
+   * @return {@code true} for such a login
+   */
+  public boolean floodgateFromUnlistedOrigin(final Attempt authenticated) {
+    return authenticated.floodgatePlayer() && authenticated.bedrockReal() != null
+        && !fromGeyser(authenticated);
+  }
+
+  /**
    * The real address of a Floodgate player, or {@code null} when it is unknown or is Geyser's own.
    */
   private @Nullable InetAddress bedrockReal(final Attempt attempt) {
