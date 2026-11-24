@@ -6,7 +6,7 @@ plugins {
 // of btc-cloudnet-registry on purpose: the registry never moves a player (AD-047), this one does.
 // Everything from CloudNet is provided at runtime by the wrapper, hence compileOnly; the tests mock
 // the driver interfaces and so need the same artifacts on their own classpath.
-val cloudnetVersion = "4.0.0-RC17"
+val cloudnetVersion = providers.gradleProperty("cloudnetVersion").get() // gradle.properties
 
 dependencies {
     compileOnly(project(":velocity-api"))

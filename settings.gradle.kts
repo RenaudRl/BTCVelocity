@@ -3,6 +3,13 @@
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
+        // CloudNet fork build (publishToMavenLocal), limited to its own group: nothing else may
+        // come from the local repository.
+        mavenLocal {
+            content {
+                includeGroup("eu.cloudnetservice.cloudnet")
+            }
+        }
         mavenCentral()
         maven("https://repo.papermc.io/repository/maven-public/")
         // API Floodgate, en compileOnly seulement : rien n'en est embarque dans le jar.
