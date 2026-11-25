@@ -8,16 +8,21 @@
 > [!IMPORTANT]
 > **BTC Velocity** is a custom, high-performance fork of [Velocity-CTD](https://github.com/GemstoneGG/Velocity-CTD), purpose-built for the **Born to Craft** Minecraft network, kept in sync with PaperMC Velocity **4.3.0**. Compatible with **Minecraft 26.3** (protocol 777) and **Java 25**.
 
+A Velocity proxy fork with what a large network needs built in: an **anti-bot / anti-VPN admission
+shield**, alt-account detection, native permissions (no LuckPerms), multi-proxy clustering over
+Redis/Valkey, graceful proxy drain, **CloudNet** service discovery with on-demand server wake-up,
+and Geyser/Floodgate (Bedrock) support. Pairs with the [BTC-CORE](https://github.com/RenaudRl/BTC-CORE-Fork)
+Paper fork through the HMAC-signed `btc:bridge` v2 protocol.
+
 ---
 
-## 🚧 Work in Progress
-
-These parts ship in the jar but are **not finished**. Do not rely on them as complete protections yet.
+## ✅ Project Status
 
 | Area | Status |
 |---|---|
-| **Sentinel admission shield** (anti-bot, anti-proxy/VPN, datacenter/Tor lists, ASN, per-network rate limits) | In progress: filters are in place, tuning and false-positive review on a test network are ongoing. |
-| **CloudNet integration** (service registry, arrival routing, on-demand wake, resource-pack deduplication) | Running on the BTC test network under CloudNet, with real Java and Bedrock (Geyser 2.12) clients; the two-proxy drain hand-over is not yet proven with real clients. |
+| **Sentinel admission shield** (datacenter/Tor lists, VPN signal, ASN, per-network rate limits, account links, online cap per address) | **Done** (Sentinel plans closed 2026-11-14): every filter held on the bench. Each filter is **off or in `observe` by default**; switching one to refusal is an operator choice. |
+| **CloudNet integration** (service registry, arrival routing, limbo, on-demand wake, resource-pack deduplication) | **Done**: running on the BTC test network under CloudNet with real Java and Bedrock (Geyser 2.12) players; the two-proxy drain hand-over was validated with a real client. Builds against CloudNet RC17 and the RC18 nightly. |
+| **Native permissions** | **Done** (since proxy 0.4), validated with a real client. |
 
 ## 🚀 Architecture
 
@@ -43,6 +48,20 @@ modifications required by GPLv3 §5(a) are in [NOTICE.md](NOTICE.md).
 | `btc:bridge` protocol **v2** | BTC | Typed, versioned messages between proxy and backends. Every message carries an envelope (version, message id, source backend); `Ack`/`Nack` let the sender tell a lost request from a slow one. The sealed hierarchy has an explicit `permits` list, so a message added outside it fails to compile instead of silently decoding as unknown. Frames are HMAC-sealed and bound to the backend connection that carried them; client-originated, oversized, replayed or unsigned messages are refused, and player-scoped messages carry an origin platform checked against the live session. Validated end to end with BTC-CORE, CloudNet and a real Bedrock player. |
 | Modern forwarding | Velocity | Velocity-native forwarding plus BungeeGuard. |
 | Anti-decompression bomb | BTC | Compression-ratio monitoring with a ratio-check floor, and oversized packet detection. |
+| Bounded PLAY queue | BTC | Outbound packets parked during a server switch are bounded by count and bytes; past the bound the connection is closed cleanly instead of growing memory. |
+| Command spam guard | BTC | A client is kicked after 20 refused commands or 40 refused tab-completes (defaults). |
+
+### Proxy plugins (shipped as modules of this repository)
+
+| Module | What it does |
+|---|---|
+| [`admission-shield`](admission-shield/README.md) | Sentinel admission shield: refuses datacenter and Tor addresses (X4BNet, FireHOL lists kept on the proxy — no player address leaves it), signals known VPNs without refusing them, ASN deny list, per-network rate limit, **account links** (strong / weak / household) to catch ban evasion without hurting siblings, optional cap of accounts online per address. Floodgate players are judged on their real address. Staff: `/admission why\|status\|alts\|household\|forget`. |
+| [`arrival-router`](arrival-router/README.md) | Picks the arrival server and the fallback after a kick (least populated), for servers registered at runtime that `try` cannot name; limbo when no destination exists, maintenance switch. |
+| [`cloudnet-registry`](cloudnet-registry/README.md) | Keeps the proxy's server list in sync with running CloudNet services; replaces the CloudNet bridge on the proxy, without its blocking lookups and forced redirects. |
+| [`cloudnet-wake`](cloudnet-wake/README.md) | `/server <task>` on a stopped CloudNet task parks the player in the limbo, starts the task once (deduplicated) and sends everyone waiting when it is up. |
+| [`client-policy`](client-policy/README.md) | Minimap consent (Xaero, VoxelMap) per backend, client brand/channel journal, optional mod deny list (`dry-run` by default). |
+| `pack-policy` | Takes every resource pack off a player who enters a backend declared pack-less (exact name or `prefix*`), so a server without the custom-block plugin is not painted with another server's pack. |
+| `platform-resolver` | Tells Java from Bedrock (Floodgate) for the other modules and the `btc:bridge` platform check. |
 
 ### Permissions — native, LuckPerms removed
 
@@ -181,7 +200,7 @@ so peers stop sending players to it.
   arrivals to the draining proxy.
 - Peers must set `accepts-transfers = true`. The draining proxy releases the player's Redis entry
   before the Transfer, so the peer does not see a duplicate login even with
-  `kick-existing-players = false` (not yet proven with real clients).
+  `kick-existing-players = false` (validated with a real client on the BTC test network).
 - Players who cannot follow a Transfer stay on the proxy until it stops: clients older than 1.20.5,
   and Bedrock players. Bedrock players are only recognised when they arrive through the dedicated
   Geyser listener; Bedrock traffic routed through the Java listener is treated as Java.
@@ -318,6 +337,13 @@ BTCVelocity/
 │   └── com.velocitypowered.*   → Upstream Velocity code
 ├── native/                     → Netty native transports
 ├── proxy/src/main/.../permission → Native BTC permissions resolver (optional PostgreSQL/Valkey)
+├── admission-shield/           → Anti-bot / anti-VPN admission shield, account links
+├── arrival-router/             → Arrival and fallback routing, limbo, maintenance
+├── cloudnet-registry/          → CloudNet service discovery
+├── cloudnet-wake/              → On-demand wake of stopped CloudNet tasks
+├── client-policy/              → Minimap consent, client brand journal, mod deny list
+├── pack-policy/                → Resource-pack policy per backend
+├── platform-resolver/          → Java / Bedrock (Floodgate) platform source
 ├── config/checkstyle/          → Code style configuration
 └── Docs/                       → Reference documentation
 ```
